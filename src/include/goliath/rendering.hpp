@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstring>
+#include <span>
+#include <variant>
 #include <vector>
 #include <volk.h>
 
@@ -141,7 +144,7 @@ namespace engine {
             return std::move(*this);
         }
 
-      // private:
+      private:
         std::vector<VkRenderingAttachmentInfo> color_atts;
         VkRenderingAttachmentInfo depth_att;
         VkRenderingAttachmentInfo stencil_att;
@@ -189,26 +192,140 @@ namespace engine {
         Patch = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST,
     };
 
-    class Pipeline {
-        VkShaderEXT vertex{};
-        VkShaderEXT fragment{};
+    enum struct FrontFace {
+        CW = VK_FRONT_FACE_CLOCKWISE,
+        CCW = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+    };
 
-        VkDescriptorSetLayout set_layout[3];
-        uint32_t push_constant_size;
+    struct Pipeline {
+        VkShaderEXT _vertex;
+        VkShaderEXT _fragment;
 
-        bool depth_test;
-        bool depth_write;
-        bool depth_bias;
-        bool stencil_test;
-        CullMode cull_mode;
-        FillMode fill_mode;
-        SampleCount sample_count;
-        Topology topology;
+        VkDescriptorSetLayout _set_layout[4];
+        uint32_t _push_constant_size;
+
+        bool _depth_test;
+        bool _depth_write;
+        bool _depth_bias;
+        bool _stencil_test;
+        CullMode _cull_mode;
+        FillMode _fill_mode;
+        SampleCount _sample_count;
+        Topology _topology;
+        FrontFace _front_face;
+        VkViewport _viewport;
+        VkRect2D _scissor;
+        VkColorComponentFlags _color_components;
+
+        VkPipelineLayout _pipeline_layout;
 
         Pipeline(VkShaderEXT vertex, VkShaderEXT fragment);
 
-        void draw(uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex_id = 0,
+        Pipeline&& vertex(VkShaderEXT vert) {
+            _vertex = vert;
+            return std::move(*this);
+        }
+
+        Pipeline&& fragment(VkShaderEXT frag) {
+            _fragment = frag;
+            return std::move(*this);
+        }
+
+        Pipeline&& descriptor(uint32_t index, VkDescriptorSetLayout descriptor_layout) {
+            _set_layout[index] = descriptor_layout;
+            return std::move(*this);
+        }
+
+        Pipeline&& clear_descriptor(uint32_t index);
+
+        Pipeline&& push_constant_size(uint32_t size) {
+            _push_constant_size = size;
+            return std::move(*this);
+        }
+
+        Pipeline&& depth_test(bool enable) {
+            _depth_test = enable;
+            return std::move(*this);
+        }
+
+        Pipeline&& stencil_test(bool enable) {
+            _stencil_test = enable;
+            return std::move(*this);
+        }
+
+        Pipeline&& cull_mode(CullMode mode) {
+            _cull_mode = mode;
+            return std::move(*this);
+        }
+
+        Pipeline&& fill_mode(FillMode mode) {
+            _fill_mode = mode;
+            return std::move(*this);
+        }
+
+        Pipeline&& sample_count(SampleCount count) {
+            _sample_count = count;
+            return std::move(*this);
+        }
+
+        Pipeline&& topology(Topology top) {
+            _topology = top;
+            return std::move(*this);
+        }
+
+        Pipeline&& front_face(FrontFace face) {
+            _front_face = face;
+            return std::move(*this);
+        }
+
+        Pipeline&& viewport(VkViewport view) {
+            _viewport = view;
+            return std::move(*this);
+        }
+
+        Pipeline&& scissor(VkRect2D rect) {
+            _scissor = rect;
+            return std::move(*this);
+        }
+
+        Pipeline&& color_components(VkColorComponentFlags components) {
+            _color_components = components;
+            return std::move(*this);
+        }
+
+        Pipeline&& update_layout();
+
+        void destroy_descriptor_sets(std::array<bool, 3> to_destroy);
+
+        void draw(void* push_constant, uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex_id = 0,
                   uint32_t first_instance_id = 0);
+    };
+
+    struct Shader {
+        VkShaderStageFlagBits _stage;
+        VkShaderStageFlagBits _next_stage;
+        const char* _main = "main";
+        ;
+
+        Shader() {};
+
+        Shader&& stage(VkShaderStageFlagBits val) {
+            _stage = val;
+            return std::move(*this);
+        }
+
+        Shader&& next_stage(VkShaderStageFlagBits val) {
+            _next_stage = val;
+            return std::move(*this);
+        }
+
+        Shader&& main(const char* name) {
+            _main = name;
+            return std::move(*this);
+        }
+
+        VkShaderEXT create(VkDescriptorSetLayout const* set_layouts, uint32_t push_constant_size, std::variant<const char*, std::span<uint8_t>> source);
+        VkShaderEXT create_from_pipeline(const Pipeline& pipeline, std::variant<const char*, std::span<uint8_t>> source);
     };
 }
 

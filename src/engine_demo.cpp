@@ -48,7 +48,11 @@ int main() {
                 .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
                 .set_load_op(engine::LoadOp::Clear)
                 .set_store_op(engine::StoreOp::Store)));
+
+        // engine::Pipeline()
+
         engine::imgui::render();
+
         engine::rendering::end();
 
         engine::next_frame();
