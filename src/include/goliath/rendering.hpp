@@ -7,8 +7,8 @@
 #include <vector>
 #include <volk.h>
 
-#include <glm/vec4.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/vec4.hpp>
 #include <vulkan/vulkan_core.h>
 
 namespace engine {
@@ -155,6 +155,36 @@ namespace engine {
         }
     };
 
+    struct Shader {
+        using Source = std::variant<const char*, std::span<uint8_t>>;
+
+        VkShaderStageFlagBits _stage;
+        VkShaderStageFlagBits _next_stage = (VkShaderStageFlagBits)0;
+        const char* _main = "main";
+
+        Shader() {};
+
+        Shader&& stage(VkShaderStageFlagBits val) {
+            _stage = val;
+            return std::move(*this);
+        }
+
+        Shader&& next_stage(VkShaderStageFlagBits val) {
+            _next_stage = val;
+            return std::move(*this);
+        }
+
+        Shader&& main(const char* name) {
+            _main = name;
+            return std::move(*this);
+        }
+
+        VkShaderEXT create(Source source, uint32_t push_constant_size,
+                           std::span<VkDescriptorSetLayout> set_layouts = {(VkDescriptorSetLayout*)nullptr, 0});
+    };
+
+    void destroy_shader(VkShaderEXT shader);
+
     enum struct CullMode {
         None = VK_CULL_MODE_NONE,
         Back = VK_CULL_MODE_BACK_BIT,
@@ -219,7 +249,7 @@ namespace engine {
 
         VkPipelineLayout _pipeline_layout;
 
-        Pipeline(VkShaderEXT vertex, VkShaderEXT fragment);
+        Pipeline();
 
         Pipeline&& vertex(VkShaderEXT vert) {
             _vertex = vert;
@@ -230,6 +260,9 @@ namespace engine {
             _fragment = frag;
             return std::move(*this);
         }
+
+        Pipeline&& vertex(Shader vert, Shader::Source vert_source);
+        Pipeline&& fragment(Shader frag, Shader::Source frag_source);
 
         Pipeline&& descriptor(uint32_t index, VkDescriptorSetLayout descriptor_layout) {
             _set_layout[index] = descriptor_layout;
@@ -295,37 +328,10 @@ namespace engine {
 
         Pipeline&& update_layout();
 
-        void destroy_descriptor_sets(std::array<bool, 3> to_destroy);
+        void destroy(std::array<bool, 3> sets_to_destroy);
 
         void draw(void* push_constant, uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex_id = 0,
                   uint32_t first_instance_id = 0);
-    };
-
-    struct Shader {
-        VkShaderStageFlagBits _stage;
-        VkShaderStageFlagBits _next_stage;
-        const char* _main = "main";
-        ;
-
-        Shader() {};
-
-        Shader&& stage(VkShaderStageFlagBits val) {
-            _stage = val;
-            return std::move(*this);
-        }
-
-        Shader&& next_stage(VkShaderStageFlagBits val) {
-            _next_stage = val;
-            return std::move(*this);
-        }
-
-        Shader&& main(const char* name) {
-            _main = name;
-            return std::move(*this);
-        }
-
-        VkShaderEXT create(VkDescriptorSetLayout const* set_layouts, uint32_t push_constant_size, std::variant<const char*, std::span<uint8_t>> source);
-        VkShaderEXT create_from_pipeline(const Pipeline& pipeline, std::variant<const char*, std::span<uint8_t>> source);
     };
 }
 

@@ -2,6 +2,7 @@
 #include "event_.hpp"
 #include "engine_.hpp"
 #include "texture_pool_.hpp"
+#include "rendering_.hpp"
 #include <GLFW/glfw3.h>
 #include <volk.h>
 
@@ -16,7 +17,8 @@
 #include <print>
 
 void transition_image(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout) {
-    VkImageMemoryBarrier2 image_barrier{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    VkImageMemoryBarrier2 image_barrier{};
+    image_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     image_barrier.pNext = nullptr;
 
     image_barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -146,10 +148,12 @@ namespace engine {
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
 
-        VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.dynamicRendering = true;
         features13.synchronization2 = true;
-        VkPhysicalDeviceVulkan12Features features12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features12.bufferDeviceAddress = true;
         features12.descriptorIndexing = true;
         features12.descriptorBindingPartiallyBound = true;
@@ -227,6 +231,7 @@ namespace engine {
         texture_pool::init(max_texture_count);
         imgui::init();
         event::register_glfw_callbacks();
+        rendering::create_empty_set();
 
         glfwShowWindow(window);
     };
@@ -234,6 +239,7 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
+        rendering::destroy_empty_set();
         imgui::destroy();
         texture_pool::destroy();
         transport::destroy();
@@ -274,16 +280,17 @@ namespace engine {
 
     void prepare_frame() {
         FrameData& frame = get_current_frame_data();
+
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
-
-        frame.descriptor_pool.clear();
 
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
                                             &swapchain_ix);
         if (result != VK_SUCCESS) {
             printf("remake the swapchain you lobotomized donkey\n");
         }
+
+        frame.descriptor_pool.clear();
     }
 
     void prepare_draw() {
@@ -312,13 +319,11 @@ namespace engine {
         wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         wait_info.semaphore = frame.swapchain_semaphore;
         wait_info.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        wait_info.value = 1;
 
         VkSemaphoreSubmitInfo signal_info{};
         signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         signal_info.semaphore = frame.render_semaphore;
         signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-        signal_info.value = 1;
 
         VkCommandBufferSubmitInfo cmd_info{};
         cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;

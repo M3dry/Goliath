@@ -40,10 +40,66 @@ engine::RenderPass::RenderPass() {
     _info.viewMask = 0;
 }
 
-engine::Pipeline::Pipeline(VkShaderEXT vertex, VkShaderEXT fragment) {
-    _vertex = vertex;
-    _fragment = fragment;
+VkShaderEXT engine::Shader::create(Source source, uint32_t push_constant_size,
+                                   std::span<VkDescriptorSetLayout> set_layouts) {
+    std::size_t code_size = 0;
+    uint8_t* code_ptr = nullptr;
+    bool free = false;
 
+    std::visit(
+        [&code_size, &code_ptr, &free](const auto& src) {
+            if constexpr (std::is_same_v<std::span<uint8_t>, std::decay_t<decltype(src)>>) {
+                code_size = src.size();
+                code_ptr = src.data();
+            } else {
+                std::ifstream file{src, std::ios::binary | std::ios::ate};
+
+                code_size = (std::size_t)file.tellg();
+                code_ptr = new uint8_t[code_size];
+                free = true;
+
+                file.seekg(0, std::ios::beg);
+                file.read((char*)code_ptr, (std::streamsize)code_size);
+            }
+        },
+        source);
+
+    VkShaderEXT shader;
+
+    VkPushConstantRange push_constant{};
+    push_constant.offset = 0;
+    push_constant.size = push_constant_size;
+    push_constant.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+    VkShaderCreateInfoEXT info{};
+    info.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
+    info.pNext = nullptr;
+    info.flags = 0;
+    info.stage = _stage;
+    info.nextStage = _next_stage;
+    info.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+    info.codeSize = code_size;
+    info.pCode = code_ptr;
+    info.pName = _main;
+    info.setLayoutCount = (uint32_t)set_layouts.size();
+    info.pSetLayouts = set_layouts.data();
+    info.pushConstantRangeCount = push_constant_size == 0 ? 0 : 1;
+    info.pPushConstantRanges = &push_constant;
+    info.pSpecializationInfo = nullptr;
+
+    vkCreateShadersEXT(device, 1, &info, nullptr, &shader);
+
+    if (free) {
+        delete[] code_ptr;
+    }
+
+    return shader;
+}
+
+void engine::destroy_shader(VkShaderEXT shader) {
+    vkDestroyShaderEXT(device, shader, nullptr);
+}
+
+engine::Pipeline::Pipeline() {
     _set_layout[0] = rendering::empty_set;
     _set_layout[1] = rendering::empty_set;
     _set_layout[2] = rendering::empty_set;
@@ -76,30 +132,43 @@ engine::Pipeline::Pipeline(VkShaderEXT vertex, VkShaderEXT fragment) {
     _color_components |= VK_COLOR_COMPONENT_A_BIT;
 }
 
+engine::Pipeline&& engine::Pipeline::vertex(engine::Shader vert, engine::Shader::Source vert_source) {
+    _vertex = vert.create(vert_source, _push_constant_size, {_set_layout, 4});
+    return std::move(*this);
+}
+
+engine::Pipeline&& engine::Pipeline::fragment(engine::Shader frag, engine::Shader::Source frag_source) {
+    _fragment = frag.create(frag_source, _push_constant_size, {_set_layout, 4});
+    return std::move(*this);
+}
+
 engine::Pipeline&& engine::Pipeline::clear_descriptor(uint32_t index) {
     _set_layout[index] = rendering::empty_set;
     return std::move(*this);
 }
 
-void engine::Pipeline::destroy_descriptor_sets(std::array<bool, 3> to_destroy) {
+void engine::Pipeline::destroy(std::array<bool, 3> sets_to_destroy) {
     for (std::size_t i = 0; i < 3; i++) {
-        if (!to_destroy[i]) continue;
+        if (!sets_to_destroy[i]) continue;
 
         vkDestroyDescriptorSetLayout(device, _set_layout[i], nullptr);
     }
+
+    vkDestroyPipelineLayout(device, _pipeline_layout, nullptr);
 }
 
 engine::Pipeline&& engine::Pipeline::update_layout() {
     VkPushConstantRange push_constant_range;
     push_constant_range.offset = 0;
     push_constant_range.size = _push_constant_size;
+    push_constant_range.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
 
     VkPipelineLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     info.pNext = nullptr;
     info.setLayoutCount = 4;
     info.pSetLayouts = _set_layout;
-    info.pushConstantRangeCount = 1;
+    info.pushConstantRangeCount = _push_constant_size == 0 ? 0 : 1;
     info.pPushConstantRanges = &push_constant_range;
 
     vkCreatePipelineLayout(device, &info, nullptr, &_pipeline_layout);
@@ -139,67 +208,14 @@ void engine::Pipeline::draw(void* push_constant, uint32_t vertex_count, uint32_t
     VkShaderEXT shaders[2] = {_vertex, _fragment};
     vkCmdBindShadersEXT(cmd_buf, 2, stages, shaders);
 
-    vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size, push_constant);
+    if (_push_constant_size != 0) {
+        vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size,
+                           push_constant);
+    }
 
     texture_pool::bind(VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout);
 
     vkCmdDraw(cmd_buf, vertex_count, instance_count, first_vertex_id, first_instance_id);
-}
-
-VkShaderEXT engine::Shader::create(VkDescriptorSetLayout const* set_layouts, uint32_t push_constant_size, std::variant<const char*, std::span<uint8_t>> source) {
-    std::size_t code_size = 0;
-    uint8_t* code_ptr = nullptr;
-    bool free = false;
-
-    std::visit([&code_size, &code_ptr, &free](const auto& src) {
-        if constexpr (std::is_same_v<std::span<uint8_t>, std::decay_t<decltype(src)>>) {
-            code_size = src.size();
-            code_ptr = src.data();
-        } else {
-            std::ifstream file{src, std::ios::binary | std::ios::ate};
-
-            code_size = (std::size_t)file.tellg();
-            code_ptr = new uint8_t[code_size];
-            free = true;
-
-            file.seekg(0, std::ios::beg);
-            file.read((char*)code_ptr, (std::streamsize)code_size);
-        }
-    }, source);
-
-    VkShaderEXT shader;
-
-    VkPushConstantRange push_constant{};
-    push_constant.offset = 0;
-    push_constant.size = push_constant_size;
-    push_constant.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
-    VkShaderCreateInfoEXT info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT;
-    info.pNext = nullptr;
-    info.flags = 0;
-    info.stage = _stage;
-    info.nextStage = _next_stage;
-    info.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
-    info.codeSize  = code_size;
-    info.pCode = code_ptr;
-    info.pName = _main;
-    info.setLayoutCount = 4;
-    info.pSetLayouts = set_layouts;
-    info.pushConstantRangeCount = 1;
-    info.pPushConstantRanges = &push_constant;
-    info.pSpecializationInfo = nullptr;
-
-    vkCreateShadersEXT(device, 1, &info, nullptr, &shader);
-
-    if (free) {
-        delete[] code_ptr;
-    }
-
-    return shader;
-}
-
-VkShaderEXT engine::Shader::create_from_pipeline(const Pipeline& pipeline, std::variant<const char*, std::span<uint8_t>> source) {
-    return create(pipeline._set_layout, pipeline._push_constant_size, source);
 }
 
 namespace engine::rendering {

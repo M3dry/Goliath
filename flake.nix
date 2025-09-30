@@ -35,6 +35,7 @@
               renderdoc
               valgrind
               shader-slang
+              shaderc
 
               julia
 

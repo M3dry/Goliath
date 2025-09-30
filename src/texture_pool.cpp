@@ -85,6 +85,6 @@ namespace engine::texture_pool {
     }
 
     void bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) {
-        vkCmdBindDescriptorSets(get_cmd_buf(), bind_point, layout, 0, 1, &set, 0, nullptr);
+        vkCmdBindDescriptorSets(get_cmd_buf(), bind_point, layout, 3, 1, &set, 0, nullptr);
     }
 }
