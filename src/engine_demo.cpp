@@ -1,3 +1,4 @@
+#include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
@@ -12,10 +13,12 @@ int main() {
     auto vertex = engine::Shader{}.stage(VK_SHADER_STAGE_VERTEX_BIT).next_stage(VK_SHADER_STAGE_FRAGMENT_BIT);
     auto fragment = engine::Shader{}.stage(VK_SHADER_STAGE_FRAGMENT_BIT);
     auto pipeline = engine::Pipeline{}
+                        .push_constant_size(sizeof(glm::vec4))
                         .vertex(vertex, "vertex.spv")
                         .fragment(fragment, "fragment.spv")
-                        .push_constant_size(0)
                         .update_layout();
+
+    glm::vec4 color{0.0f, 0.2f, 0.0f, 1.0f};
 
     double accum = 0;
     double last_time = glfwGetTime();
@@ -45,6 +48,7 @@ int main() {
 
         engine::imgui::begin();
         ImGui::Begin("Window");
+        ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
         ImGui::End();
         engine::imgui::end();
 
@@ -59,7 +63,10 @@ int main() {
 
         engine::imgui::render();
 
-        pipeline.draw(nullptr, 3);
+        pipeline.draw(engine::Pipeline::DrawParams{
+            .push_constant = &color,
+            .vertex_count = 3,
+        });
         engine::rendering::end();
 
         engine::next_frame();

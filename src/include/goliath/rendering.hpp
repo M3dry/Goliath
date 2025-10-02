@@ -1,5 +1,6 @@
 #pragma once
 
+#include "goliath/descriptor_pool.hpp"
 #include <array>
 #include <cstring>
 #include <span>
@@ -228,6 +229,15 @@ namespace engine {
     };
 
     struct Pipeline {
+        struct DrawParams {
+            void* push_constant = nullptr;
+            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set, descriptor::null_set};
+            uint32_t vertex_count;
+            uint32_t instance_count = 1;
+            uint32_t first_vertex_id = 0;
+            uint32_t first_instance_id = 0;
+        };
+
         VkShaderEXT _vertex;
         VkShaderEXT _fragment;
 
@@ -330,8 +340,7 @@ namespace engine {
 
         void destroy(std::array<bool, 3> sets_to_destroy);
 
-        void draw(void* push_constant, uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex_id = 0,
-                  uint32_t first_instance_id = 0);
+        void draw(const DrawParams& params);
     };
 }
 

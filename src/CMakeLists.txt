@@ -21,6 +21,8 @@ SET(ENGINE_SOURCES
     texture_pool.cpp
     event.cpp
     rendering.cpp
+    buffer.cpp
+    texture.cpp
 
     ${IMGUI_SOURCES}
 )

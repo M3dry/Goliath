@@ -6,6 +6,8 @@
 #include <span>
 
 namespace engine::descriptor {
+    static constexpr uint64_t null_set = (uint64_t)-1;
+
     uint64_t new_set(VkDescriptorSetLayout layout);
     void bind_set(uint64_t id, VkPipelineBindPoint bind_point, VkPipelineLayout layout, uint32_t set);
     void update_set(uint64_t id, std::span<VkWriteDescriptorSet> writes);
