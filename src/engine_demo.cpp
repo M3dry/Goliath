@@ -3,11 +3,14 @@
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/texture.hpp"
+#include "goliath/texture_pool.hpp"
+#include "goliath/transport.hpp"
 #include "imgui/imgui.h"
 #include <GLFW/glfw3.h>
 #include <volk.h>
 
-int main() {
+int main(int argc, char** argv) {
     engine::init("Test window", 1000);
 
     auto vertex = engine::Shader{}.stage(VK_SHADER_STAGE_VERTEX_BIT).next_stage(VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -17,6 +20,17 @@ int main() {
                         .vertex(vertex, "vertex.spv")
                         .fragment(fragment, "fragment.spv")
                         .update_layout();
+
+    auto img = engine::Image::load8(argv[1], 4);
+
+    engine::transport::begin();
+    auto [gpu_img, barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    auto img_timeline = engine::transport::end();
+
+    // auto gpu_img_view = engine::GPUImageView{gpu_img}.create();
+    auto img_sampler = engine::Sampler{}.create();
+
+    // engine::texture_pool::update(0, gpu_img_view, gpu_img.layout, img_sampler);
 
     glm::vec4 color{0.0f, 0.2f, 0.0f, 1.0f};
 
@@ -71,6 +85,11 @@ int main() {
 
         engine::next_frame();
     }
+
+    // engine::GPUImageView::destroy(gpu_img_view);
+    gpu_img.destroy();
+    engine::Sampler::destroy(img_sampler);
+    img.destroy();
 
     engine::destroy_shader(pipeline._fragment);
     engine::destroy_shader(pipeline._vertex);
