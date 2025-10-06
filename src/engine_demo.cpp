@@ -27,10 +27,10 @@ int main(int argc, char** argv) {
     auto [gpu_img, barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     auto img_timeline = engine::transport::end();
 
-    // auto gpu_img_view = engine::GPUImageView{gpu_img}.create();
+    auto gpu_img_view = engine::GPUImageView{gpu_img}.create();
     auto img_sampler = engine::Sampler{}.create();
 
-    // engine::texture_pool::update(0, gpu_img_view, gpu_img.layout, img_sampler);
+    engine::texture_pool::update(0, gpu_img_view, gpu_img.layout, img_sampler);
 
     glm::vec4 color{0.0f, 0.2f, 0.0f, 1.0f};
 
@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
 
         engine::imgui::begin();
         ImGui::Begin("Window");
-        ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
+        // ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
         ImGui::End();
         engine::imgui::end();
 
@@ -86,7 +86,9 @@ int main(int argc, char** argv) {
         engine::next_frame();
     }
 
-    // engine::GPUImageView::destroy(gpu_img_view);
+    vkDeviceWaitIdle(engine::device);
+
+    engine::GPUImageView::destroy(gpu_img_view);
     gpu_img.destroy();
     engine::Sampler::destroy(img_sampler);
     img.destroy();

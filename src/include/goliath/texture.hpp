@@ -160,7 +160,7 @@ namespace engine {
     };
 
     struct GPUImageView {
-        VkImageViewCreateInfo _info;
+        VkImageViewCreateInfo _info{};
 
         GPUImageView(const GPUImage& img);
         GPUImageView(VkImage img, VkFormat format);

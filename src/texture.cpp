@@ -149,6 +149,7 @@ namespace engine {
 
     GPUImageView::GPUImageView(const GPUImage& img) {
         _info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        _info.pNext = nullptr;
         _info.image = img.image;
         _info.format = img.format;
         _info.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -169,6 +170,7 @@ namespace engine {
 
     GPUImageView::GPUImageView(VkImage img, VkFormat format) {
         _info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        _info.pNext = nullptr;
         _info.image = img;
         _info.format = format;
         _info.viewType = VK_IMAGE_VIEW_TYPE_2D;
