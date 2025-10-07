@@ -66,6 +66,7 @@ namespace engine {
     VkSwapchainKHR swapchain;
     std::vector<VkImage> swapchain_images;
     std::vector<VkImageView> swapchain_image_views;
+    std::vector<VkSemaphore> swapchain_semaphores;
 
     VkQueue graphics_queue;
     uint32_t graphics_queue_family;
@@ -107,7 +108,6 @@ namespace engine {
         semaphore_info.pNext = nullptr;
 
         VK_CHECK(vkCreateSemaphore(device, &semaphore_info, nullptr, &swapchain_semaphore));
-        VK_CHECK(vkCreateSemaphore(device, &semaphore_info, nullptr, &render_semaphore));
     }
 
     FrameData::~FrameData() {
@@ -116,7 +116,6 @@ namespace engine {
         vkDestroyFence(device, render_fence, nullptr);
 
         vkDestroySemaphore(device, swapchain_semaphore, nullptr);
-        vkDestroySemaphore(device, render_semaphore, nullptr);
     }
 
     void init(const char* window_name, uint32_t max_texture_count) {
@@ -143,7 +142,7 @@ namespace engine {
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
@@ -219,13 +218,22 @@ namespace engine {
         swapchain_images = vkb_swapchain.get_images().value();
         swapchain_image_views = vkb_swapchain.get_image_views().value();
 
+        VkSemaphoreCreateInfo swapchain_semaphore_info{};
+        swapchain_semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        swapchain_semaphore_info.pNext = nullptr;
+
+        swapchain_semaphores.resize(swapchain_images.size());
+        for (std::size_t i = 0; i < swapchain_images.size(); i++) {
+            VK_CHECK(vkCreateSemaphore(device, &swapchain_semaphore_info, nullptr, &swapchain_semaphores[i]));
+        }
+
         graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
         graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
 
         transport_queue = vkb_device.get_queue(vkb::QueueType::transfer).value();
         transport_queue_family = vkb_device.get_queue_index(vkb::QueueType::transfer).value();
 
-        frames = new FrameData[3]{};
+        frames = new FrameData[2]{};
 
         transport::init();
         texture_pool::init(max_texture_count);
@@ -251,6 +259,7 @@ namespace engine {
         vkDestroySwapchainKHR(device, swapchain, nullptr);
         for (std::size_t i = 0; i < swapchain_image_views.size(); i++) {
             vkDestroyImageView(device, swapchain_image_views[i], nullptr);
+            vkDestroySemaphore(device, swapchain_semaphores[i], nullptr);
         }
 
         vkDestroySurfaceKHR(instance, surface, nullptr);
@@ -290,6 +299,8 @@ namespace engine {
             printf("remake the swapchain you lobotomized donkey\n");
         }
 
+        frame.render_semaphore = swapchain_ix;
+
         frame.descriptor_pool.clear();
     }
 
@@ -322,7 +333,7 @@ namespace engine {
 
         VkSemaphoreSubmitInfo signal_info{};
         signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        signal_info.semaphore = frame.render_semaphore;
+        signal_info.semaphore = swapchain_semaphores[frame.render_semaphore];
         signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
 
         VkCommandBufferSubmitInfo cmd_info{};
@@ -343,14 +354,14 @@ namespace engine {
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &frame.render_semaphore;
+        present_info.pWaitSemaphores = &swapchain_semaphores[frame.render_semaphore];
         present_info.swapchainCount = 1;
         present_info.pSwapchains = &swapchain;
         present_info.pImageIndices = &swapchain_ix;
 
         VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
 
-        current_frame_data = (current_frame_data + 1) % 3;
+        current_frame_data = (current_frame_data + 1) % 2;
     }
 
     DescriptorPool& get_frame_descriptor_pool() {

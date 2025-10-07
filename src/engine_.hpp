@@ -8,7 +8,7 @@ namespace engine {
         VkCommandPool cmd_pool;
         VkCommandBuffer cmd_buf;
         VkSemaphore swapchain_semaphore;
-        VkSemaphore render_semaphore;
+        std::size_t render_semaphore{(std::size_t)-1};
         VkFence render_fence;
         DescriptorPool descriptor_pool;
 

@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
 
         engine::imgui::begin();
         ImGui::Begin("Window");
-        // ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
+        ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
         ImGui::End();
         engine::imgui::end();
 
