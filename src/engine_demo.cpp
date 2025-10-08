@@ -1,5 +1,4 @@
 #include "goliath/buffer.hpp"
-#include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
@@ -25,14 +24,15 @@ int main(int argc, char** argv) {
                         .fragment(fragment, "fragment.spv")
                         .update_layout();
 
+
     auto img = engine::Image::load8(argv[1], 4);
 
-    glm::vec3 vertices[3] = {
-        {0.0f, 0.5f, 0.0f},
-        {-0.5f, -0.5f, 0.0f},
-        {0.5f, -0.5f, 0.0f},
+    glm::vec4 vertices[3] = {
+        {0.0f, 0.5f, 0.0f, 1.0f},
+        {-0.5f, -0.5f, 0.0f, 1.0f},
+        {0.5f, -0.5f, 0.0f, 1.0f},
     };
-    auto vertices_buffer = engine::Buffer::create(3*sizeof(glm::vec3), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+    auto vertices_buffer = engine::Buffer::create(3*sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
 
     engine::transport::begin();
     auto [gpu_img, barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

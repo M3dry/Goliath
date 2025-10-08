@@ -56,6 +56,7 @@ VkShaderEXT engine::Shader::create(Source source, uint32_t push_constant_size,
                 std::ifstream file{src, std::ios::binary | std::ios::ate};
 
                 code_size = (std::size_t)file.tellg();
+                assert(code_size != (std::size_t)-1 && "file wasn't found");
                 code_ptr = new uint8_t[code_size];
                 free = true;
 

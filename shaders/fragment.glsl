@@ -3,7 +3,7 @@
 #extension GL_EXT_buffer_reference : require
 
 layout(buffer_reference, std430) readonly buffer Vertices {
-    vec3 data[];
+    vec4 data[];
 };
 
 layout(location = 0) in vec2 uv;
