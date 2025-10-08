@@ -164,6 +164,7 @@ namespace engine::transport {
         auto dstStage = barrier->dstStageMask;
         auto dstAccess = barrier->dstAccessMask;
         barrier->sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        barrier->pNext = nullptr;
         barrier->srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier->srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         barrier->dstStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -260,6 +261,7 @@ namespace engine::transport {
         auto dstAccess = barrier->dstAccessMask;
         auto newLayout = barrier->newLayout;
         barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier->pNext = nullptr;
         barrier->srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier->srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         barrier->dstStageMask = VK_PIPELINE_STAGE_2_NONE;

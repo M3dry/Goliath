@@ -296,7 +296,7 @@ namespace engine {
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
                                             &swapchain_ix);
         if (result != VK_SUCCESS) {
-            printf("remake the swapchain you lobotomized donkey\n");
+            fprintf(stderr, "remake the swapchain you lobotomized donkey\n");
         }
 
         frame.render_semaphore = swapchain_ix;

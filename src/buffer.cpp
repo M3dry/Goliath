@@ -12,7 +12,7 @@ namespace engine {
         buffer_info.pQueueFamilyIndices = &graphics_queue_family;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         buffer_info.size = size;
-        buffer_info.usage = usage;
+        buffer_info.usage = usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = host ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -24,6 +24,7 @@ namespace engine {
         address_info.buffer = buf._buf;
         address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         buf._address = vkGetBufferDeviceAddress(device, &address_info);
+        buf._size = size;
 
         return buf;
     }
