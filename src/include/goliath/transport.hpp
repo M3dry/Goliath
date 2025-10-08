@@ -15,4 +15,6 @@ namespace engine::transport {
     // that allows for transfer or VK_IMAGE_LAYOUT_UNDEFINED
     void upload(VkImageMemoryBarrier2* barrier, void* src, uint32_t size, uint32_t width, uint32_t height,
                 VkFormat format, VkImage dst);
+
+    uint64_t timeline_value();
 }

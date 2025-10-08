@@ -23,6 +23,7 @@ SET(ENGINE_SOURCES
     rendering.cpp
     buffer.cpp
     texture.cpp
+    synchronization.cpp
 
     ${IMGUI_SOURCES}
 )

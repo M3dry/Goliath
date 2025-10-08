@@ -293,4 +293,10 @@ namespace engine::transport {
 
         ring_buffer_start_index = (ring_buffer_start_index + size) % BUFFER_SIZE;
     }
+
+    uint64_t timeline_value() {
+        uint64_t value;
+        vkGetSemaphoreCounterValue(device, timeline, &value);
+        return value;
+    }
 }

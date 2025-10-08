@@ -3,6 +3,7 @@
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/texture_pool.hpp"
 #include "goliath/transport.hpp"
@@ -25,7 +26,10 @@ int main(int argc, char** argv) {
 
     engine::transport::begin();
     auto [gpu_img, barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     auto img_timeline = engine::transport::end();
+    bool barrier_applied = false;
 
     auto gpu_img_view = engine::GPUImageView{gpu_img}.create();
     auto img_sampler = engine::Sampler{}.create();
@@ -68,6 +72,13 @@ int main(int argc, char** argv) {
 
         engine::prepare_draw();
 
+        if (!barrier_applied) {
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(barrier);
+            engine::synchronization::end_barriers();
+            barrier_applied = false;
+        }
+
         engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
             engine::RenderingAttachement{}
                 .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
@@ -77,10 +88,12 @@ int main(int argc, char** argv) {
 
         engine::imgui::render();
 
-        pipeline.draw(engine::Pipeline::DrawParams{
-            .push_constant = &color,
-            .vertex_count = 3,
-        });
+        if (engine::transport::timeline_value() >= img_timeline) {
+            pipeline.draw(engine::Pipeline::DrawParams{
+                .push_constant = &color,
+                .vertex_count = 3,
+            });
+        }
         engine::rendering::end();
 
         engine::next_frame();
