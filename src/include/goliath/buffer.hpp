@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+#include <utility>
 #include <volk.h>
 
 #include <vk_mem_alloc.h>
@@ -27,7 +29,9 @@ namespace engine {
             return _allocation;
         }
 
-        static Buffer create(uint32_t size, VkBufferUsageFlags usage, bool host, VmaAllocationCreateFlags alloc_flags = 0);
+        void flush_mapped(uint32_t start, uint32_t size);
+
+        static Buffer create(uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags = 0);
         void destroy();
 
       private:

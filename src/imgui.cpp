@@ -22,6 +22,10 @@ namespace engine::imgui {
         return state;
     }
 
+    void enable(bool v) {
+        state = v;
+    }
+
     void init() {
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();

@@ -2,7 +2,11 @@
 #include "goliath/engine.hpp"
 
 namespace engine {
-    Buffer Buffer::create(uint32_t size, VkBufferUsageFlags usage, bool host, VmaAllocationCreateFlags alloc_flags) {
+    void Buffer::flush_mapped(uint32_t start, uint32_t size) {
+        vmaFlushAllocation(allocator, _allocation, start, size);
+    }
+
+    Buffer Buffer::create(uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags) {
         Buffer buf{};
 
         VkBufferCreateInfo buffer_info{};
@@ -16,9 +20,17 @@ namespace engine {
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = host ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        alloc_info.flags = alloc_flags;
+        alloc_info.flags = alloc_flags | (host ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT : 0);
 
-        VK_CHECK(vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buf._buf, &buf._allocation, nullptr));
+        VmaAllocationInfo out_alloc_info;
+        VK_CHECK(vmaCreateBuffer(allocator, &buffer_info, &alloc_info, &buf._buf, &buf._allocation, &out_alloc_info));
+
+        if (host) {
+            *host->first = out_alloc_info.pMappedData;
+            VkMemoryPropertyFlags props;
+            vmaGetMemoryTypeProperties(allocator, out_alloc_info.memoryType, &props);
+            *host->second = props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        }
 
         VkBufferDeviceAddressInfo address_info{};
         address_info.buffer = buf._buf;

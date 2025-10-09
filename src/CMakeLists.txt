@@ -24,6 +24,7 @@ SET(ENGINE_SOURCES
     buffer.cpp
     texture.cpp
     synchronization.cpp
+    camera.cpp
 
     ${IMGUI_SOURCES}
 )

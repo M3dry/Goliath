@@ -26,7 +26,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     WRAP_IMGUI_CALLBACK(ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods));
 
     engine::event::down[(uint32_t)key] = action == GLFW_PRESS || action == GLFW_REPEAT;
-    engine::event::up[(uint32_t)key] = !engine::event::down[(uint32_t)key];
+    engine::event::up[(uint32_t)key] = action == GLFW_RELEASE;
 }
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
