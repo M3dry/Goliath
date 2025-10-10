@@ -33,6 +33,7 @@ namespace engine {
 
     void Camera::set_projection(camera::Perspective persp, float near, float far) {
         _projection = glm::perspective(persp.fov, persp.aspect_ratio, near, far);
+        _projection[1][1] *= -1.0f;
     }
 
     void Camera::set_projection(camera::Orthographic ortho, float near, float far) {
@@ -52,7 +53,7 @@ namespace engine {
     }
 
     void Camera::update_matrices() {
-        _view = glm::lookAt(position, position + forward(), up());
+        _view = glm::translate(glm::mat4_cast(glm::conjugate(_orientation)), -position);
         _view_projection = _projection * _view;
     }
 }

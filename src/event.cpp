@@ -98,5 +98,6 @@ namespace engine::event {
 
     void update_tick() {
         up.reset();
+        mouse_delta = glm::vec2{0.0f};
     }
 }

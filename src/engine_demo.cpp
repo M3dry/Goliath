@@ -9,7 +9,6 @@
 #include "goliath/texture_pool.hpp"
 #include "goliath/transport.hpp"
 #include "imgui/imgui.h"
-#include "imgui/imgui_internal.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
@@ -73,15 +72,9 @@ int main(int argc, char** argv) {
 
     glm::vec3 res_movement{ 0.0f };
 
-    {
-    auto f = cam.forward();
-    auto r = cam.right();
-    auto u = cam.up();
-    auto det = glm::dot(glm::cross(r, u), f);
-    printf("hahdedness determinant: %f\n", det);
-    }
-
     bool lock_cam = false;
+    glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ?  GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+
     float sensitivity = 1.0f;
 
     double accum = 0;
@@ -111,6 +104,8 @@ int main(int argc, char** argv) {
 
             if (engine::event::was_released(GLFW_KEY_L)) {
                 lock_cam = !lock_cam;
+                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ?  GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                engine::imgui::enable(lock_cam);
             }
 
             glm::vec3 movement{0.0f};
@@ -134,20 +129,15 @@ int main(int argc, char** argv) {
                 auto right = cam.right();
                 auto normalized_movement = glm::normalize(movement);
 
-                res_movement = -normalized_movement.z * forward + normalized_movement.x * right;
-                cam.position.x += res_movement.x;
-                cam.position.y += res_movement.y;
-                cam.position.z += res_movement.z;
+                cam.position += -normalized_movement.z * forward + normalized_movement.x * right;
             }
-            // auto mouse_delta = engine::event::get_mouse_delta();
-            // if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
-            //     cam.rotate(-mouse_delta.x, -mouse_delta.y);
-            // }
+
+            auto mouse_delta = engine::event::get_mouse_delta();
+            if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
+                cam.rotate(glm::radians(-mouse_delta.x), glm::radians(-mouse_delta.y));
+            }
 
             cam.update_matrices();
-
-            // engine::imgui::enable(lock_cam);
-            // glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
 
             update_count++;
             engine::event::update_tick();
