@@ -1,10 +1,11 @@
 #include "goliath/engine.hpp"
-#include "event_.hpp"
 #include "engine_.hpp"
-#include "texture_pool_.hpp"
+#include "event_.hpp"
 #include "rendering_.hpp"
+#include "texture_pool_.hpp"
 #include <GLFW/glfw3.h>
 #include <volk.h>
+#include <vulkan/vulkan_core.h>
 
 #define VMA_IMPLEMENTATION 1
 #include <vk_mem_alloc.h>
@@ -63,10 +64,10 @@ namespace engine {
     VkSurfaceKHR surface;
 
     VkExtent2D swapchain_extent;
-    VkSwapchainKHR swapchain;
-    std::vector<VkImage> swapchain_images;
-    std::vector<VkImageView> swapchain_image_views;
-    std::vector<VkSemaphore> swapchain_semaphores;
+    VkSwapchainKHR swapchain = nullptr;
+    std::vector<VkImage> swapchain_images{};
+    std::vector<VkImageView> swapchain_image_views{};
+    std::vector<VkSemaphore> swapchain_semaphores{};
 
     VkQueue graphics_queue;
     uint32_t graphics_queue_family;
@@ -77,6 +78,43 @@ namespace engine {
     uint8_t current_frame_data = 0;
 
     uint32_t swapchain_ix;
+
+    void rebuild_swapchain(uint32_t width, uint32_t height) {
+        vkDeviceWaitIdle(device);
+
+        if (swapchain != nullptr) vkDestroySwapchainKHR(device, swapchain, nullptr);
+        for (std::size_t i = 0; i < swapchain_image_views.size(); i++) {
+            vkDestroyImageView(device, swapchain_image_views[i], nullptr);
+            vkDestroySemaphore(device, swapchain_semaphores[i], nullptr);
+        }
+
+        vkb::Swapchain vkb_swapchain =
+            vkb::SwapchainBuilder{physical_device, device, surface}
+                .set_desired_format(VkSurfaceFormatKHR{
+                    .format = swapchain_format,
+                    .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+                })
+                .set_desired_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+                .set_desired_extent(width, height)
+                .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+                .set_desired_min_image_count(2)
+                .build()
+                .value();
+
+        swapchain_extent = vkb_swapchain.extent;
+        swapchain = vkb_swapchain.swapchain;
+        swapchain_images = vkb_swapchain.get_images().value();
+        swapchain_image_views = vkb_swapchain.get_image_views().value();
+
+        VkSemaphoreCreateInfo swapchain_semaphore_info{};
+        swapchain_semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        swapchain_semaphore_info.pNext = nullptr;
+
+        swapchain_semaphores.resize(swapchain_images.size());
+        for (std::size_t i = 0; i < swapchain_images.size(); i++) {
+            VK_CHECK(vkCreateSemaphore(device, &swapchain_semaphore_info, nullptr, &swapchain_semaphores[i]));
+        }
+    }
 
     FrameData::FrameData() {
         VkCommandPoolCreateInfo cmd_pool_info{};
@@ -143,6 +181,7 @@ namespace engine {
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
@@ -202,30 +241,7 @@ namespace engine {
         vma_allocator_info.pVulkanFunctions = &vma_vulkan_funcs;
         vmaCreateAllocator(&vma_allocator_info, &allocator);
 
-        vkb::Swapchain vkb_swapchain =
-            vkb::SwapchainBuilder{physical_device, device, surface}
-                .set_desired_format(
-                    VkSurfaceFormatKHR{.format = swapchain_format, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-                .set_desired_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
-                .set_desired_extent(1920, 1200)
-                .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-                .set_desired_min_image_count(2)
-                .build()
-                .value();
-
-        swapchain_extent = vkb_swapchain.extent;
-        swapchain = vkb_swapchain.swapchain;
-        swapchain_images = vkb_swapchain.get_images().value();
-        swapchain_image_views = vkb_swapchain.get_image_views().value();
-
-        VkSemaphoreCreateInfo swapchain_semaphore_info{};
-        swapchain_semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        swapchain_semaphore_info.pNext = nullptr;
-
-        swapchain_semaphores.resize(swapchain_images.size());
-        for (std::size_t i = 0; i < swapchain_images.size(); i++) {
-            VK_CHECK(vkCreateSemaphore(device, &swapchain_semaphore_info, nullptr, &swapchain_semaphores[i]));
-        }
+        rebuild_swapchain((uint32_t)mode->width, (uint32_t)mode->height);
 
         graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
         graphics_queue_family = vkb_device.get_queue_index(vkb::QueueType::graphics).value();
@@ -293,11 +309,8 @@ namespace engine {
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
 
-        auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
-                                            &swapchain_ix);
-        if (result != VK_SUCCESS) {
-            // fprintf(stderr, "remake the swapchain you lobotomized donkey\n");
-        }
+        VK_CHECK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
+                                            &swapchain_ix));
 
         frame.render_semaphore = swapchain_ix;
 
@@ -359,7 +372,15 @@ namespace engine {
         present_info.pSwapchains = &swapchain;
         present_info.pImageIndices = &swapchain_ix;
 
-        VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
+        auto result = vkQueuePresentKHR(graphics_queue, &present_info);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+            rebuild_swapchain((uint32_t)width, (uint32_t)height);
+        } else {
+            VK_CHECK(result);
+        }
+
 
         current_frame_data = (current_frame_data + 1) % 2;
     }
