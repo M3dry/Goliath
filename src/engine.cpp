@@ -4,6 +4,7 @@
 #include "rendering_.hpp"
 #include "texture_pool_.hpp"
 #include <GLFW/glfw3.h>
+#include <cstdint>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -182,6 +183,8 @@ namespace engine {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
@@ -309,8 +312,18 @@ namespace engine {
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
 
-        VK_CHECK(vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
-                                            &swapchain_ix));
+      get_ix:
+        auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
+                &swapchain_ix);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+            rebuild_swapchain((uint32_t)width, (uint32_t)height);
+
+            goto get_ix;
+        } else {
+            VK_CHECK(result);
+        }
 
         frame.render_semaphore = swapchain_ix;
 
@@ -373,7 +386,7 @@ namespace engine {
         present_info.pImageIndices = &swapchain_ix;
 
         auto result = vkQueuePresentKHR(graphics_queue, &present_info);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
