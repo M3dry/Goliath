@@ -3,6 +3,10 @@ find_package(glfw3 REQUIRED CONFIG)
 
 add_subdirectory(vk-bootstrap)
 
+set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
+set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
+add_subdirectory(./tinygltf)
+
 set(IMGUI_SOURCES
     imgui/imgui.cpp
     imgui/imgui_draw.cpp
@@ -25,6 +29,7 @@ SET(ENGINE_SOURCES
     texture.cpp
     synchronization.cpp
     camera.cpp
+    model.cpp
 
     ${IMGUI_SOURCES}
 )

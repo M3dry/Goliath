@@ -146,19 +146,32 @@ int main(int argc, char** argv) {
         engine::prepare_frame();
 
         engine::imgui::begin();
-        ImGui::Begin("Window");
-        ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Open")) {
+                    printf("clicked open\n");
+                }
 
-        ImGui::SeparatorText("Camera");
-        ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
-        ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
-        ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
-        ImGui::DragFloat3("look at", glm::value_ptr(look_at), 0.1f);
-        if (ImGui::Button("update look at")) {
-            cam.look_at(look_at);
-            cam.update_matrices();
+                ImGui::EndMenu();
+            }
+
         }
-        ImGui::Text("lock cam: %b", lock_cam);
+        ImGui::EndMainMenuBar();
+
+        if (ImGui::Begin("Window")) {
+            ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
+
+            ImGui::SeparatorText("Camera");
+            ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
+            ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
+            ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
+            ImGui::DragFloat3("look at", glm::value_ptr(look_at), 0.1f);
+            if (ImGui::Button("update look at")) {
+                cam.look_at(look_at);
+                cam.update_matrices();
+            }
+            ImGui::Text("lock cam: %b", lock_cam);
+        }
         ImGui::End();
         engine::imgui::end();
 

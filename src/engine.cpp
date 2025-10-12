@@ -184,10 +184,11 @@ namespace engine {
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
+
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+        glfwFocusWindow(window);
 
         VkPhysicalDeviceVulkan13Features features13{};
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;

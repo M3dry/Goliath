@@ -4,3 +4,6 @@
 [submodule "src/vk-bootstrap"]
 	path = src/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap
+[submodule "src/tinygltf"]
+	path = src/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
