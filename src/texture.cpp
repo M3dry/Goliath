@@ -105,6 +105,7 @@ namespace engine {
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
         VK_CHECK(vmaCreateImage(allocator, &info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
 
@@ -124,20 +125,23 @@ namespace engine {
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
         VK_CHECK(
             vmaCreateImage(allocator, &builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
 
+        barrier.dstQueueFamilyIndex = graphics_queue_family;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = builder._new_image_layout;
         if (builder._img_data != nullptr) {
-            barrier.dstQueueFamilyIndex = graphics_queue_family;
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            barrier.newLayout = builder._new_image_layout;
             transport::upload(&barrier, builder._img_data, builder._size, builder._width, builder._height,
                               builder._image_info.format, gpu_img.image);
-            gpu_img.layout = builder._new_image_layout;
         } else {
-            gpu_img.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.image = gpu_img.image;
+            barrier.srcQueueFamilyIndex = graphics_queue_family;
+            transport::transition(&barrier, builder._aspect_mask);
         }
+        gpu_img.layout = builder._new_image_layout;
         gpu_img.format = builder._image_info.format;
 
         return {gpu_img, barrier};

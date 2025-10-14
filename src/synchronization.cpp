@@ -14,7 +14,7 @@ namespace engine::synchronization {
     }
 
     void end_barriers() {
-        VkDependencyInfo dep_info;
+        VkDependencyInfo dep_info{};
         dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         dep_info.pNext = nullptr;
         dep_info.imageMemoryBarrierCount = (uint32_t)image_barriers.size();

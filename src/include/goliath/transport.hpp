@@ -17,4 +17,6 @@ namespace engine::transport {
                 VkFormat format, VkImage dst);
 
     uint64_t timeline_value();
+
+    void transition(VkImageMemoryBarrier2* barrier, VkImageAspectFlags aspect_mask);
 }

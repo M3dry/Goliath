@@ -64,6 +64,7 @@ namespace engine {
     VmaAllocator allocator;
     VkSurfaceKHR surface;
 
+    bool swapchain_needs_rebuild = false;
     VkExtent2D swapchain_extent;
     VkSwapchainKHR swapchain = nullptr;
     std::vector<VkImage> swapchain_images{};
@@ -76,7 +77,7 @@ namespace engine {
     uint32_t transport_queue_family;
 
     FrameData* frames;
-    uint8_t current_frame_data = 0;
+    uint8_t current_frame = 0;
 
     uint32_t swapchain_ix;
 
@@ -292,7 +293,7 @@ namespace engine {
     }
 
     FrameData& get_current_frame_data() {
-        return frames[current_frame_data];
+        return frames[current_frame];
     }
 
     VkCommandBuffer get_cmd_buf() {
@@ -307,28 +308,26 @@ namespace engine {
         return swapchain_image_views[swapchain_ix];
     }
 
-    void prepare_frame() {
+    bool prepare_frame() {
         FrameData& frame = get_current_frame_data();
 
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
 
-      get_ix:
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
                 &swapchain_ix);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
-            rebuild_swapchain((uint32_t)width, (uint32_t)height);
-
-            goto get_ix;
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+            swapchain_needs_rebuild = true;
+            return true;
         } else {
             VK_CHECK(result);
         }
 
         frame.render_semaphore = swapchain_ix;
-
         frame.descriptor_pool.clear();
+
+        swapchain_needs_rebuild = false;
+        return false;
     }
 
     void prepare_draw() {
@@ -345,7 +344,17 @@ namespace engine {
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
-    void next_frame() {
+    bool next_frame() {
+        if (swapchain_needs_rebuild) {
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+            rebuild_swapchain((uint32_t)width, (uint32_t)height);
+
+            current_frame = 0;
+            swapchain_needs_rebuild = false;
+            return true;
+        }
+
         FrameData& frame = get_current_frame_data();
 
         transition_image(frame.cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -387,19 +396,27 @@ namespace engine {
         present_info.pImageIndices = &swapchain_ix;
 
         auto result = vkQueuePresentKHR(graphics_queue, &present_info);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
-        } else {
-            VK_CHECK(result);
+
+            current_frame = 0;
+            return true;
         }
 
-
-        current_frame_data = (current_frame_data + 1) % 2;
+        current_frame = (current_frame + 1) % 2;
     }
 
     DescriptorPool& get_frame_descriptor_pool() {
         return get_current_frame_data().descriptor_pool;
+    }
+
+    uint32_t get_frames_in_flight() {
+        return 2;
+    }
+
+    uint32_t get_current_frame() {
+        return current_frame;
     }
 }

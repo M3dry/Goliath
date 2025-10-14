@@ -39,12 +39,13 @@ namespace engine {
     };
 
     struct GPUImageInfo {
-        VkImageCreateInfo _image_info;
-        void* _img_data;
-        uint32_t _width;
-        uint32_t _height;
-        uint32_t _size;
-        VkImageLayout _new_image_layout;
+        VkImageCreateInfo _image_info{};
+        void* _img_data = nullptr;
+        uint32_t _width = 0;
+        uint32_t _height = 0;
+        uint32_t _size = 0;
+        VkImageLayout _new_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageAspectFlags _aspect_mask;
 
         GPUImageInfo() {
             _image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -140,6 +141,11 @@ namespace engine {
 
         GPUImageInfo&& new_layout(VkImageLayout layout) {
             _new_image_layout = layout;
+            return std::move(*this);
+        }
+
+        GPUImageInfo&& aspect_mask(VkImageAspectFlags flags) {
+            _aspect_mask = flags;
             return std::move(*this);
         }
     };

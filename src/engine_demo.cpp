@@ -8,12 +8,47 @@
 #include "goliath/texture.hpp"
 #include "goliath/texture_pool.hpp"
 #include "goliath/transport.hpp"
+#include "goliath/util.hpp"
 #include "imgui/imgui.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
+
+void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
+                  uint32_t frames_in_flight) {
+    int width, height;
+    glfwGetFramebufferSize(engine::window, &width, &height);
+
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        auto [depth_img, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
+                                                                 .image_type(VK_IMAGE_TYPE_2D)
+                                                                 .format(VK_FORMAT_D16_UNORM)
+                                                                 .width((uint32_t)width)
+                                                                 .height((uint32_t)height)
+                                                                 .layer_count(1)
+                                                                 .extent(VkExtent3D{
+                                                                     .width = (uint32_t)width,
+                                                                     .height = (uint32_t)height,
+                                                                     .depth = 1,
+                                                                 })
+                                                                 .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
+                                                                 .new_layout(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                                                                 .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                                                                 .size((uint32_t)(width * height * 2)));
+
+        barrier.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        barrier.dstAccessMask =
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        images[i] = depth_img;
+        barriers[i] = barrier;
+        image_views[i] = engine::GPUImageView{images[i]}
+                             .view_type(VK_IMAGE_VIEW_TYPE_2D)
+                             .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
+                             .create();
+    }
+}
 
 int main(int argc, char** argv) {
     engine::init("Test window", 1000);
@@ -24,25 +59,32 @@ int main(int argc, char** argv) {
                         .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
                         .vertex(vertex, "vertex.spv")
                         .fragment(fragment, "fragment.spv")
+                        .depth_test(true)
+                        .depth_write(true)
+                        .depth_cmp_op(engine::CompareOp::LessOrEqual)
                         .update_layout();
 
     auto img = engine::Image::load8(argv[1], 4);
 
+    uint32_t frames_in_flight = engine::get_frames_in_flight();
+    engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
+    VkImageView* depth_image_views = new VkImageView[frames_in_flight];
+    bool depth_barriers_applied = false;
+    VkImageMemoryBarrier2* depth_barriers = new VkImageMemoryBarrier2[frames_in_flight];
+
+    update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
+
     glm::vec4 vertices[6] = {
-        {5.0f, 0.0f, 0.0f, 1.0f},
-        {-5.0f, 0.0f, 0.0f, 1.0f},
-        {0.0f, 0.0f, 5.0f, 1.0f},
-        {1.0f, 0.0f, 0.0f, 1.0f},
-        {0.0f, 1.0f, 0.0f, 1.0f},
-        {0.0f, 0.0f, 1.0f, 1.0f},
+        {5.0f, 0.0f, 0.0f, 1.0f}, {-5.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 5.0f, 1.0f},
+        {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f},  {0.0f, 0.0f, 1.0f, 1.0f},
     };
     auto vertices_buffer = engine::Buffer::create(
         6 * sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, std::nullopt);
 
     engine::transport::begin();
-    auto [gpu_img, barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    auto [gpu_img, img_barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    img_barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    img_barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
     VkBufferMemoryBarrier2 buffer_barrier{};
     buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
@@ -70,10 +112,10 @@ int main(int argc, char** argv) {
     cam.look_at(look_at);
     cam.update_matrices();
 
-    glm::vec3 res_movement{ 0.0f };
+    glm::vec3 res_movement{0.0f};
 
     bool lock_cam = false;
-    glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ?  GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
 
     float sensitivity = 1.0f;
 
@@ -104,7 +146,7 @@ int main(int argc, char** argv) {
 
             if (engine::event::was_released(GLFW_KEY_L)) {
                 lock_cam = !lock_cam;
-                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ?  GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                 engine::imgui::enable(lock_cam);
             }
 
@@ -143,7 +185,9 @@ int main(int argc, char** argv) {
             engine::event::update_tick();
         }
 
-        engine::prepare_frame();
+        if (engine::prepare_frame()) {
+            goto end_of_frame;
+        }
 
         engine::imgui::begin();
         if (ImGui::BeginMainMenuBar()) {
@@ -154,7 +198,6 @@ int main(int argc, char** argv) {
 
                 ImGui::EndMenu();
             }
-
         }
         ImGui::EndMainMenuBar();
 
@@ -177,20 +220,34 @@ int main(int argc, char** argv) {
 
         engine::prepare_draw();
 
-        if (!barrier_applied) {
+        if (!barrier_applied || !depth_barriers_applied) {
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(barrier);
-            engine::synchronization::apply_barrier(buffer_barrier);
+            if (!barrier_applied) {
+                engine::synchronization::apply_barrier(img_barrier);
+                engine::synchronization::apply_barrier(buffer_barrier);
+            }
+            if (!depth_barriers_applied) {
+                for (std::size_t i = 0; i < frames_in_flight; i++) {
+                    engine::synchronization::apply_barrier(depth_barriers[i]);
+                }
+            }
             engine::synchronization::end_barriers();
             barrier_applied = false;
         }
 
-        engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
-            engine::RenderingAttachement{}
-                .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                .set_load_op(engine::LoadOp::Clear)
-                .set_store_op(engine::StoreOp::Store)));
+        engine::rendering::begin(engine::RenderPass{}
+                                     .add_color_attachment(engine::RenderingAttachement{}
+                                                               .set_image(engine::get_swapchain_view(),
+                                                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                                               .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
+                                                               .set_load_op(engine::LoadOp::Clear)
+                                                               .set_store_op(engine::StoreOp::Store))
+                                     .depth_attachment(engine::RenderingAttachement{}
+                                                           .set_image(depth_image_views[engine::get_current_frame()],
+                                                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                                                           .set_clear_depth(1.0f)
+                                                           .set_load_op(engine::LoadOp::Clear)
+                                                           .set_store_op(engine::StoreOp::Store)));
 
         if (engine::transport::timeline_value() >= img_timeline) {
             uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
@@ -210,10 +267,24 @@ int main(int argc, char** argv) {
         engine::imgui::render();
         engine::rendering::end();
 
-        engine::next_frame();
+    end_of_frame:
+        if (engine::next_frame()) {
+            for (std::size_t i = 0; i < frames_in_flight; i++) {
+                engine::GPUImageView::destroy(depth_image_views[i]);
+                depth_images[i].destroy();
+            }
+            update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
+            depth_barriers_applied = false;
+        }
     }
 
     vkDeviceWaitIdle(engine::device);
+
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        engine::GPUImageView::destroy(depth_image_views[i]);
+        depth_images[i].destroy();
+    }
+    delete[] depth_images;
 
     vertices_buffer.destroy();
 

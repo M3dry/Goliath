@@ -46,7 +46,10 @@ namespace engine {
     VkCommandBuffer get_cmd_buf();
     VkImage get_swapchain();
     VkImageView get_swapchain_view();
-    void prepare_frame();
+    bool prepare_frame();
     void prepare_draw();
-    void next_frame();
+    bool next_frame();
+
+    uint32_t get_frames_in_flight();
+    uint32_t get_current_frame();
 }

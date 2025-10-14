@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <vulkan/vulkan_core.h>
 
 struct FormatInfo {
     uint32_t blockWidth;
@@ -300,5 +301,20 @@ namespace engine::transport {
         uint64_t value;
         vkGetSemaphoreCounterValue(device, timeline, &value);
         return value;
+    }
+
+    void transition(VkImageMemoryBarrier2* barrier, VkImageAspectFlags aspect_mask) {
+        barrier->sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier->pNext = nullptr;
+        barrier->srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier->srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+
+        barrier->subresourceRange = VkImageSubresourceRange{
+            .aspectMask = aspect_mask,
+            .baseMipLevel = 0,
+            .levelCount = VK_REMAINING_MIP_LEVELS,
+            .baseArrayLayer = 0,
+            .layerCount = VK_REMAINING_ARRAY_LAYERS,
+        };
     }
 }

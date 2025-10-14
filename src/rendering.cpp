@@ -110,7 +110,7 @@ engine::Pipeline::Pipeline() {
 
     _depth_test = false;
     _depth_write = false;
-    _depth_bias = false;
+    _depth_bias = std::nullopt;
     _stencil_test = false;
     _cull_mode = CullMode::None;
     _fill_mode = FillMode::Fill;
@@ -184,11 +184,19 @@ void engine::Pipeline::draw(const DrawParams& params) {
 
     vkCmdSetCullModeEXT(cmd_buf, static_cast<VkCullModeFlags>(_cull_mode));
     vkCmdSetDepthTestEnableEXT(cmd_buf, _depth_test);
-    vkCmdSetDepthWriteEnableEXT(cmd_buf, _depth_write);
+    if (_depth_test) {
+        vkCmdSetDepthWriteEnableEXT(cmd_buf,_depth_write);
+        vkCmdSetDepthCompareOpEXT(cmd_buf, _depth_cmp_op);
+    }
+
+    vkCmdSetDepthBiasEnableEXT(cmd_buf, _depth_bias ? 1 : 0);
+    if (_depth_bias) {
+        vkCmdSetDepthBias2EXT(cmd_buf, &*_depth_bias);
+    }
+
     vkCmdSetRasterizerDiscardEnableEXT(cmd_buf, false);
     vkCmdSetPrimitiveRestartEnableEXT(cmd_buf, false);
     vkCmdSetStencilTestEnableEXT(cmd_buf, _stencil_test);
-    vkCmdSetDepthBiasEnableEXT(cmd_buf, _depth_bias);
     vkCmdSetPolygonModeEXT(cmd_buf, static_cast<VkPolygonMode>(_fill_mode));
     vkCmdSetRasterizationSamplesEXT(cmd_buf, static_cast<VkSampleCountFlagBits>(_sample_count));
     vkCmdSetVertexInputEXT(cmd_buf, 0, nullptr, 0, nullptr);
@@ -204,6 +212,7 @@ void engine::Pipeline::draw(const DrawParams& params) {
     vkCmdSetAlphaToCoverageEnableEXT(cmd_buf, false);
     vkCmdSetViewportWithCountEXT(cmd_buf, 1, &_viewport);
     vkCmdSetScissorWithCountEXT(cmd_buf, 1, &_scissor);
+
     vkCmdSetColorWriteMaskEXT(cmd_buf, 0, 1, &_color_components);
 
     VkShaderStageFlagBits stages[2] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};

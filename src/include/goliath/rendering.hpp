@@ -1,8 +1,10 @@
 #pragma once
 
 #include "goliath/descriptor_pool.hpp"
+#include "goliath/util.hpp"
 #include <array>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <variant>
 #include <vector>
@@ -246,7 +248,8 @@ namespace engine {
 
         bool _depth_test;
         bool _depth_write;
-        bool _depth_bias;
+        std::optional<VkDepthBiasInfoEXT > _depth_bias;
+        VkCompareOp _depth_cmp_op;
         bool _stencil_test;
         CullMode _cull_mode;
         FillMode _fill_mode;
@@ -255,7 +258,7 @@ namespace engine {
         FrontFace _front_face;
         VkViewport _viewport;
         VkRect2D _scissor;
-        VkColorComponentFlags _color_components;
+        VkColorComponentFlags _color_components = 0;
 
         VkPipelineLayout _pipeline_layout;
 
@@ -288,6 +291,33 @@ namespace engine {
 
         Pipeline&& depth_test(bool enable) {
             _depth_test = enable;
+            return std::move(*this);
+        }
+
+        Pipeline&& depth_write(bool enable) {
+            _depth_write = enable;
+            return std::move(*this);
+        }
+
+        Pipeline&& depth_bias(float clamp, float const_factor, float slope_factor) {
+            _depth_bias.emplace(VkDepthBiasInfoEXT{
+                .sType = VK_STRUCTURE_TYPE_DEPTH_BIAS_INFO_EXT,
+                .pNext = nullptr,
+                .depthBiasConstantFactor = const_factor,
+                .depthBiasClamp = clamp,
+                .depthBiasSlopeFactor = slope_factor,
+            });
+            return std::move(*this);
+        }
+
+        Pipeline&& clear_depth_bias() {
+            _depth_bias = std::nullopt;
+            return std::move(*this);
+        }
+
+
+        Pipeline&& depth_cmp_op(CompareOp op) {
+            _depth_cmp_op = static_cast<VkCompareOp>(op);
             return std::move(*this);
         }
 
