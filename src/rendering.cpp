@@ -236,6 +236,92 @@ void engine::Pipeline::draw(const DrawParams& params) {
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
 }
 
+engine::Pipeline2::Pipeline2(const engine::PipelineBuilder& builder) {
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = builder._vertex;
+    stages[0].pName = "main";
+
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[1].module = builder._fragment;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vert_input{};
+    vert_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+    VkPipelineColorBlendAttachmentState color_blend_attachment{};
+    color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    color_blend_attachment.blendEnable = false;
+
+    VkPipelineColorBlendStateCreateInfo blend_state{};
+    blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend_state.attachmentCount = 1;
+    blend_state.pAttachments = &color_blend_attachment;
+
+    VkDynamicState dynamic_states[] = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        // VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT,
+        VK_DYNAMIC_STATE_LINE_WIDTH,
+        VK_DYNAMIC_STATE_CULL_MODE,
+        VK_DYNAMIC_STATE_FRONT_FACE,
+        VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+        VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
+    };
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.dynamicStateCount = sizeof(dynamic_states)/sizeof(VkDynamicState);
+    dynamic_state.pDynamicStates = dynamic_states;
+
+    VkPushConstantRange push_constant_range{};
+    push_constant_range.size = builder._push_constant_size;
+    push_constant_range.offset = 0;
+    VkPipelineLayoutCreateInfo layout_info{};
+    layout_info.sType= VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = 4;
+    layout_info.pSetLayouts = builder._set_layout;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges = &push_constant_range;
+    vkCreatePipelineLayout(device, &layout_info, nullptr, &_pipeline_layout);
+
+    VkGraphicsPipelineCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vert_input;
+    info.pInputAssemblyState = &input_assembly;
+    info.pViewportState = &viewport_state;
+    info.pRasterizationState = &rasterizer;
+    info.pMultisampleState = &multisampling;
+    info.pDepthStencilState = &depth_stencil;
+    info.pColorBlendState = &blend_state;
+    info.pDynamicState = &dynamic_state;
+    info.layout = _pipeline_layout;
+
+    vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &_pipeline);
+}
+
 namespace engine::rendering {
     void begin(const RenderPass& render_pass) {
         vkCmdBeginRendering(get_cmd_buf(), &render_pass._info);

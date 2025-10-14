@@ -372,6 +372,65 @@ namespace engine {
 
         void draw(const DrawParams& params);
     };
+
+    struct PipelineBuilder {
+        VkShaderModule _vertex;
+        VkShaderModule _fragment;
+
+        VkDescriptorSetLayout _set_layout[4];
+        uint32_t _push_constant_size;
+
+        FillMode _fill_mode;
+        // Topology _topology;
+        // bool _primitive_restart_enable;
+
+        // VkViewport _viewport;
+        //
+        // CullMode _cull_mode;
+        // FrontFace _front_face;
+        // float _line_width;
+
+        // bool _depth_test;
+        // bool _depth_write;
+        // CompareOp _depth_cmp_op;
+    };
+
+    struct Pipeline2 {
+        VkPipelineLayout _pipeline_layout;
+        VkPipeline _pipeline;
+
+        Pipeline2(const PipelineBuilder& builder);
+        // struct DrawParams {
+        //     void* push_constant = nullptr;
+        //     std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set, descriptor::null_set};
+        //     uint32_t vertex_count;
+        //     uint32_t instance_count = 1;
+        //     uint32_t first_vertex_id = 0;
+        //     uint32_t first_instance_id = 0;
+        // };
+        //
+        // VkShaderEXT _vertex;
+        // VkShaderEXT _fragment;
+        //
+        // VkDescriptorSetLayout _set_layout[4];
+        // uint32_t _push_constant_size;
+        //
+        // bool _depth_test;
+        // bool _depth_write;
+        // std::optional<VkDepthBiasInfoEXT > _depth_bias;
+        // VkCompareOp _depth_cmp_op;
+        // bool _stencil_test;
+        // CullMode _cull_mode;
+        // FillMode _fill_mode;
+        // SampleCount _sample_count;
+        // Topology _topology;
+        // FrontFace _front_face;
+        // VkViewport _viewport;
+        // VkRect2D _scissor;
+        // VkColorComponentFlags _color_components = 0;
+        //
+        // VkPipelineLayout _pipeline_layout;
+    };
 }
 
 namespace engine::rendering {
