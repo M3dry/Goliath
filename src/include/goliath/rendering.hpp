@@ -1,6 +1,7 @@
 #pragma once
 
 #include "goliath/descriptor_pool.hpp"
+#include "goliath/engine.hpp"
 #include "goliath/util.hpp"
 #include <array>
 #include <cstring>
@@ -188,6 +189,9 @@ namespace engine {
 
     void destroy_shader(VkShaderEXT shader);
 
+    VkShaderModule create_shader(std::span<uint8_t> code);
+    void destroy_shader(VkShaderModule shader);
+
     enum struct CullMode {
         None = VK_CULL_MODE_NONE,
         Back = VK_CULL_MODE_BACK_BIT,
@@ -233,7 +237,8 @@ namespace engine {
     struct Pipeline {
         struct DrawParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set, descriptor::null_set};
+            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set};
             uint32_t vertex_count;
             uint32_t instance_count = 1;
             uint32_t first_vertex_id = 0;
@@ -248,7 +253,7 @@ namespace engine {
 
         bool _depth_test;
         bool _depth_write;
-        std::optional<VkDepthBiasInfoEXT > _depth_bias;
+        std::optional<VkDepthBiasInfoEXT> _depth_bias;
         VkCompareOp _depth_cmp_op;
         bool _stencil_test;
         CullMode _cull_mode;
@@ -315,7 +320,6 @@ namespace engine {
             return std::move(*this);
         }
 
-
         Pipeline&& depth_cmp_op(CompareOp op) {
             _depth_cmp_op = static_cast<VkCompareOp>(op);
             return std::move(*this);
@@ -373,63 +377,265 @@ namespace engine {
         void draw(const DrawParams& params);
     };
 
+    struct BlendState {
+        VkPipelineColorBlendAttachmentState _state;
+
+        BlendState() {
+            _state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                    VK_COLOR_COMPONENT_A_BIT;
+            _state.blendEnable = false;
+        }
+
+        BlendState&& blend(bool enable) {
+            _state.blendEnable = enable;
+            return std::move(*this);
+        }
+
+        BlendState&& color_blend_op(VkBlendOp op) {
+            _state.colorBlendOp = op;
+            return std::move(*this);
+        }
+
+        BlendState&& alpha_blend_op(VkBlendOp op) {
+            _state.alphaBlendOp = op;
+            return std::move(*this);
+        }
+
+        BlendState&& src_color_blend_factor(VkBlendFactor factor) {
+            _state.srcColorBlendFactor = factor;
+            return std::move(*this);
+        }
+
+        BlendState&& src_alpha_blend_factor(VkBlendFactor factor) {
+            _state.srcAlphaBlendFactor = factor;
+            return std::move(*this);
+        }
+
+        BlendState&& dst_color_blend_factor(VkBlendFactor factor) {
+            _state.dstColorBlendFactor = factor;
+            return std::move(*this);
+        }
+
+        BlendState&& dst_alpha_blend_factor(VkBlendFactor factor) {
+            _state.dstAlphaBlendFactor = factor;
+            return std::move(*this);
+        }
+    };
+
     struct PipelineBuilder {
         VkShaderModule _vertex;
         VkShaderModule _fragment;
 
         VkDescriptorSetLayout _set_layout[4];
-        uint32_t _push_constant_size;
+        uint32_t _push_constant_size = 0;
 
-        FillMode _fill_mode;
-        // Topology _topology;
-        // bool _primitive_restart_enable;
+        FillMode _fill_mode = FillMode::Fill;
 
-        // VkViewport _viewport;
-        //
-        // CullMode _cull_mode;
-        // FrontFace _front_face;
-        // float _line_width;
+        std::vector<VkFormat> _color_format_attachments{};
+        std::vector<VkPipelineColorBlendAttachmentState> _color_blend_attachments{};
+        VkFormat _depth_format = VK_FORMAT_UNDEFINED;
+        VkFormat _stencil_format = VK_FORMAT_UNDEFINED;
 
-        // bool _depth_test;
-        // bool _depth_write;
-        // CompareOp _depth_cmp_op;
+        PipelineBuilder();
+
+        PipelineBuilder&& vertex(VkShaderModule vert) {
+            _vertex = vert;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& fragment(VkShaderModule frag) {
+            _fragment = frag;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& descriptor_layout(uint32_t index, VkDescriptorSetLayout layout) {
+            _set_layout[index] = layout;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& clear_descriptor(uint32_t index);
+
+        PipelineBuilder&& push_constant_size(uint32_t size) {
+            _push_constant_size = size;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& fill_mode(FillMode mode) {
+            _fill_mode = mode;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& add_color_attachment(VkFormat format, BlendState state) {
+            _color_format_attachments.emplace_back(format);
+            _color_blend_attachments.emplace_back(state._state);
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& add_color_attachment(VkFormat format) {
+            _color_format_attachments.emplace_back(format);
+            _color_blend_attachments.emplace_back(BlendState{}._state);
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& set_attachment_format(uint32_t ix, VkFormat format) {
+            _color_format_attachments[ix] = format;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& set_attachment_blend_state(uint32_t ix, BlendState state) {
+            _color_blend_attachments[ix] = state._state;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& depth_format(VkFormat format) {
+            _depth_format = format;
+            return std::move(*this);
+        }
+
+        PipelineBuilder&& stencil_format(VkFormat format) {
+            _stencil_format = format;
+            return std::move(*this);
+        }
     };
 
     struct Pipeline2 {
+        struct DrawParams {
+            void* push_constant = nullptr;
+            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set};
+            uint32_t vertex_count;
+            uint32_t instance_count = 1;
+            uint32_t first_vertex_id = 0;
+            uint32_t first_instance_id = 0;
+        };
+
         VkPipelineLayout _pipeline_layout;
         VkPipeline _pipeline;
+        const uint32_t _push_constant_size;
+
+        Topology _topology = Topology::TriangleList;
+        bool _primitive_restart_enable = false;
+
+        VkViewport _viewport;
+        VkRect2D _scissor;
+
+        CullMode _cull_mode = CullMode::Back;
+        FrontFace _front_face = FrontFace::CCW;
+        float _line_width = 1.0f;
+
+        bool _stencil_test = false;
+        VkStencilFaceFlags _stencil_face_flag;
+        VkStencilOp _stencil_fail_op;
+        VkStencilOp _stencil_pass_op;
+        VkStencilOp _stencil_depth_fail_op;
+        CompareOp _stencil_compare_op;
+        uint32_t _stencil_compare_mask;
+        uint32_t _stencil_write_mask;
+
+        bool _depth_test = false;
+        bool _depth_write = false;
+        CompareOp _depth_compare_op;
 
         Pipeline2(const PipelineBuilder& builder);
-        // struct DrawParams {
-        //     void* push_constant = nullptr;
-        //     std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set, descriptor::null_set};
-        //     uint32_t vertex_count;
-        //     uint32_t instance_count = 1;
-        //     uint32_t first_vertex_id = 0;
-        //     uint32_t first_instance_id = 0;
-        // };
-        //
-        // VkShaderEXT _vertex;
-        // VkShaderEXT _fragment;
-        //
-        // VkDescriptorSetLayout _set_layout[4];
-        // uint32_t _push_constant_size;
-        //
-        // bool _depth_test;
-        // bool _depth_write;
+
+        void bind();
+        void draw(const DrawParams& params);
+        void destroy();
+
+        Pipeline2&& topology(Topology top) {
+            _topology = top;
+            return std::move(*this);
+        }
+
+        Pipeline2&& primitive_restart(bool enable) {
+            _primitive_restart_enable = enable;
+            return std::move(*this);
+        }
+
+        Pipeline2&& update_viewport_to_swapchain() {
+            _viewport = VkViewport{
+                .x = 0,
+                .y = 0,
+                .width = (float)swapchain_extent.width,
+                .height = (float)swapchain_extent.height,
+                .minDepth = 0,
+                .maxDepth = 1,
+            };
+            return std::move(*this);
+        }
+
+        Pipeline2&& update_scissor_to_viewport() {
+            _scissor = VkRect2D{
+                .offset =
+                    VkOffset2D{
+                        .x = (int32_t)_viewport.x,
+                        .y = (int32_t)_viewport.y,
+                    },
+                .extent =
+                    VkExtent2D{
+                        .width = (uint32_t)_viewport.width,
+                        .height = (uint32_t)_viewport.height,
+                    },
+            };
+            return std::move(*this);
+        }
+
+        Pipeline2&& cull_mode(CullMode mode) {
+            _cull_mode = mode;
+            return std::move(*this);
+        }
+
+        Pipeline2&& front_face(FrontFace face) {
+            _front_face = face;
+            return std::move(*this);
+        }
+
+        Pipeline2&& line_width(float width) {
+            _line_width = width;
+            return std::move(*this);
+        }
+
+        Pipeline2&& stencil_test(bool enable) {
+            _stencil_test = enable;
+            return std::move(*this);
+        }
+
+        Pipeline2&& stencil_face(VkStencilFaceFlags flags) {
+            _stencil_face_flag = flags;
+            return std::move(*this);
+        }
+
+        Pipeline2&& stencil_op(VkStencilOp fail, VkStencilOp pass) {
+            _stencil_fail_op = fail;
+            _stencil_pass_op = pass;
+            return std::move(*this);
+        }
+
+        Pipeline2&& stencil_compare_mask(uint32_t mask) {
+            _stencil_compare_mask = mask;
+            return std::move(*this);
+        }
+
+        Pipeline2&& stencil_write_mask(uint32_t mask) {
+            _stencil_write_mask = mask;
+            return std::move(*this);
+        }
+
+        Pipeline2&& depth_test(bool enable) {
+            _depth_test = enable;
+            return std::move(*this);
+        }
+
+        Pipeline2&& depth_write(bool enable) {
+            _depth_write = enable;
+            return std::move(*this);
+        }
+
+        Pipeline2&& depth_compare_op(CompareOp op) {
+            _depth_compare_op = op;
+            return std::move(*this);
+        }
         // std::optional<VkDepthBiasInfoEXT > _depth_bias;
-        // VkCompareOp _depth_cmp_op;
-        // bool _stencil_test;
-        // CullMode _cull_mode;
-        // FillMode _fill_mode;
-        // SampleCount _sample_count;
-        // Topology _topology;
-        // FrontFace _front_face;
-        // VkViewport _viewport;
-        // VkRect2D _scissor;
-        // VkColorComponentFlags _color_components = 0;
-        //
-        // VkPipelineLayout _pipeline_layout;
     };
 }
 

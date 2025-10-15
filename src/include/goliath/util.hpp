@@ -14,4 +14,9 @@ namespace engine {
         GreaterOrEqual = VK_COMPARE_OP_GREATER_OR_EQUAL,
         LessOrEqual = VK_COMPARE_OP_LESS_OR_EQUAL,
     };
+
+}
+
+namespace engine::util {
+    uint8_t* read_file(const char* path, uint32_t* size);
 }

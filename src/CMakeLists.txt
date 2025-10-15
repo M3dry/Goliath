@@ -30,6 +30,7 @@ SET(ENGINE_SOURCES
     synchronization.cpp
     camera.cpp
     model.cpp
+    util.cpp
 
     ${IMGUI_SOURCES}
 )

@@ -53,15 +53,35 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
 int main(int argc, char** argv) {
     engine::init("Test window", 1000);
 
+    uint32_t vertex_spv_size;
+    auto vertex_spv_data = engine::util::read_file("vertex.spv", &vertex_spv_size);
+    auto vertex_module = engine::create_shader({vertex_spv_data, vertex_spv_size});
+    assert(vertex_spv_size != 0);
+
+    uint32_t fragment_spv_size;
+    auto fragment_spv_data = engine::util::read_file("fragment.spv", &fragment_spv_size);
+    auto fragment_module = engine::create_shader({fragment_spv_data, fragment_spv_size});
+
+    auto pipeline2 =
+        engine::Pipeline2(engine::PipelineBuilder{}
+                              .vertex(vertex_module)
+                              .fragment(fragment_module)
+                              .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
+                              .add_color_attachment(engine::swapchain_format)
+                              .depth_format(VK_FORMAT_D16_UNORM))
+            .depth_test(true)
+            .depth_write(true)
+            .depth_compare_op(engine::CompareOp::Less);
+
     auto vertex = engine::Shader{}.stage(VK_SHADER_STAGE_VERTEX_BIT).next_stage(VK_SHADER_STAGE_FRAGMENT_BIT);
     auto fragment = engine::Shader{}.stage(VK_SHADER_STAGE_FRAGMENT_BIT);
     auto pipeline = engine::Pipeline{}
                         .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
                         .vertex(vertex, "vertex.spv")
                         .fragment(fragment, "fragment.spv")
-                        .depth_test(true)
-                        .depth_write(true)
-                        .depth_cmp_op(engine::CompareOp::LessOrEqual)
+                        // .depth_test(true)
+                        // .depth_write(true)
+                        // .depth_cmp_op(engine::CompareOp::LessOrEqual)
                         .update_layout();
 
     auto img = engine::Image::load8(argv[1], 4);
@@ -241,6 +261,15 @@ int main(int argc, char** argv) {
                                                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                                                                .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
                                                                .set_load_op(engine::LoadOp::Clear)
+                                                               .set_store_op(engine::StoreOp::Store)));
+        engine::imgui::render();
+        engine::rendering::end();
+
+        engine::rendering::begin(engine::RenderPass{}
+                                     .add_color_attachment(engine::RenderingAttachement{}
+                                                               .set_image(engine::get_swapchain_view(),
+                                                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                                               .set_load_op(engine::LoadOp::Load)
                                                                .set_store_op(engine::StoreOp::Store))
                                      .depth_attachment(engine::RenderingAttachement{}
                                                            .set_image(depth_image_views[engine::get_current_frame()],
@@ -248,24 +277,27 @@ int main(int argc, char** argv) {
                                                            .set_clear_depth(1.0f)
                                                            .set_load_op(engine::LoadOp::Clear)
                                                            .set_store_op(engine::StoreOp::Store)));
+            if (engine::transport::timeline_value() >= img_timeline) {
+                uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
+                auto addr = vertices_buffer.address();
 
-        if (engine::transport::timeline_value() >= img_timeline) {
-            uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
-            auto addr = vertices_buffer.address();
+                std::memcpy(push_constant, &addr, sizeof(uint64_t));
+                std::memcpy(push_constant + sizeof(glm::vec4), &color, sizeof(glm::vec4));
+                auto cam_mat = cam.view_projection();
+                std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
 
-            std::memcpy(push_constant, &addr, sizeof(uint64_t));
-            std::memcpy(push_constant + sizeof(glm::vec4), &color, sizeof(glm::vec4));
-            auto cam_mat = cam.view_projection();
-            std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
-
-            pipeline.draw(engine::Pipeline::DrawParams{
-                .push_constant = push_constant,
-                .vertex_count = 3,
-            });
-        }
-
-        engine::imgui::render();
+                // pipeline2.bind();
+                // pipeline2.draw(engine::Pipeline2::DrawParams{
+                //     .push_constant = push_constant,
+                //     .vertex_count = 3,
+                // });
+                pipeline.draw(engine::Pipeline::DrawParams{
+                    .push_constant = push_constant,
+                    .vertex_count = 3,
+                });
+            }
         engine::rendering::end();
+
 
     end_of_frame:
         if (engine::next_frame()) {
@@ -279,6 +311,10 @@ int main(int argc, char** argv) {
     }
 
     vkDeviceWaitIdle(engine::device);
+
+    pipeline2.destroy();
+    engine::destroy_shader(vertex_module);
+    engine::destroy_shader(fragment_module);
 
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         engine::GPUImageView::destroy(depth_image_views[i]);
