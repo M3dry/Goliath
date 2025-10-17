@@ -1,9 +1,14 @@
 #include "goliath/model.hpp"
+#include "goliath/buffer.hpp"
+#include "goliath/engine.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/transport.hpp"
 #include <format>
+#include <utility>
+#include <volk.h>
 
 #define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
+#define NO_STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <tinygltf/tiny_gltf.h>
 
@@ -180,7 +185,7 @@ engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& mod
         if (texcoord_accessor_ids[i] == -1) continue;
 
         out->texcoords[i] = (glm::vec2*)copy_buffer(&vertex_count, &elem_size, model,
-                                                    model.accessors[(uint64_t)tangent_accessor_id], true);
+                                                    model.accessors[(uint64_t)texcoord_accessor_ids[i]], true);
         if (elem_size != sizeof(glm::vec2)) return engine::Model::InvalidTexcoordElementSize;
         if (vertex_count != out->vertex_count) return engine::Model::VertexCountDiffersBetweenAttributes;
     }
@@ -285,6 +290,22 @@ engine::Model::Err parse_model(engine::Model* out, const tinygltf::Model& model)
                               model_aabb, handled);
         if (err != engine::Model::Ok) return err;
     }
+    assert(mesh_indices.size() == mesh_transforms.size());
+    assert(meshes.size() <= mesh_indices.size());
+
+    out->mesh_count = (uint32_t)meshes.size();
+    out->mesh_indices_count = (uint32_t)mesh_indices.size();
+
+    out->meshes = (engine::Mesh*)malloc(sizeof(engine::Mesh) * out->mesh_count);
+    std::memcpy(out->meshes, meshes.data(), sizeof(engine::Mesh) * out->mesh_count);
+
+    out->mesh_indexes = (uint32_t*)malloc(sizeof(uint32_t) * out->mesh_indices_count);
+    std::memcpy(out->mesh_indexes, mesh_indices.data(), sizeof(uint32_t) * out->mesh_count);
+
+    out->mesh_transforms = (glm::mat4*)malloc(sizeof(glm::mat4) * out->mesh_indices_count);
+    std::memcpy(out->mesh_transforms, mesh_transforms.data(), sizeof(glm::mat4) * out->mesh_indices_count);
+
+    out->bounding_box = model_aabb;
 
     return engine::Model::Ok;
 }
@@ -351,6 +372,106 @@ namespace engine {
         return offset;
     }
 
+    model::GPUOffset Mesh::calc_offset(uint32_t start_offset, uint32_t* total_size) const {
+        uint32_t size = 0;
+        size = 0;
+        size += material_data_size;
+
+        model::GPUOffset offset{
+            .start = start_offset,
+            .material_offset = 0,
+        };
+
+        if (indices != nullptr) {
+            offset.indices_offset = size;
+            size += sizeof(uint32_t) * index_count;
+        }
+
+        if (!indexed_tangents && tangents != nullptr) {
+            offset.tangent_offset = size;
+            size += sizeof(glm::vec4) * index_count;
+        }
+
+        uint32_t stride = 0;
+        if (positions != nullptr) {
+            offset.position_offset = size;
+            size += sizeof(glm::vec3) * vertex_count;
+        }
+
+        if (normals != nullptr) {
+            offset.normal_offset = size;
+            size += sizeof(glm::vec4) * vertex_count;
+        }
+
+        if (tangents != nullptr) {
+            offset.tangent_offset = size;
+            size += sizeof(glm::vec4) * vertex_count;
+        }
+
+        for (std::size_t i = 0; i < texcoords.size(); i++) {
+            if (texcoords[i] != nullptr) {
+                offset.texcoords_offset[i] = sizeof(glm::vec2) * vertex_count;
+                size += sizeof(glm::vec2) * vertex_count;
+            }
+        }
+
+        offset.stride = stride;
+
+        *total_size = size;
+        return offset;
+    }
+
+    uint32_t Mesh::upload_data(uint8_t* buf) const {
+        uint32_t total_size;
+        auto offset = calc_offset(0, &total_size);
+
+        std::memcpy(buf + offset.material_offset, material_data, material_data_size);
+
+        if (offset.indices_offset != (uint32_t)-1) {
+            std::memcpy(buf + offset.indices_offset, indices, index_count * sizeof(uint32_t));
+        }
+
+        if (!indexed_tangents && offset.tangent_offset != (uint32_t)-1) {
+            std::memcpy(buf + offset.tangent_offset, tangents, index_count * sizeof(glm::vec4));
+        }
+
+        if (offset.position_offset != (uint32_t)-1) {
+            auto buf_ = buf + offset.position_offset;
+            for (std::size_t i = 0; i < vertex_count; i++) {
+                std::memcpy(buf_, &positions[i], sizeof(glm::vec3));
+                buf_ += offset.stride;
+            }
+        }
+
+        if (offset.normal_offset != (uint32_t)-1) {
+            auto buf_ = buf + offset.normal_offset;
+            for (std::size_t i = 0; i < vertex_count; i++) {
+                std::memcpy(buf_, &normals[i], sizeof(glm::vec2));
+                buf_ += offset.stride;
+            }
+        }
+
+        if (offset.tangent_offset != (uint32_t)-1) {
+            auto buf_ = buf + offset.tangent_offset;
+            for (std::size_t i = 0; i < vertex_count; i++) {
+                std::memcpy(buf_, &tangents[i], sizeof(glm::vec4));
+                buf_ += offset.stride;
+            }
+        }
+
+        for (std::size_t t = 0; t < texcoords.size(); t++) {
+            if (offset.texcoords_offset[t] == (uint32_t)-1) continue;
+
+            auto buf_ = buf + offset.texcoords_offset[t];
+            for (std::size_t i = 0; i < vertex_count; i++) {
+                std::memcpy(buf_, &texcoords[t][i], sizeof(glm::vec4));
+                buf_ += offset.stride;
+            }
+        }
+
+        return total_size;
+    }
+
     Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, std::string* tinygltf_error,
                                 std::string* tinygltf_warning) {
         tinygltf::Model model;
@@ -368,9 +489,9 @@ namespace engine {
     Model::Err Model::load_glb(Model* out, std::span<uint8_t> data, std::string* tinygltf_error,
                                std::string* tinygltf_warning) {
         tinygltf::Model model;
-        std::string err;
 
-        if (!loader.LoadBinaryFromMemory(&model, &err, tinygltf_warning, data.data(), (uint32_t)data.size())) {
+        if (!loader.LoadBinaryFromMemory(&model, tinygltf_error, tinygltf_warning, data.data(),
+                                         (uint32_t)data.size())) {
             return TinyGLTFErr;
         }
 
@@ -405,5 +526,94 @@ namespace engine {
         offset += out->mesh_indices_count + sizeof(glm::mat4);
 
         return true;
+    }
+
+    void GPUGroup::destroy() {
+        free(material_ids);
+        free(offsets);
+        free(mesh_transforms);
+        free(mesh_vertex_counts);
+
+        vertex_data.destroy();
+        texture_pool::free(texture_block);
+    }
+}
+
+namespace engine::model {
+    std::vector<const Model*> upload_models{};
+    uint32_t current_offset = 0;
+    uint32_t needed_textures = 0;
+
+    void begin_gpu_upload() {
+        upload_models.clear();
+        current_offset = 0;
+        needed_textures = 0;
+    }
+
+    GPUModel upload(const Model* model) {
+        upload_models.emplace_back(model);
+
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            needed_textures += model->meshes[i].material_texture_count;
+        }
+
+        auto last_offset = current_offset;
+        current_offset += model->mesh_indices_count;
+        return {last_offset, current_offset};
+    }
+
+    GPUGroup end_gpu_upload(VkBufferMemoryBarrier2* barrier) {
+        auto group = GPUGroup{
+            .mesh_count = current_offset,
+            .material_ids = (material_id*)malloc(sizeof(material_id) * current_offset),
+            .offsets = (GPUOffset*)malloc(sizeof(GPUOffset) * current_offset),
+            .mesh_transforms = (glm::mat4*)malloc(sizeof(glm::mat4) * current_offset),
+            .mesh_vertex_counts = (uint32_t*)malloc(sizeof(uint32_t) * current_offset),
+            .vertex_data = Buffer{},
+            .texture_block = texture_pool::alloc(needed_textures),
+        };
+
+        uint32_t mesh_indicies_offset = 0;
+        uint32_t total_size = 0;
+        std::vector<GPUOffset> mesh_offsets{};
+        for (auto model : upload_models) {
+            mesh_offsets.resize(model->mesh_count);
+            for (std::size_t i = 0; i < model->mesh_count; i++) {
+                uint32_t size = 0;
+                mesh_offsets[i] = model->meshes[i].calc_offset(0, &size);
+                total_size += size;
+            }
+
+            for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
+                const auto& mesh = model->meshes[i];
+
+                group.material_ids[i + mesh_indicies_offset] = mesh.material_id;
+                group.offsets[i + mesh_indicies_offset] = mesh_offsets[i];
+                group.mesh_transforms[i + mesh_indicies_offset] = model->mesh_transforms[i + mesh_indicies_offset];
+                group.mesh_vertex_counts[i + mesh_indicies_offset] = mesh.vertex_count;
+            }
+        }
+
+        group.vertex_data =
+            Buffer::create(total_size, VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                           std::nullopt, VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+
+        uint8_t* data = (uint8_t*)malloc(total_size);
+        uint32_t current_start = 0;
+        for (auto model : upload_models) {
+            for (std::size_t i = 0; i < model->mesh_count; i++) {
+                const auto& mesh = model->meshes[i];
+                uint32_t size = mesh.upload_data(data + current_start);
+                transport::upload(barrier, data + current_start, size, group.vertex_data.data(), current_start);
+
+                current_start += size;
+            }
+        }
+
+        barrier->offset = 0;
+        barrier->size = total_size;
+
+        free(data);
+        return group;
     }
 }

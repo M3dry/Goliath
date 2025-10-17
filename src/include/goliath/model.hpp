@@ -10,9 +10,10 @@
 #include <glm/ext/vector_float3.hpp>
 #include <glm/ext/vector_float4.hpp>
 #include <string>
+#include <vulkan/vulkan_core.h>
 
 namespace engine::model {
-    struct GPUOffsets {
+    struct GPUOffset {
         uint32_t start = (uint32_t)-1;
         uint32_t stride = 0;
         uint32_t material_offset = (uint32_t)-1;
@@ -20,10 +21,7 @@ namespace engine::model {
         uint32_t position_offset = (uint32_t)-1;
         uint32_t normal_offset = (uint32_t)-1;
         uint32_t tangent_offset = (uint32_t)-1;
-        uint32_t texcoord1_offset = (uint32_t)-1;
-        uint32_t texcoord2_offset = (uint32_t)-1;
-        uint32_t texcoord3_offset = (uint32_t)-1;
-        uint32_t texcoord4_offset = (uint32_t)-1;
+        std::array<uint32_t, 4> texcoords_offset = {(uint32_t)-1, (uint32_t)-1, (uint32_t)-1, (uint32_t)-1};
     };
 
     struct Material_PBR {
@@ -42,8 +40,9 @@ namespace engine {
     using material_id = uint32_t;
 
     struct Mesh {
-        material_id material_id;
-        uint32_t material_data_size;
+        material_id material_id = (material_id)-1;
+        uint32_t material_texture_count = 0;
+        uint32_t material_data_size = 0;
         void* material_data = nullptr;
 
         engine::Topology vertex_topology;
@@ -61,6 +60,10 @@ namespace engine {
         collisions::AABB bounding_box;
 
         static std::size_t load_optimized(Mesh* out, uint8_t* data);
+
+        model::GPUOffset calc_offset(uint32_t start_offset, uint32_t* total_size) const;
+        // returns data size it written to `buf`
+        uint32_t upload_data(uint8_t* buf) const;
 
         void clone(Mesh* out) {
             out->material_id = material_id;
@@ -90,11 +93,11 @@ namespace engine {
 
         void destroy() {
             free(material_data);
-            delete[] positions;
-            delete[] normals;
-            delete[] tangents;
+            free(positions);
+            free(normals);
+            free(tangents);
             for (auto texcoord : texcoords) {
-                delete[] texcoord;
+                free(texcoord);
             }
         }
     };
@@ -123,8 +126,10 @@ namespace engine {
             VertexCountDiffersBetweenAttributes,
         };
 
-        static Err load_gltf(Model* out, std::span<uint8_t> data, std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
-        static Err load_glb(Model* out, std::span<uint8_t> data, std::string* tinygltf_err = nullptr, std::string* tinygltf_warning = nullptr);
+        static Err load_gltf(Model* out, std::span<uint8_t> data, std::string* tinygltf_error = nullptr,
+                             std::string* tinygltf_warning = nullptr);
+        static Err load_glb(Model* out, std::span<uint8_t> data, std::string* tinygltf_err = nullptr,
+                            std::string* tinygltf_warning = nullptr);
         static bool load_optimized(Model* out, uint8_t* data);
 
         void destroy() {
@@ -132,8 +137,8 @@ namespace engine {
                 meshes[i].destroy();
             }
 
-            delete[] mesh_transforms;
-            delete[] meshes;
+            free(mesh_transforms);
+            free(meshes);
         }
     };
 
@@ -142,8 +147,8 @@ namespace engine {
     struct GPUGroup {
         uint32_t mesh_count;
         material_id* material_ids;
-        model::GPUOffsets* offsets;
-        glm::mat4* model_transforms;
+        model::GPUOffset* offsets;
+        glm::mat4* mesh_transforms;
         uint32_t* mesh_vertex_counts;
 
         Buffer vertex_data;
@@ -154,7 +159,22 @@ namespace engine {
 }
 
 namespace engine::model {
+    // `F` is a callable object that takes in:
+    //   1) uint32_t - vertex count
+    //   2) uint32_t - material_id
+    //   3) GPUOffset
+    //   4) VkBuffer - vertex data
+    template <typename F> inline void draw(GPUGroup group, GPUModel model, F&& draw_fun) {
+        auto cmd_buf = get_cmd_buf();
+
+        for (std::size_t i = model.first; i < model.second; i++) {
+            draw_fun(group.mesh_vertex_counts[i], group.material_ids[i], group.offsets[i], group.mesh_transforms[i],
+                     group.vertex_data);
+        }
+    }
+
     void begin_gpu_upload();
-    GPUModel upload();
-    GPUGroup end_gpu_upload();
+    // the pointer to `model` must be valid until `end_gpu_upload` is called
+    GPUModel upload(const Model* model);
+    GPUGroup end_gpu_upload(VkBufferMemoryBarrier2* barrier);
 }

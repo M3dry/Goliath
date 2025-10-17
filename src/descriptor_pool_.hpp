@@ -13,6 +13,7 @@ namespace engine {
         using id = uint64_t;
 
         DescriptorPool();
+        DescriptorPool(const DescriptorPool&) = delete;
         ~DescriptorPool();
 
         uint64_t new_set(VkDescriptorSetLayout layout);

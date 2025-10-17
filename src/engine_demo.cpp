@@ -3,6 +3,7 @@
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
+#include "goliath/model.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
@@ -56,33 +57,39 @@ int main(int argc, char** argv) {
     uint32_t vertex_spv_size;
     auto vertex_spv_data = engine::util::read_file("vertex.spv", &vertex_spv_size);
     auto vertex_module = engine::create_shader({vertex_spv_data, vertex_spv_size});
-    assert(vertex_spv_size != 0);
 
     uint32_t fragment_spv_size;
     auto fragment_spv_data = engine::util::read_file("fragment.spv", &fragment_spv_size);
     auto fragment_module = engine::create_shader({fragment_spv_data, fragment_spv_size});
 
-    auto pipeline2 =
+    auto pipeline = engine::Pipeline2(engine::PipelineBuilder{}
+                                          .vertex(vertex_module)
+                                          .fragment(fragment_module)
+                                          .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
+                                          .add_color_attachment(engine::swapchain_format)
+                                          .depth_format(VK_FORMAT_D16_UNORM))
+                        .depth_test(true)
+                        .depth_write(true)
+                        .depth_compare_op(engine::CompareOp::Less);
+
+    uint32_t model_vertex_spv_size;
+    auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
+    auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
+
+    uint32_t model_fragment_spv_size;
+    auto model_fragment_spv_data = engine::util::read_file("model_fragment.spv", &model_fragment_spv_size);
+    auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
+
+    auto model_pipeline =
         engine::Pipeline2(engine::PipelineBuilder{}
-                              .vertex(vertex_module)
-                              .fragment(fragment_module)
-                              .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
+                              .vertex(model_vertex_module)
+                              .fragment(model_fragment_module)
+                              .push_constant_size(sizeof(engine::model::GPUOffset) + 2 * sizeof(uint64_t) + 2*sizeof(glm::mat4))
                               .add_color_attachment(engine::swapchain_format)
                               .depth_format(VK_FORMAT_D16_UNORM))
             .depth_test(true)
             .depth_write(true)
             .depth_compare_op(engine::CompareOp::Less);
-
-    auto vertex = engine::Shader{}.stage(VK_SHADER_STAGE_VERTEX_BIT).next_stage(VK_SHADER_STAGE_FRAGMENT_BIT);
-    auto fragment = engine::Shader{}.stage(VK_SHADER_STAGE_FRAGMENT_BIT);
-    auto pipeline = engine::Pipeline{}
-                        .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
-                        .vertex(vertex, "vertex.spv")
-                        .fragment(fragment, "fragment.spv")
-                        // .depth_test(true)
-                        // .depth_write(true)
-                        // .depth_cmp_op(engine::CompareOp::LessOrEqual)
-                        .update_layout();
 
     auto img = engine::Image::load8(argv[1], 4);
 
@@ -101,7 +108,25 @@ int main(int argc, char** argv) {
     auto vertices_buffer = engine::Buffer::create(
         6 * sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, std::nullopt);
 
+    uint32_t model_glb_size;
+    auto model_glb_data = engine::util::read_file(argv[2], &model_glb_size);
+    assert(model_glb_data != nullptr);
+
+    engine::Model model;
+    auto err = engine::Model::load_glb(&model, {model_glb_data, model_glb_size});
+    if (err != engine::Model::Err::Ok) {
+        printf("err: %d", err);
+        return 0;
+    }
+    VkBufferMemoryBarrier2 model_barrier{};
+    model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+
     engine::transport::begin();
+    engine::model::begin_gpu_upload();
+    auto gpu_model = engine::model::upload(&model);
+    auto gpu_group = engine::model::end_gpu_upload(&model_barrier);
+
     auto [gpu_img, img_barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     img_barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     img_barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
@@ -255,13 +280,12 @@ int main(int argc, char** argv) {
             barrier_applied = false;
         }
 
-        engine::rendering::begin(engine::RenderPass{}
-                                     .add_color_attachment(engine::RenderingAttachement{}
-                                                               .set_image(engine::get_swapchain_view(),
-                                                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                                                               .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                                                               .set_load_op(engine::LoadOp::Clear)
-                                                               .set_store_op(engine::StoreOp::Store)));
+        engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
+            engine::RenderingAttachement{}
+                .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
+                .set_load_op(engine::LoadOp::Clear)
+                .set_store_op(engine::StoreOp::Store)));
         engine::imgui::render();
         engine::rendering::end();
 
@@ -277,27 +301,44 @@ int main(int argc, char** argv) {
                                                            .set_clear_depth(1.0f)
                                                            .set_load_op(engine::LoadOp::Clear)
                                                            .set_store_op(engine::StoreOp::Store)));
-            if (engine::transport::timeline_value() >= img_timeline) {
-                uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
-                auto addr = vertices_buffer.address();
+        if (engine::transport::timeline_value() >= img_timeline) {
+            uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
+            auto addr = vertices_buffer.address();
 
-                std::memcpy(push_constant, &addr, sizeof(uint64_t));
-                std::memcpy(push_constant + sizeof(glm::vec4), &color, sizeof(glm::vec4));
-                auto cam_mat = cam.view_projection();
-                std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
+            std::memcpy(push_constant, &addr, sizeof(uint64_t));
+            std::memcpy(push_constant + sizeof(glm::vec4), &color, sizeof(glm::vec4));
+            auto cam_mat = cam.view_projection();
+            std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
 
-                // pipeline2.bind();
-                // pipeline2.draw(engine::Pipeline2::DrawParams{
-                //     .push_constant = push_constant,
-                //     .vertex_count = 3,
-                // });
-                pipeline.draw(engine::Pipeline::DrawParams{
-                    .push_constant = push_constant,
-                    .vertex_count = 3,
-                });
-            }
+            pipeline.bind();
+            pipeline.draw(engine::Pipeline2::DrawParams{
+                .push_constant = push_constant,
+                .vertex_count = 3,
+            });
+
+            model_pipeline.bind();
+            engine::model::draw(gpu_group, gpu_model,
+                                [&](uint32_t vertex_count, engine::material_id id,
+                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf) {
+                                    uint8_t push_constant[sizeof(engine::model::GPUOffset) + 2 * sizeof(uint64_t) + 2*sizeof(glm::mat4)]{};
+
+                                    auto addr = buf.address();
+                                    std::memcpy(push_constant, &addr, 2 * sizeof(uint64_t));
+
+                                    std::memcpy(push_constant + sizeof(uint64_t), &transform, sizeof(glm::mat4));
+
+                                    auto vp = cam.view_projection();
+                                    std::memcpy(push_constant + sizeof(uint64_t) + sizeof(glm::mat4), &vp, sizeof(glm::mat4));
+
+                                    std::memcpy(push_constant + sizeof(uint64_t) + 2*sizeof(glm::mat4), &offset, sizeof(engine::model::GPUOffset));
+
+                                    model_pipeline.draw(engine::Pipeline2::DrawParams{
+                                        .push_constant = push_constant,
+                                        .vertex_count = vertex_count,
+                                    });
+                                });
+        }
         engine::rendering::end();
-
 
     end_of_frame:
         if (engine::next_frame()) {
@@ -307,12 +348,18 @@ int main(int argc, char** argv) {
             }
             update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
             depth_barriers_applied = false;
+
+            pipeline.update_viewport_to_swapchain();
+            pipeline.update_scissor_to_viewport();
         }
     }
 
+    gpu_group.destroy();
+    model.destroy();
+
     vkDeviceWaitIdle(engine::device);
 
-    pipeline2.destroy();
+    pipeline.destroy();
     engine::destroy_shader(vertex_module);
     engine::destroy_shader(fragment_module);
 
@@ -329,9 +376,6 @@ int main(int argc, char** argv) {
     engine::Sampler::destroy(img_sampler);
     img.destroy();
 
-    engine::destroy_shader(pipeline._fragment);
-    engine::destroy_shader(pipeline._vertex);
-    pipeline.destroy({false, false, false});
     engine::destroy();
     return 0;
 }

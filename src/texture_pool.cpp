@@ -2,6 +2,7 @@
 #include "texture_pool_.hpp"
 
 #include "goliath/engine.hpp"
+#include <cassert>
 
 namespace engine::texture_pool {
     VkDescriptorPool pool;
@@ -86,5 +87,15 @@ namespace engine::texture_pool {
 
     void bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) {
         vkCmdBindDescriptorSets(get_cmd_buf(), bind_point, layout, 3, 1, &set, 0, nullptr);
+    }
+
+    std::pair<uint32_t, uint32_t> alloc(uint32_t count) {
+        return {0,0};
+        assert(false && "TODO retard");
+    }
+
+    void free(std::pair<uint32_t, uint32_t> block) {
+        return;
+        assert(false && "TODO retard");
     }
 }

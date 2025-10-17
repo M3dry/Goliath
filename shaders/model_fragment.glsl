@@ -1,0 +1,38 @@
+#version 460
+
+#extension GL_EXT_buffer_reference : require
+
+layout(buffer_reference, std430) readonly buffer VertexData {
+    uint data[];
+};
+
+layout(push_constant, std430) uniform Push {
+    VertexData verts;
+    mat4 m;
+    mat4 vp;
+
+    // start, stride, material offset, indicies offset
+    uvec4 off1;
+
+    // position offset, normal offset, tangent offset, texcoordd0 offset
+    uvec4 off2;
+
+    // texcoord 1..2 offsets
+    uvec3 off3;
+};
+
+layout(set = 3, binding = 0) uniform sampler2D textures[];
+
+layout(location = 0) in vec3 f_position;
+layout(location = 1) in vec3 f_normal;
+layout(location = 2) in vec4 f_tangent;
+layout(location = 3) in vec2 f_texcoord0;
+layout(location = 4) in vec2 f_texcoord1;
+layout(location = 5) in vec2 f_texcoord2;
+layout(location = 6) in vec2 f_texcoord3;
+
+layout(location = 0) out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(f_texcoord0, 0.0, 1.0);
+}

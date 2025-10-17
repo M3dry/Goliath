@@ -116,6 +116,12 @@ namespace engine {
         for (std::size_t i = 0; i < swapchain_images.size(); i++) {
             VK_CHECK(vkCreateSemaphore(device, &swapchain_semaphore_info, nullptr, &swapchain_semaphores[i]));
         }
+
+        current_frame = 0;
+        swapchain_needs_rebuild = false;
+
+        delete[] frames;
+        frames = new FrameData[frames_in_flight]{};
     }
 
     FrameData::FrameData() {
@@ -152,9 +158,7 @@ namespace engine {
 
     FrameData::~FrameData() {
         vkDestroyCommandPool(device, cmd_pool, nullptr);
-
         vkDestroyFence(device, render_fence, nullptr);
-
         vkDestroySemaphore(device, swapchain_semaphore, nullptr);
     }
 
@@ -254,8 +258,6 @@ namespace engine {
         transport_queue = vkb_device.get_queue(vkb::QueueType::transfer).value();
         transport_queue_family = vkb_device.get_queue_index(vkb::QueueType::transfer).value();
 
-        frames = new FrameData[2]{};
-
         transport::init();
         texture_pool::init(max_texture_count);
         imgui::init();
@@ -351,7 +353,6 @@ namespace engine {
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
 
             current_frame = 0;
-            swapchain_needs_rebuild = false;
             return true;
         }
 
@@ -401,11 +402,12 @@ namespace engine {
             glfwGetFramebufferSize(window, &width, &height);
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
 
-            current_frame = 0;
             return true;
         }
 
-        current_frame = (current_frame + 1) % 2;
+        current_frame = (current_frame + 1) % frames_in_flight;
+
+        return false;
     }
 
     DescriptorPool& get_frame_descriptor_pool() {
@@ -413,7 +415,7 @@ namespace engine {
     }
 
     uint32_t get_frames_in_flight() {
-        return 2;
+        return frames_in_flight;
     }
 
     uint32_t get_current_frame() {

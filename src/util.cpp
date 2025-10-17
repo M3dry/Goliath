@@ -1,4 +1,5 @@
 #include "goliath/util.hpp"
+#include <cassert>
 #include <fstream>
 
 uint8_t* engine::util::read_file(const char* path, uint32_t* size) {

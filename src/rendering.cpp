@@ -397,13 +397,17 @@ void engine::Pipeline2::bind() {
 
 void engine::Pipeline2::draw(const DrawParams& params) {
     auto cmd_buf = get_cmd_buf();
-    auto descriptor_pool = get_frame_descriptor_pool();
+    auto& descriptor_pool = get_frame_descriptor_pool();
 
-    vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size,
-                       params.push_constant);
+    if (_push_constant_size != 0) {
+        vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size,
+                           params.push_constant);
+    }
+
     for (uint32_t i = 0; i < 3; i++) {
         if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
 
+        printf("binding descritor[%u] to %lu\n", i, params.descriptor_indexes[i]);
         descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  _pipeline_layout, i);
     }
