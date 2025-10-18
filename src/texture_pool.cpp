@@ -91,11 +91,11 @@ namespace engine::texture_pool {
 
     std::pair<uint32_t, uint32_t> alloc(uint32_t count) {
         return {0,0};
-        assert(false && "TODO retard");
+        // assert(false && "TODO retard");
     }
 
     void free(std::pair<uint32_t, uint32_t> block) {
         return;
-        assert(false && "TODO retard");
+        // assert(false && "TODO retard");
     }
 }

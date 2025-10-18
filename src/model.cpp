@@ -393,31 +393,36 @@ namespace engine {
         }
 
         uint32_t stride = 0;
+        uint32_t stride_start = size;
         if (positions != nullptr) {
-            offset.position_offset = size;
-            size += sizeof(glm::vec3) * vertex_count;
+            offset.position_offset = stride_start;
+            stride_start += sizeof(glm::vec3);
+            stride += sizeof(glm::vec3);
         }
 
         if (normals != nullptr) {
-            offset.normal_offset = size;
-            size += sizeof(glm::vec4) * vertex_count;
+            offset.normal_offset = stride_start;
+            stride_start += sizeof(glm::vec3);
+            stride += sizeof(glm::vec3);
         }
 
         if (tangents != nullptr) {
-            offset.tangent_offset = size;
-            size += sizeof(glm::vec4) * vertex_count;
+            offset.tangent_offset = stride_start;
+            stride_start += sizeof(glm::vec4);
+            stride += sizeof(glm::vec4);
         }
 
         for (std::size_t i = 0; i < texcoords.size(); i++) {
             if (texcoords[i] != nullptr) {
-                offset.texcoords_offset[i] = sizeof(glm::vec2) * vertex_count;
-                size += sizeof(glm::vec2) * vertex_count;
+                offset.texcoords_offset[i] = stride_start;
+                stride_start += sizeof(glm::vec2);
+                stride += sizeof(glm::vec2);
             }
         }
 
         offset.stride = stride;
 
-        *total_size = size;
+        *total_size = size + stride * vertex_count;
         return offset;
     }
 
@@ -446,7 +451,7 @@ namespace engine {
         if (offset.normal_offset != (uint32_t)-1) {
             auto buf_ = buf + offset.normal_offset;
             for (std::size_t i = 0; i < vertex_count; i++) {
-                std::memcpy(buf_, &normals[i], sizeof(glm::vec2));
+                std::memcpy(buf_, &normals[i], sizeof(glm::vec3));
                 buf_ += offset.stride;
             }
         }
@@ -464,7 +469,7 @@ namespace engine {
 
             auto buf_ = buf + offset.texcoords_offset[t];
             for (std::size_t i = 0; i < vertex_count; i++) {
-                std::memcpy(buf_, &texcoords[t][i], sizeof(glm::vec4));
+                std::memcpy(buf_, &texcoords[t][i], sizeof(glm::vec2));
                 buf_ += offset.stride;
             }
         }
@@ -580,7 +585,7 @@ namespace engine::model {
             mesh_offsets.resize(model->mesh_count);
             for (std::size_t i = 0; i < model->mesh_count; i++) {
                 uint32_t size = 0;
-                mesh_offsets[i] = model->meshes[i].calc_offset(0, &size);
+                mesh_offsets[i] = model->meshes[i].calc_offset(total_size, &size);
                 total_size += size;
             }
 
@@ -590,7 +595,7 @@ namespace engine::model {
                 group.material_ids[i + mesh_indicies_offset] = mesh.material_id;
                 group.offsets[i + mesh_indicies_offset] = mesh_offsets[i];
                 group.mesh_transforms[i + mesh_indicies_offset] = model->mesh_transforms[i + mesh_indicies_offset];
-                group.mesh_vertex_counts[i + mesh_indicies_offset] = mesh.vertex_count;
+                group.mesh_vertex_counts[i + mesh_indicies_offset] = mesh.index_count;
             }
         }
 
@@ -604,6 +609,7 @@ namespace engine::model {
             for (std::size_t i = 0; i < model->mesh_count; i++) {
                 const auto& mesh = model->meshes[i];
                 uint32_t size = mesh.upload_data(data + current_start);
+
                 transport::upload(barrier, data + current_start, size, group.vertex_data.data(), current_start);
 
                 current_start += size;

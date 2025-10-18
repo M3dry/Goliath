@@ -70,7 +70,8 @@ int main(int argc, char** argv) {
                                           .depth_format(VK_FORMAT_D16_UNORM))
                         .depth_test(true)
                         .depth_write(true)
-                        .depth_compare_op(engine::CompareOp::Less);
+                        .depth_compare_op(engine::CompareOp::Less)
+                        .cull_mode(engine::CullMode::None);
 
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
@@ -80,16 +81,17 @@ int main(int argc, char** argv) {
     auto model_fragment_spv_data = engine::util::read_file("model_fragment.spv", &model_fragment_spv_size);
     auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
 
-    auto model_pipeline =
-        engine::Pipeline2(engine::PipelineBuilder{}
-                              .vertex(model_vertex_module)
-                              .fragment(model_fragment_module)
-                              .push_constant_size(sizeof(engine::model::GPUOffset) + 2 * sizeof(uint64_t) + 2*sizeof(glm::mat4))
-                              .add_color_attachment(engine::swapchain_format)
-                              .depth_format(VK_FORMAT_D16_UNORM))
-            .depth_test(true)
-            .depth_write(true)
-            .depth_compare_op(engine::CompareOp::Less);
+    auto model_pipeline = engine::Pipeline2(engine::PipelineBuilder{}
+                                                .vertex(model_vertex_module)
+                                                .fragment(model_fragment_module)
+                                                .push_constant_size(sizeof(engine::model::GPUOffset) +
+                                                                    2 * sizeof(uint64_t) + 2 * sizeof(glm::mat4))
+                                                .add_color_attachment(engine::swapchain_format)
+                                                .depth_format(VK_FORMAT_D16_UNORM))
+                              .depth_test(true)
+                              .depth_write(true)
+                              .depth_compare_op(engine::CompareOp::Less)
+                              .cull_mode(engine::CullMode::None);
 
     auto img = engine::Image::load8(argv[1], 4);
 
@@ -166,6 +168,25 @@ int main(int argc, char** argv) {
 
     double accum = 0;
     double last_time = glfwGetTime();
+
+    {
+        printf("total size: %lu\n", model_barrier.size);
+        printf("mesh count: %d\n", gpu_model.second - gpu_model.first);
+        auto offset = gpu_group.offsets[0];
+        printf("start: %u\n", offset.start);
+        printf("stride: %u\n", offset.stride);
+        printf("material: %u\n", offset.material_offset);
+        printf("indices: %u\n", offset.indices_offset);
+        printf("position: %u\n", offset.position_offset);
+        printf("normal: %u\n", offset.normal_offset);
+        printf("tangent: %u\n", offset.tangent_offset);
+        printf("texcoord0: %u\n", offset.texcoords_offset[0]);
+        printf("texcoord1: %u\n", offset.texcoords_offset[1]);
+        printf("texcoord2: %u\n", offset.texcoords_offset[2]);
+        printf("texcoord3: %u\n", offset.texcoords_offset[3]);
+
+        printf("index count: %d\n", gpu_group.mesh_vertex_counts[0]);
+    }
 
     bool done = false;
     uint64_t update_count = 0;
@@ -316,21 +337,23 @@ int main(int argc, char** argv) {
                 .vertex_count = 3,
             });
 
-            model_pipeline.bind();
             engine::model::draw(gpu_group, gpu_model,
                                 [&](uint32_t vertex_count, engine::material_id id,
-                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf) {
-                                    uint8_t push_constant[sizeof(engine::model::GPUOffset) + 2 * sizeof(uint64_t) + 2*sizeof(glm::mat4)]{};
+                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf)
+                                    { model_pipeline.bind(); uint8_t push_constant[sizeof(engine::model::GPUOffset) +
+                                    2 * sizeof(uint64_t) + 2*sizeof(glm::mat4)]{};
 
                                     auto addr = buf.address();
                                     std::memcpy(push_constant, &addr, 2 * sizeof(uint64_t));
 
-                                    std::memcpy(push_constant + sizeof(uint64_t), &transform, sizeof(glm::mat4));
+                                    std::memcpy(push_constant + 2*sizeof(uint64_t), &transform, sizeof(glm::mat4));
 
                                     auto vp = cam.view_projection();
-                                    std::memcpy(push_constant + sizeof(uint64_t) + sizeof(glm::mat4), &vp, sizeof(glm::mat4));
+                                    std::memcpy(push_constant + 2*sizeof(uint64_t) + sizeof(glm::mat4), &vp,
+                                    sizeof(glm::mat4));
 
-                                    std::memcpy(push_constant + sizeof(uint64_t) + 2*sizeof(glm::mat4), &offset, sizeof(engine::model::GPUOffset));
+                                    std::memcpy(push_constant + 2*sizeof(uint64_t) + 2*sizeof(glm::mat4), &offset,
+                                    sizeof(engine::model::GPUOffset));
 
                                     model_pipeline.draw(engine::Pipeline2::DrawParams{
                                         .push_constant = push_constant,
@@ -354,14 +377,18 @@ int main(int argc, char** argv) {
         }
     }
 
+    vkDeviceWaitIdle(engine::device);
+
     gpu_group.destroy();
     model.destroy();
-
-    vkDeviceWaitIdle(engine::device);
 
     pipeline.destroy();
     engine::destroy_shader(vertex_module);
     engine::destroy_shader(fragment_module);
+
+    model_pipeline.destroy();
+    engine::destroy_shader(model_vertex_module);
+    engine::destroy_shader(model_fragment_module);
 
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         engine::GPUImageView::destroy(depth_image_views[i]);

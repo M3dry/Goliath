@@ -37,7 +37,7 @@ namespace engine::model {
 }
 
 namespace engine {
-    using material_id = uint32_t;
+    using material_id = uint16_t;
 
     struct Mesh {
         material_id material_id = (material_id)-1;
