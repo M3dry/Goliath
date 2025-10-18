@@ -4,6 +4,7 @@
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/model.hpp"
+#include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
@@ -51,16 +52,21 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
     }
 }
 
+using ModelPushConstant =
+    engine::PushConstant<uint64_t, engine::push_constant::padding64, glm::mat4, glm::mat4, engine::model::GPUOffset>;
+
 int main(int argc, char** argv) {
     engine::init("Test window", 1000);
 
     uint32_t vertex_spv_size;
     auto vertex_spv_data = engine::util::read_file("vertex.spv", &vertex_spv_size);
     auto vertex_module = engine::create_shader({vertex_spv_data, vertex_spv_size});
+    free(vertex_spv_data);
 
     uint32_t fragment_spv_size;
     auto fragment_spv_data = engine::util::read_file("fragment.spv", &fragment_spv_size);
     auto fragment_module = engine::create_shader({fragment_spv_data, fragment_spv_size});
+    free(fragment_spv_data);
 
     auto pipeline = engine::Pipeline2(engine::PipelineBuilder{}
                                           .vertex(vertex_module)
@@ -76,16 +82,17 @@ int main(int argc, char** argv) {
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
     auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
+    free(model_vertex_spv_data);
 
     uint32_t model_fragment_spv_size;
     auto model_fragment_spv_data = engine::util::read_file("model_fragment.spv", &model_fragment_spv_size);
     auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
+    free(model_fragment_spv_data);
 
     auto model_pipeline = engine::Pipeline2(engine::PipelineBuilder{}
                                                 .vertex(model_vertex_module)
                                                 .fragment(model_fragment_module)
-                                                .push_constant_size(sizeof(engine::model::GPUOffset) +
-                                                                    2 * sizeof(uint64_t) + 2 * sizeof(glm::mat4))
+                                                .push_constant_size(ModelPushConstant::size)
                                                 .add_color_attachment(engine::swapchain_format)
                                                 .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
@@ -120,6 +127,8 @@ int main(int argc, char** argv) {
         printf("err: %d", err);
         return 0;
     }
+    free(model_glb_data);
+
     VkBufferMemoryBarrier2 model_barrier{};
     model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
     model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
@@ -168,25 +177,6 @@ int main(int argc, char** argv) {
 
     double accum = 0;
     double last_time = glfwGetTime();
-
-    {
-        printf("total size: %lu\n", model_barrier.size);
-        printf("mesh count: %d\n", gpu_model.second - gpu_model.first);
-        auto offset = gpu_group.offsets[0];
-        printf("start: %u\n", offset.start);
-        printf("stride: %u\n", offset.stride);
-        printf("material: %u\n", offset.material_offset);
-        printf("indices: %u\n", offset.indices_offset);
-        printf("position: %u\n", offset.position_offset);
-        printf("normal: %u\n", offset.normal_offset);
-        printf("tangent: %u\n", offset.tangent_offset);
-        printf("texcoord0: %u\n", offset.texcoords_offset[0]);
-        printf("texcoord1: %u\n", offset.texcoords_offset[1]);
-        printf("texcoord2: %u\n", offset.texcoords_offset[2]);
-        printf("texcoord3: %u\n", offset.texcoords_offset[3]);
-
-        printf("index count: %d\n", gpu_group.mesh_vertex_counts[0]);
-    }
 
     bool done = false;
     uint64_t update_count = 0;
@@ -301,20 +291,12 @@ int main(int argc, char** argv) {
             barrier_applied = false;
         }
 
-        engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
-            engine::RenderingAttachement{}
-                .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                .set_load_op(engine::LoadOp::Clear)
-                .set_store_op(engine::StoreOp::Store)));
-        engine::imgui::render();
-        engine::rendering::end();
-
         engine::rendering::begin(engine::RenderPass{}
                                      .add_color_attachment(engine::RenderingAttachement{}
                                                                .set_image(engine::get_swapchain_view(),
                                                                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                                                               .set_load_op(engine::LoadOp::Load)
+                                                               .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
+                                                               .set_load_op(engine::LoadOp::Clear)
                                                                .set_store_op(engine::StoreOp::Store))
                                      .depth_attachment(engine::RenderingAttachement{}
                                                            .set_image(depth_image_views[engine::get_current_frame()],
@@ -331,29 +313,20 @@ int main(int argc, char** argv) {
             auto cam_mat = cam.view_projection();
             std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
 
-            pipeline.bind();
-            pipeline.draw(engine::Pipeline2::DrawParams{
-                .push_constant = push_constant,
-                .vertex_count = 3,
-            });
+            // pipeline.bind();
+            // pipeline.draw(engine::Pipeline2::DrawParams{
+            //     .push_constant = push_constant,
+            //     .vertex_count = 3,
+            // });
 
             engine::model::draw(gpu_group, gpu_model,
                                 [&](uint32_t vertex_count, engine::material_id id,
-                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf)
-                                    { model_pipeline.bind(); uint8_t push_constant[sizeof(engine::model::GPUOffset) +
-                                    2 * sizeof(uint64_t) + 2*sizeof(glm::mat4)]{};
+                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf) {
+                                    model_pipeline.bind();
 
-                                    auto addr = buf.address();
-                                    std::memcpy(push_constant, &addr, 2 * sizeof(uint64_t));
-
-                                    std::memcpy(push_constant + 2*sizeof(uint64_t), &transform, sizeof(glm::mat4));
-
-                                    auto vp = cam.view_projection();
-                                    std::memcpy(push_constant + 2*sizeof(uint64_t) + sizeof(glm::mat4), &vp,
-                                    sizeof(glm::mat4));
-
-                                    std::memcpy(push_constant + 2*sizeof(uint64_t) + 2*sizeof(glm::mat4), &offset,
-                                    sizeof(engine::model::GPUOffset));
+                                    uint8_t push_constant[ModelPushConstant::size]{};
+                                    ModelPushConstant::write(push_constant, buf.address(), transform,
+                                                             cam.view_projection(), offset);
 
                                     model_pipeline.draw(engine::Pipeline2::DrawParams{
                                         .push_constant = push_constant,
@@ -361,6 +334,14 @@ int main(int argc, char** argv) {
                                     });
                                 });
         }
+        engine::rendering::end();
+
+        engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
+            engine::RenderingAttachement{}
+                .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                .set_load_op(engine::LoadOp::Load)
+                .set_store_op(engine::StoreOp::Store)));
+        engine::imgui::render();
         engine::rendering::end();
 
     end_of_frame:

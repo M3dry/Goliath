@@ -223,7 +223,7 @@ engine::Model::Err parse_node(const tinygltf::Model& model, int node_id, std::ve
               glm::scale(glm::identity<glm::mat4>(), scale);
     }
 
-    mat = mat * current_transform;
+    mat = current_transform * mat;
 
     if (node.mesh == -1) goto mesh_loaded;
 
