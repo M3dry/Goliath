@@ -172,6 +172,7 @@ int main(int argc, char** argv) {
 
     bool lock_cam = false;
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+    engine::imgui::enable(false);
 
     float sensitivity = 1.0f;
 

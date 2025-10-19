@@ -72,6 +72,11 @@ namespace engine::imgui {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        if (!state) {
+            auto& io = ImGui::GetIO();
+            io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        }
     }
 
     void end() {
