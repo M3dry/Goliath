@@ -335,6 +335,16 @@ namespace engine {
             uint32_t first_instance_id = 0;
         };
 
+        struct DrawIndirectParams {
+            void* push_constant = nullptr;
+            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set};
+            VkBuffer draw_buffer;
+            uint32_t start_offset = 0;
+            uint32_t draw_count = 0;
+            uint32_t stride = sizeof(VkDrawIndirectCommand);
+        };
+
         VkPipelineLayout _pipeline_layout;
         VkPipeline _pipeline;
         const uint32_t _push_constant_size;
@@ -367,6 +377,7 @@ namespace engine {
 
         void bind();
         void draw(const DrawParams& params);
+        void draw_indirect(const DrawIndirectParams& params);
         void destroy();
 
         Pipeline&& topology(Topology top) {

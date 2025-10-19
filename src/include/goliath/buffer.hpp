@@ -13,7 +13,7 @@ namespace engine {
             return _buf;
         }
 
-        VkDeviceSize address() const {
+        VkDeviceAddress address() const {
             return _address;
         }
 

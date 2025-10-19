@@ -6,19 +6,20 @@ layout(buffer_reference, std430) readonly buffer VertexData {
     uint data[];
 };
 
+struct DrawCommand {
+    // vert count, instance count, first vert, first instance
+    uint data[5];
+};
+
+layout(buffer_reference, std430) readonly buffer DrawCommands {
+    DrawCommand data[];
+};
+
 layout(push_constant, std430) uniform Push {
     VertexData verts;
-    mat4 m;
+    DrawCommands draws;
     mat4 vp;
-
-    // start, stride, material offset, indicies offset
-    uvec4 off1;
-
-    // position offset, normal offset, tangent offset, texcoordd0 offset
-    uvec4 off2;
-
-    // texcoord 1..2 offsets
-    uvec3 off3;
+    mat4 m;
 };
 
 layout(set = 3, binding = 0) uniform sampler2D textures[];

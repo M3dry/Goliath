@@ -209,11 +209,17 @@ namespace engine {
         features12.descriptorBindingSampledImageUpdateAfterBind = true;
         features12.runtimeDescriptorArray = true;
         features12.timelineSemaphore = true;
+        VkPhysicalDeviceVulkan11Features features11{};
+        features11.shaderDrawParameters = true;
+        VkPhysicalDeviceFeatures features{};
+        features.multiDrawIndirect = true;
 
         auto physical_device_selected = vkb::PhysicalDeviceSelector{vkb_inst}
                                             .set_minimum_version(1, 3)
                                             .set_required_features_13(features13)
                                             .set_required_features_12(features12)
+                                            .set_required_features_11(features11)
+                                            .set_required_features(features)
                                             .set_surface(surface)
                                             .add_required_extensions({"VK_EXT_shader_object"})
                                             .select();

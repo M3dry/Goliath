@@ -223,6 +223,27 @@ void engine::Pipeline::draw(const DrawParams& params) {
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
 }
 
+void engine::Pipeline::draw_indirect(const DrawIndirectParams& params) {
+    auto cmd_buf = get_cmd_buf();
+    auto& descriptor_pool = get_frame_descriptor_pool();
+
+    if (_push_constant_size != 0) {
+        vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size,
+                           params.push_constant);
+    }
+
+    for (uint32_t i = 0; i < 3; i++) {
+        if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+
+        printf("binding descritor[%u] to %lu\n", i, params.descriptor_indexes[i]);
+        descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 _pipeline_layout, i);
+    }
+    texture_pool::bind(VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout);
+
+    vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);
+}
+
 void engine::Pipeline::destroy() {
     vkDestroyPipeline(device, _pipeline, nullptr);
     vkDestroyPipelineLayout(device, _pipeline_layout, nullptr);

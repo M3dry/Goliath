@@ -14,8 +14,10 @@
 #include "imgui/imgui.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
+#include <cstring>
 #include <vulkan/vulkan_core.h>
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
@@ -52,32 +54,10 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
     }
 }
 
-using ModelPushConstant =
-    engine::PushConstant<uint64_t, engine::push_constant::padding64, glm::mat4, glm::mat4, engine::model::GPUOffset>;
+using ModelPushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 
 int main(int argc, char** argv) {
     engine::init("Test window", 1000);
-
-    uint32_t vertex_spv_size;
-    auto vertex_spv_data = engine::util::read_file("vertex.spv", &vertex_spv_size);
-    auto vertex_module = engine::create_shader({vertex_spv_data, vertex_spv_size});
-    free(vertex_spv_data);
-
-    uint32_t fragment_spv_size;
-    auto fragment_spv_data = engine::util::read_file("fragment.spv", &fragment_spv_size);
-    auto fragment_module = engine::create_shader({fragment_spv_data, fragment_spv_size});
-    free(fragment_spv_data);
-
-    auto pipeline = engine::Pipeline(engine::PipelineBuilder{}
-                                          .vertex(vertex_module)
-                                          .fragment(fragment_module)
-                                          .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
-                                          .add_color_attachment(engine::swapchain_format)
-                                          .depth_format(VK_FORMAT_D16_UNORM))
-                        .depth_test(true)
-                        .depth_write(true)
-                        .depth_compare_op(engine::CompareOp::Less)
-                        .cull_mode(engine::CullMode::None);
 
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
@@ -90,11 +70,11 @@ int main(int argc, char** argv) {
     free(model_fragment_spv_data);
 
     auto model_pipeline = engine::Pipeline(engine::PipelineBuilder{}
-                                                .vertex(model_vertex_module)
-                                                .fragment(model_fragment_module)
-                                                .push_constant_size(ModelPushConstant::size)
-                                                .add_color_attachment(engine::swapchain_format)
-                                                .depth_format(VK_FORMAT_D16_UNORM))
+                                               .vertex(model_vertex_module)
+                                               .fragment(model_fragment_module)
+                                               .push_constant_size(ModelPushConstant::size)
+                                               .add_color_attachment(engine::swapchain_format)
+                                               .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
@@ -135,7 +115,7 @@ int main(int argc, char** argv) {
 
     engine::transport::begin();
     engine::model::begin_gpu_upload();
-    auto gpu_model = engine::model::upload(&model);
+    auto [gpu_model, model_draw_buffer] = engine::model::upload(&model);
     auto gpu_group = engine::model::end_gpu_upload(&model_barrier);
 
     auto [gpu_img, img_barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -306,34 +286,18 @@ int main(int argc, char** argv) {
                                                            .set_load_op(engine::LoadOp::Clear)
                                                            .set_store_op(engine::StoreOp::Store)));
         if (engine::transport::timeline_value() >= img_timeline) {
-            uint8_t push_constant[sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4)];
-            auto addr = vertices_buffer.address();
+            model_pipeline.bind();
+            uint8_t model_push_constant[ModelPushConstant::size]{};
+            ModelPushConstant::write(model_push_constant, gpu_group.vertex_data.address(), model_draw_buffer.address(),
+                                     cam.view_projection(), glm::identity<glm::mat4>());
 
-            std::memcpy(push_constant, &addr, sizeof(uint64_t));
-            std::memcpy(push_constant + sizeof(glm::vec4), &color, sizeof(glm::vec4));
-            auto cam_mat = cam.view_projection();
-            std::memcpy(push_constant + 2 * sizeof(glm::vec4), &cam_mat, sizeof(glm::mat4));
-
-            // pipeline.bind();
-            // pipeline.draw(engine::Pipeline2::DrawParams{
-            //     .push_constant = push_constant,
-            //     .vertex_count = 3,
-            // });
-
-            engine::model::draw(gpu_group, gpu_model,
-                                [&](uint32_t vertex_count, engine::material_id id,
-                                    const engine::model::GPUOffset& offset, glm::mat4 transform, engine::Buffer buf) {
-                                    model_pipeline.bind();
-
-                                    uint8_t push_constant[ModelPushConstant::size]{};
-                                    ModelPushConstant::write(push_constant, buf.address(), transform,
-                                                             cam.view_projection(), offset);
-
-                                    model_pipeline.draw(engine::Pipeline::DrawParams{
-                                        .push_constant = push_constant,
-                                        .vertex_count = vertex_count,
-                                    });
-                                });
+            auto full_draw_count = gpu_model.second - gpu_model.first;
+            model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                .push_constant = model_push_constant,
+                .draw_buffer = model_draw_buffer.data(),
+                .draw_count = full_draw_count,
+                .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
+            });
         }
         engine::rendering::end();
 
@@ -354,19 +318,16 @@ int main(int argc, char** argv) {
             update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
             depth_barriers_applied = false;
 
-            pipeline.update_viewport_to_swapchain();
-            pipeline.update_scissor_to_viewport();
+            model_pipeline.update_viewport_to_swapchain();
+            model_pipeline.update_scissor_to_viewport();
         }
     }
 
     vkDeviceWaitIdle(engine::device);
 
+    model_draw_buffer.destroy();
     gpu_group.destroy();
     model.destroy();
-
-    pipeline.destroy();
-    engine::destroy_shader(vertex_module);
-    engine::destroy_shader(fragment_module);
 
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);

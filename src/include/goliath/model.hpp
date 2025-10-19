@@ -2,6 +2,7 @@
 
 #include "goliath/buffer.hpp"
 #include "goliath/collisions.hpp"
+#include "goliath/engine.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/texture_pool.hpp"
 #include <cstdint>
@@ -145,12 +146,8 @@ namespace engine {
     using GPUModel = std::pair<uint32_t, uint32_t>;
 
     struct GPUGroup {
+        uint32_t indexed_mesh_count;
         uint32_t mesh_count;
-        material_id* material_ids;
-        model::GPUOffset* offsets;
-        glm::mat4* mesh_transforms;
-        uint32_t* mesh_vertex_counts;
-
         Buffer vertex_data;
         std::pair<uint32_t, uint32_t> texture_block;
 
@@ -167,14 +164,15 @@ namespace engine::model {
     template <typename F> inline void draw(GPUGroup group, GPUModel model, F&& draw_fun) {
         auto cmd_buf = get_cmd_buf();
 
+        // vkCmdDrawIndirect(cmd_buf, group)
         for (std::size_t i = model.first; i < model.second; i++) {
-            draw_fun(group.mesh_vertex_counts[i], group.material_ids[i], group.offsets[i], group.mesh_transforms[i],
-                     group.vertex_data);
+            // draw_fun(group.mesh_vertex_counts[i], group.material_ids[i], group.offsets[i], group.mesh_transforms[i],
+            //          group.vertex_data);
         }
     }
 
     void begin_gpu_upload();
     // the pointer to `model` must be valid until `end_gpu_upload` is called
-    GPUModel upload(const Model* model);
+    std::pair<GPUModel, Buffer> upload(const Model* model);
     GPUGroup end_gpu_upload(VkBufferMemoryBarrier2* barrier);
 }
