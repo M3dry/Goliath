@@ -114,6 +114,7 @@ engine::Pipeline::Pipeline(const engine::PipelineBuilder& builder) : _push_const
         VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
         VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
         VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+        VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,
         VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
         VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
         VK_DYNAMIC_STATE_STENCIL_OP,
@@ -188,9 +189,14 @@ void engine::Pipeline::bind() {
     }
 
     vkCmdSetDepthTestEnable(cmd_buf, _depth_test);
-    vkCmdSetDepthWriteEnable(cmd_buf, _depth_write);
     if (_depth_test) {
         vkCmdSetDepthCompareOp(cmd_buf, static_cast<VkCompareOp>(_depth_compare_op));
+    }
+    vkCmdSetDepthWriteEnable(cmd_buf, _depth_write);
+
+    vkCmdSetDepthBiasEnableEXT(cmd_buf, _depth_bias.has_value());
+    if (_depth_bias) {
+        vkCmdSetDepthBias2EXT(cmd_buf, &*_depth_bias);
     }
 
     vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);

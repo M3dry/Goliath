@@ -7,7 +7,6 @@
 #include <cstring>
 #include <optional>
 #include <span>
-#include <variant>
 #include <vector>
 #include <volk.h>
 
@@ -362,6 +361,7 @@ namespace engine {
         bool _depth_test = false;
         bool _depth_write = false;
         CompareOp _depth_compare_op;
+        std::optional<VkDepthBiasInfoEXT> _depth_bias;
 
         Pipeline(const PipelineBuilder& builder);
 
@@ -462,7 +462,16 @@ namespace engine {
             _depth_compare_op = op;
             return std::move(*this);
         }
-        // std::optional<VkDepthBiasInfoEXT > _depth_bias;
+
+        Pipeline&& depth_bias(VkDepthBiasInfoEXT bias) {
+            _depth_bias = bias;
+            return std::move(*this);
+        }
+
+        Pipeline&& disable_depth_bias() {
+            _depth_bias = std::nullopt;
+            return std::move(*this);
+        }
     };
 }
 

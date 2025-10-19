@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     auto fragment_module = engine::create_shader({fragment_spv_data, fragment_spv_size});
     free(fragment_spv_data);
 
-    auto pipeline = engine::Pipeline2(engine::PipelineBuilder{}
+    auto pipeline = engine::Pipeline(engine::PipelineBuilder{}
                                           .vertex(vertex_module)
                                           .fragment(fragment_module)
                                           .push_constant_size(sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::mat4))
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
     free(model_fragment_spv_data);
 
-    auto model_pipeline = engine::Pipeline2(engine::PipelineBuilder{}
+    auto model_pipeline = engine::Pipeline(engine::PipelineBuilder{}
                                                 .vertex(model_vertex_module)
                                                 .fragment(model_fragment_module)
                                                 .push_constant_size(ModelPushConstant::size)
@@ -329,7 +329,7 @@ int main(int argc, char** argv) {
                                     ModelPushConstant::write(push_constant, buf.address(), transform,
                                                              cam.view_projection(), offset);
 
-                                    model_pipeline.draw(engine::Pipeline2::DrawParams{
+                                    model_pipeline.draw(engine::Pipeline::DrawParams{
                                         .push_constant = push_constant,
                                         .vertex_count = vertex_count,
                                     });
