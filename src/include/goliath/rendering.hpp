@@ -159,36 +159,6 @@ namespace engine {
         }
     };
 
-    struct Shader {
-        using Source = std::variant<const char*, std::span<uint8_t>>;
-
-        VkShaderStageFlagBits _stage;
-        VkShaderStageFlagBits _next_stage = (VkShaderStageFlagBits)0;
-        const char* _main = "main";
-
-        Shader() {};
-
-        Shader&& stage(VkShaderStageFlagBits val) {
-            _stage = val;
-            return std::move(*this);
-        }
-
-        Shader&& next_stage(VkShaderStageFlagBits val) {
-            _next_stage = val;
-            return std::move(*this);
-        }
-
-        Shader&& main(const char* name) {
-            _main = name;
-            return std::move(*this);
-        }
-
-        VkShaderEXT create(Source source, uint32_t push_constant_size,
-                           std::span<VkDescriptorSetLayout> set_layouts = {(VkDescriptorSetLayout*)nullptr, 0});
-    };
-
-    void destroy_shader(VkShaderEXT shader);
-
     VkShaderModule create_shader(std::span<uint8_t> code);
     void destroy_shader(VkShaderModule shader);
 
@@ -232,149 +202,6 @@ namespace engine {
     enum struct FrontFace {
         CW = VK_FRONT_FACE_CLOCKWISE,
         CCW = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-    };
-
-    struct Pipeline {
-        struct DrawParams {
-            void* push_constant = nullptr;
-            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
-                                                          descriptor::null_set};
-            uint32_t vertex_count;
-            uint32_t instance_count = 1;
-            uint32_t first_vertex_id = 0;
-            uint32_t first_instance_id = 0;
-        };
-
-        VkShaderEXT _vertex;
-        VkShaderEXT _fragment;
-
-        VkDescriptorSetLayout _set_layout[4];
-        uint32_t _push_constant_size;
-
-        bool _depth_test;
-        bool _depth_write;
-        std::optional<VkDepthBiasInfoEXT> _depth_bias;
-        VkCompareOp _depth_cmp_op;
-        bool _stencil_test;
-        CullMode _cull_mode;
-        FillMode _fill_mode;
-        SampleCount _sample_count;
-        Topology _topology;
-        FrontFace _front_face;
-        VkViewport _viewport;
-        VkRect2D _scissor;
-        VkColorComponentFlags _color_components = 0;
-
-        VkPipelineLayout _pipeline_layout;
-
-        Pipeline();
-
-        Pipeline&& vertex(VkShaderEXT vert) {
-            _vertex = vert;
-            return std::move(*this);
-        }
-
-        Pipeline&& fragment(VkShaderEXT frag) {
-            _fragment = frag;
-            return std::move(*this);
-        }
-
-        Pipeline&& vertex(Shader vert, Shader::Source vert_source);
-        Pipeline&& fragment(Shader frag, Shader::Source frag_source);
-
-        Pipeline&& descriptor(uint32_t index, VkDescriptorSetLayout descriptor_layout) {
-            _set_layout[index] = descriptor_layout;
-            return std::move(*this);
-        }
-
-        Pipeline&& clear_descriptor(uint32_t index);
-
-        Pipeline&& push_constant_size(uint32_t size) {
-            _push_constant_size = size;
-            return std::move(*this);
-        }
-
-        Pipeline&& depth_test(bool enable) {
-            _depth_test = enable;
-            return std::move(*this);
-        }
-
-        Pipeline&& depth_write(bool enable) {
-            _depth_write = enable;
-            return std::move(*this);
-        }
-
-        Pipeline&& depth_bias(float clamp, float const_factor, float slope_factor) {
-            _depth_bias.emplace(VkDepthBiasInfoEXT{
-                .sType = VK_STRUCTURE_TYPE_DEPTH_BIAS_INFO_EXT,
-                .pNext = nullptr,
-                .depthBiasConstantFactor = const_factor,
-                .depthBiasClamp = clamp,
-                .depthBiasSlopeFactor = slope_factor,
-            });
-            return std::move(*this);
-        }
-
-        Pipeline&& clear_depth_bias() {
-            _depth_bias = std::nullopt;
-            return std::move(*this);
-        }
-
-        Pipeline&& depth_cmp_op(CompareOp op) {
-            _depth_cmp_op = static_cast<VkCompareOp>(op);
-            return std::move(*this);
-        }
-
-        Pipeline&& stencil_test(bool enable) {
-            _stencil_test = enable;
-            return std::move(*this);
-        }
-
-        Pipeline&& cull_mode(CullMode mode) {
-            _cull_mode = mode;
-            return std::move(*this);
-        }
-
-        Pipeline&& fill_mode(FillMode mode) {
-            _fill_mode = mode;
-            return std::move(*this);
-        }
-
-        Pipeline&& sample_count(SampleCount count) {
-            _sample_count = count;
-            return std::move(*this);
-        }
-
-        Pipeline&& topology(Topology top) {
-            _topology = top;
-            return std::move(*this);
-        }
-
-        Pipeline&& front_face(FrontFace face) {
-            _front_face = face;
-            return std::move(*this);
-        }
-
-        Pipeline&& viewport(VkViewport view) {
-            _viewport = view;
-            return std::move(*this);
-        }
-
-        Pipeline&& scissor(VkRect2D rect) {
-            _scissor = rect;
-            return std::move(*this);
-        }
-
-        Pipeline&& color_components(VkColorComponentFlags components) {
-            _color_components = components;
-            return std::move(*this);
-        }
-
-        Pipeline&& update_layout();
-
-        void destroy(std::array<bool, 3> sets_to_destroy);
-
-        void draw(const DrawParams& params);
     };
 
     struct BlendState {
@@ -498,7 +325,7 @@ namespace engine {
         }
     };
 
-    struct Pipeline2 {
+    struct Pipeline {
         struct DrawParams {
             void* push_constant = nullptr;
             std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
@@ -536,23 +363,23 @@ namespace engine {
         bool _depth_write = false;
         CompareOp _depth_compare_op;
 
-        Pipeline2(const PipelineBuilder& builder);
+        Pipeline(const PipelineBuilder& builder);
 
         void bind();
         void draw(const DrawParams& params);
         void destroy();
 
-        Pipeline2&& topology(Topology top) {
+        Pipeline&& topology(Topology top) {
             _topology = top;
             return std::move(*this);
         }
 
-        Pipeline2&& primitive_restart(bool enable) {
+        Pipeline&& primitive_restart(bool enable) {
             _primitive_restart_enable = enable;
             return std::move(*this);
         }
 
-        Pipeline2&& update_viewport_to_swapchain() {
+        Pipeline&& update_viewport_to_swapchain() {
             _viewport = VkViewport{
                 .x = 0,
                 .y = 0,
@@ -564,7 +391,7 @@ namespace engine {
             return std::move(*this);
         }
 
-        Pipeline2&& update_scissor_to_viewport() {
+        Pipeline&& update_scissor_to_viewport() {
             _scissor = VkRect2D{
                 .offset =
                     VkOffset2D{
@@ -580,58 +407,58 @@ namespace engine {
             return std::move(*this);
         }
 
-        Pipeline2&& cull_mode(CullMode mode) {
+        Pipeline&& cull_mode(CullMode mode) {
             _cull_mode = mode;
             return std::move(*this);
         }
 
-        Pipeline2&& front_face(FrontFace face) {
+        Pipeline&& front_face(FrontFace face) {
             _front_face = face;
             return std::move(*this);
         }
 
-        Pipeline2&& line_width(float width) {
+        Pipeline&& line_width(float width) {
             _line_width = width;
             return std::move(*this);
         }
 
-        Pipeline2&& stencil_test(bool enable) {
+        Pipeline&& stencil_test(bool enable) {
             _stencil_test = enable;
             return std::move(*this);
         }
 
-        Pipeline2&& stencil_face(VkStencilFaceFlags flags) {
+        Pipeline&& stencil_face(VkStencilFaceFlags flags) {
             _stencil_face_flag = flags;
             return std::move(*this);
         }
 
-        Pipeline2&& stencil_op(VkStencilOp fail, VkStencilOp pass) {
+        Pipeline&& stencil_op(VkStencilOp fail, VkStencilOp pass) {
             _stencil_fail_op = fail;
             _stencil_pass_op = pass;
             return std::move(*this);
         }
 
-        Pipeline2&& stencil_compare_mask(uint32_t mask) {
+        Pipeline&& stencil_compare_mask(uint32_t mask) {
             _stencil_compare_mask = mask;
             return std::move(*this);
         }
 
-        Pipeline2&& stencil_write_mask(uint32_t mask) {
+        Pipeline&& stencil_write_mask(uint32_t mask) {
             _stencil_write_mask = mask;
             return std::move(*this);
         }
 
-        Pipeline2&& depth_test(bool enable) {
+        Pipeline&& depth_test(bool enable) {
             _depth_test = enable;
             return std::move(*this);
         }
 
-        Pipeline2&& depth_write(bool enable) {
+        Pipeline&& depth_write(bool enable) {
             _depth_write = enable;
             return std::move(*this);
         }
 
-        Pipeline2&& depth_compare_op(CompareOp op) {
+        Pipeline&& depth_compare_op(CompareOp op) {
             _depth_compare_op = op;
             return std::move(*this);
         }
