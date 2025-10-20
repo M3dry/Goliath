@@ -42,6 +42,7 @@
               xorg.libX11
               xorg.libXrandr
               wayland
+              gtk3
             ]
             ++ [
               llvm.clang-tools

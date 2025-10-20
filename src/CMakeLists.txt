@@ -7,6 +7,8 @@ set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
 set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(./tinygltf)
 
+add_subdirectory(./nativefiledialog-extended)
+
 set(IMGUI_SOURCES
     imgui/imgui.cpp
     imgui/imgui_draw.cpp
@@ -51,7 +53,7 @@ target_include_directories(engine
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui"
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends"
     )
-target_link_libraries(engine PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw)
+target_link_libraries(engine PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd)
 target_compile_definitions(engine PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
 
 add_executable(engine_demo engine_demo.cpp)
