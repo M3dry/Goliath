@@ -17,6 +17,10 @@ set(IMGUI_SOURCES
     imgui/backends/imgui_impl_vulkan.cpp
 )
 
+set(MIKKTSPACE_SOURCES
+    MikkTSpace/mikktspace.c
+)
+
 SET(ENGINE_SOURCES
     engine.cpp
     imgui.cpp
@@ -33,6 +37,7 @@ SET(ENGINE_SOURCES
     util.cpp
 
     ${IMGUI_SOURCES}
+    ${MIKKTSPACE_SOURCES}
 )
 
 add_library(engine ${ENGINE_SOURCES})
@@ -44,7 +49,8 @@ target_include_directories(engine
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui"
-        "${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends")
+        "${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends"
+    )
 target_link_libraries(engine PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw)
 target_compile_definitions(engine PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
 

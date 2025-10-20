@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
 
     uint32_t model_glb_size;
-    auto model_glb_data = engine::util::read_file(argv[2], &model_glb_size);
+    auto model_glb_data = engine::util::read_file(argv[1], &model_glb_size);
     assert(model_glb_data != nullptr);
 
     engine::Model model;

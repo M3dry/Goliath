@@ -23,6 +23,7 @@ namespace engine::model {
         uint32_t normal_offset = (uint32_t)-1;
         uint32_t tangent_offset = (uint32_t)-1;
         std::array<uint32_t, 4> texcoords_offset = {(uint32_t)-1, (uint32_t)-1, (uint32_t)-1, (uint32_t)-1};
+        uint32_t indexed_tangents = false;
     };
 
     struct Material_PBR {

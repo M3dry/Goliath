@@ -7,3 +7,6 @@
 [submodule "src/tinygltf"]
 	path = src/tinygltf
 	url = https://github.com/syoyo/tinygltf.git
+[submodule "src/MikkTSpace"]
+	path = src/MikkTSpace
+	url = https://github.com/mmikk/MikkTSpace.git

@@ -46,6 +46,7 @@ struct Offsets {
     uint texcoord1_offset;
     uint texcoord2_offset;
     uint texcoord3_offset;
+    bool indexed_tangents;
 };
 
 Offsets read_mesh_offsets(uint start_offset) {
@@ -62,6 +63,7 @@ Offsets read_mesh_offsets(uint start_offset) {
     offsets.texcoord1_offset = verts.data[start_offset + 8];
     offsets.texcoord2_offset = verts.data[start_offset + 9];
     offsets.texcoord3_offset = verts.data[start_offset + 10];
+    offsets.indexed_tangents = verts.data[start_offset + 11] != 0;
 
     return offsets;
 }
@@ -77,24 +79,24 @@ struct MeshData {
 
 MeshData read_mesh_data() {
     uint mesh_ix = get_mesh_ix();
-    uint start_offset = mesh_ix * 35;
+    uint start_offset = mesh_ix * 36;
 
     MeshData data;
     data.offsets = read_mesh_offsets(start_offset);
-    data.material_id = verts.data[start_offset + 11];
-    data.vertex_count = verts.data[start_offset + 12];
+    data.material_id = verts.data[start_offset + 12];
+    data.vertex_count = verts.data[start_offset + 13];
 
     for (uint i = 0; i < 16; i++) {
-        data.transform[i/4][i%4] = uintBitsToFloat(verts.data[start_offset + 13 + i]);
+        data.transform[i/4][i%4] = uintBitsToFloat(verts.data[start_offset + 14 + i]);
     }
 
-    data.min.x = uintBitsToFloat(verts.data[start_offset + 13 + 16]);
-    data.min.y = uintBitsToFloat(verts.data[start_offset + 13 + 16 + 1]);
-    data.min.z = uintBitsToFloat(verts.data[start_offset + 13 + 16 + 2]);
+    data.min.x = uintBitsToFloat(verts.data[start_offset + 14 + 16]);
+    data.min.y = uintBitsToFloat(verts.data[start_offset + 14 + 16 + 1]);
+    data.min.z = uintBitsToFloat(verts.data[start_offset + 14 + 16 + 2]);
 
-    data.max.x = uintBitsToFloat(verts.data[start_offset + 13 + 16 + 3]);
-    data.max.y = uintBitsToFloat(verts.data[start_offset + 13 + 16 + 4]);
-    data.max.z = uintBitsToFloat(verts.data[start_offset + 13 + 16 + 5]);
+    data.max.x = uintBitsToFloat(verts.data[start_offset + 14 + 16 + 3]);
+    data.max.y = uintBitsToFloat(verts.data[start_offset + 14 + 16 + 4]);
+    data.max.z = uintBitsToFloat(verts.data[start_offset + 14 + 16 + 5]);
 
     return data;
 }
@@ -133,10 +135,17 @@ Vertex load_vertex(Offsets offs) {
     }
 
     if (offs.tangent_offset != uint(-1)) {
-        vert.tangent.x = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride]);
-        vert.tangent.y = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 1]);
-        vert.tangent.z = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 2]);
-        vert.tangent.w = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 3]);
+        if (offs.indexed_tangents) {
+            vert.tangent.x = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride]);
+            vert.tangent.y = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 1]);
+            vert.tangent.z = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 2]);
+            vert.tangent.w = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 3]);
+        } else {
+            vert.tangent.x = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4]);
+            vert.tangent.y = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 1]);
+            vert.tangent.z = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 2]);
+            vert.tangent.w = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 3]);
+        }
     }
 
     if (offs.texcoord0_offset != uint(-1)) {

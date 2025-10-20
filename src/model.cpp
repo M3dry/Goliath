@@ -1,8 +1,8 @@
 #include "goliath/model.hpp"
 #include "goliath/buffer.hpp"
-#include "goliath/engine.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/transport.hpp"
+
 #include <format>
 #include <utility>
 #include <volk.h>
@@ -381,6 +381,7 @@ namespace engine {
         model::GPUOffset offset{
             .start = start_offset,
             .material_offset = 0,
+            .indexed_tangents = indexed_tangents,
         };
 
         if (indices != nullptr) {
