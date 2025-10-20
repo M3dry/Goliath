@@ -197,6 +197,7 @@ engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& mod
         .max = glm::make_vec3(accessor.maxValues.data()),
     };
 
+    out->bounding_box = aabb;
     model_aabb.extend(aabb);
 
     return engine::Model::Ok;
@@ -406,7 +407,7 @@ namespace engine {
             stride += sizeof(glm::vec3);
         }
 
-        if (tangents != nullptr) {
+        if (indexed_tangents && tangents != nullptr) {
             offset.tangent_offset = stride_start;
             stride_start += sizeof(glm::vec4);
             stride += sizeof(glm::vec4);
@@ -456,7 +457,7 @@ namespace engine {
             }
         }
 
-        if (offset.tangent_offset != (uint32_t)-1) {
+        if (indexed_tangents && offset.tangent_offset != (uint32_t)-1) {
             auto buf_ = buf + offset.tangent_offset;
             for (std::size_t i = 0; i < vertex_count; i++) {
                 std::memcpy(buf_, &tangents[i], sizeof(glm::vec4));

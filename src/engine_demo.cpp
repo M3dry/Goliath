@@ -8,7 +8,6 @@
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/texture_pool.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "imgui/imgui.h"
@@ -80,8 +79,6 @@ int main(int argc, char** argv) {
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::None);
 
-    auto img = engine::Image::load8(argv[1], 4);
-
     uint32_t frames_in_flight = engine::get_frames_in_flight();
     engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
     VkImageView* depth_image_views = new VkImageView[frames_in_flight];
@@ -89,13 +86,6 @@ int main(int argc, char** argv) {
     VkImageMemoryBarrier2* depth_barriers = new VkImageMemoryBarrier2[frames_in_flight];
 
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
-
-    glm::vec4 vertices[6] = {
-        {5.0f, 0.0f, 0.0f, 1.0f}, {-5.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 5.0f, 1.0f},
-        {1.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f, 1.0f},  {0.0f, 0.0f, 1.0f, 1.0f},
-    };
-    auto vertices_buffer = engine::Buffer::create(
-        6 * sizeof(glm::vec4), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, std::nullopt);
 
     uint32_t model_glb_size;
     auto model_glb_data = engine::util::read_file(argv[2], &model_glb_size);
@@ -109,33 +99,17 @@ int main(int argc, char** argv) {
     }
     free(model_glb_data);
 
+    engine::transport::begin();
+
+    engine::model::begin_gpu_upload();
+    auto [gpu_model, model_draw_buffer] = engine::model::upload(&model);
     VkBufferMemoryBarrier2 model_barrier{};
     model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
     model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-
-    engine::transport::begin();
-    engine::model::begin_gpu_upload();
-    auto [gpu_model, model_draw_buffer] = engine::model::upload(&model);
+    bool model_barrier_applied = false;
     auto gpu_group = engine::model::end_gpu_upload(&model_barrier);
 
-    auto [gpu_img, img_barrier] = engine::GPUImage::upload(img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    img_barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    img_barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-
-    VkBufferMemoryBarrier2 buffer_barrier{};
-    buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-    buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-    engine::transport::upload(&buffer_barrier, vertices, (uint32_t)vertices_buffer.size(), vertices_buffer);
-
-    auto img_timeline = engine::transport::end();
-    bool barrier_applied = false;
-
-    auto gpu_img_view = engine::GPUImageView{gpu_img}.create();
-    auto img_sampler = engine::Sampler{}.create();
-
-    engine::texture_pool::update(0, gpu_img_view, gpu_img.layout, img_sampler);
-
-    glm::vec4 color{0.0f, 0.2f, 0.0f, 1.0f};
+    auto model_timeline = engine::transport::end();
 
     float fov = 90.0f;
     glm::vec3 look_at{0.0f};
@@ -239,8 +213,6 @@ int main(int argc, char** argv) {
         ImGui::EndMainMenuBar();
 
         if (ImGui::Begin("Window")) {
-            ImGui::ColorPicker4("triangle color", glm::value_ptr(color));
-
             ImGui::SeparatorText("Camera");
             ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
             ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
@@ -257,19 +229,22 @@ int main(int argc, char** argv) {
 
         engine::prepare_draw();
 
-        if (!barrier_applied || !depth_barriers_applied) {
+        if (!depth_barriers_applied || !model_barrier_applied) {
             engine::synchronization::begin_barriers();
-            if (!barrier_applied) {
-                engine::synchronization::apply_barrier(img_barrier);
-                engine::synchronization::apply_barrier(buffer_barrier);
-            }
             if (!depth_barriers_applied) {
                 for (std::size_t i = 0; i < frames_in_flight; i++) {
                     engine::synchronization::apply_barrier(depth_barriers[i]);
                 }
+
+                depth_barriers_applied = true;
+            }
+
+            if (!model_barrier_applied) {
+                engine::synchronization::apply_barrier(model_barrier);
+
+                model_barrier_applied = true;
             }
             engine::synchronization::end_barriers();
-            barrier_applied = false;
         }
 
         engine::rendering::begin(engine::RenderPass{}
@@ -285,7 +260,7 @@ int main(int argc, char** argv) {
                                                            .set_clear_depth(1.0f)
                                                            .set_load_op(engine::LoadOp::Clear)
                                                            .set_store_op(engine::StoreOp::Store)));
-        if (engine::transport::timeline_value() >= img_timeline) {
+        if (engine::transport::timeline_value() >= model_timeline) {
             model_pipeline.bind();
             uint8_t model_push_constant[ModelPushConstant::size]{};
             ModelPushConstant::write(model_push_constant, gpu_group.vertex_data.address(), model_draw_buffer.address(),
@@ -338,13 +313,6 @@ int main(int argc, char** argv) {
         depth_images[i].destroy();
     }
     delete[] depth_images;
-
-    vertices_buffer.destroy();
-
-    engine::GPUImageView::destroy(gpu_img_view);
-    gpu_img.destroy();
-    engine::Sampler::destroy(img_sampler);
-    img.destroy();
 
     engine::destroy();
     return 0;
