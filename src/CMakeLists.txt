@@ -7,6 +7,7 @@ set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
 set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(./tinygltf)
 
+set(NFD_PORTAL ON CACHE BOOL "Use XDG portal backend" FORCE)
 add_subdirectory(./nativefiledialog-extended)
 
 set(IMGUI_SOURCES
@@ -59,4 +60,4 @@ target_compile_definitions(engine PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_U
 add_executable(engine_demo engine_demo.cpp)
 # target_compile_options(engine_demo PRIVATE ${COMMON_COMPILE_OPTIONS} -g)
 # target_link_options(engine_demo PRIVATE ${COMMON_LINK_OPTIONS})
-target_link_libraries(engine_demo PRIVATE engine)
+target_link_libraries(engine_demo PRIVATE engine nfd)

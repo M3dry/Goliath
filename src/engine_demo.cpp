@@ -11,7 +11,6 @@
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "imgui/imgui.h"
-#include "nativefiledialog-extended/src/include/nfd.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <filesystem>
@@ -19,6 +18,22 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
+
+#include <nfd.h>
+
+#ifdef __linux__
+#define GLFW_EXPOSE_NATIVE_X11
+#define GLFW_EXPOSE_NATIVE_GLX
+#define GLFW_EXPOSE_NATIVE_EGL
+
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#define GLFW_EXPOSE_NATIVE_EGL
+#elif _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#define GLFW_EXPOSE_NATIVE_WGL
+#endif
+
+#include <nfd_glfw3.h>
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
                   uint32_t frames_in_flight) {
@@ -90,7 +105,7 @@ int main(int argc, char** argv) {
     std::vector<ModelGroup> model_groups{};
 
     engine::init("Test window", 1000);
-    // NFD_Init();
+    NFD_Init();
 
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
@@ -110,8 +125,8 @@ int main(int argc, char** argv) {
                                                .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
-                              .depth_compare_op(engine::CompareOp::Less)
-                              .cull_mode(engine::CullMode::None);
+                              .depth_compare_op(engine::CompareOp::Less).cull_mode(engine::CullMode::NoCull);
+                              // .cull_mode(engine::CullMode::None);
 
     uint32_t frames_in_flight = engine::get_frames_in_flight();
     engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
@@ -235,55 +250,65 @@ int main(int argc, char** argv) {
         }
 
         engine::imgui::begin();
-        // if (ImGui::BeginMainMenuBar()) {
-        //     if (ImGui::BeginMenu("File")) {
-        //         if (ImGui::MenuItem("Load model")) {
-        //             models.emplace_back();
-        //             models.back().name = "test";
-        //
-        //             nfdu8char_t* path;
-        //             nfdu8filteritem_t filters[2] = {
-        //                 {"Model files",  "gltf,glb,gom"},
-        //                 {"All",  ""},
-        //             };
-        //             nfdopendialognargs_t args{};
-        //             args.filterCount= 2;
-        //             args.filterList = filters;
-        //             auto res = NFD_OpenDialogU8_With(&path, &args);
-        //             if (res == NFD_OKAY) {
-        //                 uint32_t size;
-        //                 auto* file = engine::util::read_file(path, &size);
-        //
-        //                 // NOTE: should probably pass in the parent path of the file to the loader
-        //                 engine::Model::load_glb(&models.back().data, {file, size});
-        //                 models.back().name = path;
-        //                 models.back().filepath = path;
-        //
-        //                 free(file);
-        //                 NFD_FreePathU8(path);
-        //             } else if (res != NFD_CANCEL) {
-        //                 assert(false && "NFD error");
-        //             }
-        //         }
-        //         if (ImGui::MenuItem("Open scene")) {
-        //             printf("clicked open\n");
-        //         }
-        //         if (ImGui::MenuItem("Save scene")) {
-        //             printf("clicked save\n");
-        //         }
-        //
-        //         ImGui::EndMenu();
-        //     }
-        // }
-        // ImGui::EndMainMenuBar();
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Load model")) {
+                    models.emplace_back();
+                    models.back().name = "test";
 
-        // if (ImGui::Begin("Loaded models on the CPU")) {
-        //     for (const auto& model : models) {
-        //         ImGui::SeparatorText(model.name.c_str());
-        //         ImGui::Text("file path: %s", model.filepath.c_str());
-        //     }
-        // }
-        // ImGui::End();
+                    nfdu8char_t* path;
+                    nfdu8filteritem_t filters[1] = {
+                        {"Model files", "gltf,glb,gom"},
+                    };
+                    nfdopendialognargs_t args{};
+                    args.filterCount = 1;
+                    args.filterList = filters;
+                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+                    auto res = NFD_OpenDialogU8_With(&path, &args);
+                    if (res == NFD_OKAY) {
+                        uint32_t size;
+                        auto* file = engine::util::read_file(path, &size);
+                        std::filesystem::path file_path{path};
+
+                        auto extension = file_path.extension();
+                        if (extension == "glb") {
+                            engine::Model::load_glb(&models.back().data, {file, size});
+                        } else if (extension == "gltf") {
+                            engine::Model::load_gltf(&models.back().data, {file, size});
+                        } else if (extension == "gom") {
+                            engine::Model::load_optimized(&models.back().data, file);
+                        }
+
+                        models.back().filepath = std::move(file_path);
+                        models.back().name = file_path.stem();
+
+                        free(file);
+                        NFD_FreePathU8(path);
+                    } else if (res != NFD_CANCEL) {
+                        assert(false && "NFD error");
+                    }
+                }
+
+                if (ImGui::MenuItem("Open scene")) {
+                    printf("clicked open\n");
+                }
+
+                if (ImGui::MenuItem("Save scene")) {
+                    printf("clicked save\n");
+                }
+
+                ImGui::EndMenu();
+            }
+        }
+        ImGui::EndMainMenuBar();
+
+        if (ImGui::Begin("Loaded models on the CPU")) {
+            for (const auto& model : models) {
+                ImGui::SeparatorText(model.name.c_str());
+                ImGui::Text("file path: %s", model.filepath.c_str());
+            }
+        }
+        ImGui::End();
 
         if (ImGui::Begin("Window")) {
             ImGui::SeparatorText("Camera");
@@ -371,6 +396,8 @@ int main(int argc, char** argv) {
     }
 
     vkDeviceWaitIdle(engine::device);
+
+    NFD_Quit();
 
     for (auto& model : models) {
         model.data.destroy();

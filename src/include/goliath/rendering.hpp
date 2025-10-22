@@ -162,7 +162,7 @@ namespace engine {
     void destroy_shader(VkShaderModule shader);
 
     enum struct CullMode {
-        None = VK_CULL_MODE_NONE,
+        NoCull = VK_CULL_MODE_NONE,
         Back = VK_CULL_MODE_BACK_BIT,
         Front = VK_CULL_MODE_FRONT_BIT,
         Both = VK_CULL_MODE_FRONT_AND_BACK,
