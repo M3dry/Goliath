@@ -11,12 +11,13 @@
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "imgui/imgui.h"
+#include "nativefiledialog-extended/src/include/nfd.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
+#include <filesystem>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
-#include <cstring>
 #include <vulkan/vulkan_core.h>
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
@@ -55,8 +56,41 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
 
 using ModelPushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 
+struct Model {
+    std::string name;
+    std::filesystem::path filepath;
+
+    engine::Model data;
+};
+
+struct GPUModel {
+    std::string name;
+    bool draw;
+
+    uint64_t cpu_side;
+    engine::GPUModel gpu_side;
+
+    glm::vec3 translate;
+    glm::vec3 rotation;
+    glm::vec3 scale;
+
+    glm::mat4 transform;
+};
+
+struct ModelGroup {
+    std::string name;
+
+    engine::GPUGroup group;
+
+    std::vector<GPUModel> models;
+};
+
 int main(int argc, char** argv) {
+    std::vector<Model> models{};
+    std::vector<ModelGroup> model_groups{};
+
     engine::init("Test window", 1000);
+    // NFD_Init();
 
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
@@ -201,16 +235,55 @@ int main(int argc, char** argv) {
         }
 
         engine::imgui::begin();
-        if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("Open")) {
-                    printf("clicked open\n");
-                }
+        // if (ImGui::BeginMainMenuBar()) {
+        //     if (ImGui::BeginMenu("File")) {
+        //         if (ImGui::MenuItem("Load model")) {
+        //             models.emplace_back();
+        //             models.back().name = "test";
+        //
+        //             nfdu8char_t* path;
+        //             nfdu8filteritem_t filters[2] = {
+        //                 {"Model files",  "gltf,glb,gom"},
+        //                 {"All",  ""},
+        //             };
+        //             nfdopendialognargs_t args{};
+        //             args.filterCount= 2;
+        //             args.filterList = filters;
+        //             auto res = NFD_OpenDialogU8_With(&path, &args);
+        //             if (res == NFD_OKAY) {
+        //                 uint32_t size;
+        //                 auto* file = engine::util::read_file(path, &size);
+        //
+        //                 // NOTE: should probably pass in the parent path of the file to the loader
+        //                 engine::Model::load_glb(&models.back().data, {file, size});
+        //                 models.back().name = path;
+        //                 models.back().filepath = path;
+        //
+        //                 free(file);
+        //                 NFD_FreePathU8(path);
+        //             } else if (res != NFD_CANCEL) {
+        //                 assert(false && "NFD error");
+        //             }
+        //         }
+        //         if (ImGui::MenuItem("Open scene")) {
+        //             printf("clicked open\n");
+        //         }
+        //         if (ImGui::MenuItem("Save scene")) {
+        //             printf("clicked save\n");
+        //         }
+        //
+        //         ImGui::EndMenu();
+        //     }
+        // }
+        // ImGui::EndMainMenuBar();
 
-                ImGui::EndMenu();
-            }
-        }
-        ImGui::EndMainMenuBar();
+        // if (ImGui::Begin("Loaded models on the CPU")) {
+        //     for (const auto& model : models) {
+        //         ImGui::SeparatorText(model.name.c_str());
+        //         ImGui::Text("file path: %s", model.filepath.c_str());
+        //     }
+        // }
+        // ImGui::End();
 
         if (ImGui::Begin("Window")) {
             ImGui::SeparatorText("Camera");
@@ -266,11 +339,10 @@ int main(int argc, char** argv) {
             ModelPushConstant::write(model_push_constant, gpu_group.vertex_data.address(), model_draw_buffer.address(),
                                      cam.view_projection(), glm::identity<glm::mat4>());
 
-            auto full_draw_count = gpu_model.second - gpu_model.first;
             model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                 .push_constant = model_push_constant,
                 .draw_buffer = model_draw_buffer.data(),
-                .draw_count = full_draw_count,
+                .draw_count = gpu_model.second - gpu_model.first,
                 .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
             });
         }
@@ -299,6 +371,10 @@ int main(int argc, char** argv) {
     }
 
     vkDeviceWaitIdle(engine::device);
+
+    for (auto& model : models) {
+        model.data.destroy();
+    }
 
     model_draw_buffer.destroy();
     gpu_group.destroy();
