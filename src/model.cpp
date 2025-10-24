@@ -635,7 +635,8 @@ namespace engine::model {
                 mesh_data[mesh_data_write_offset].mat_id = mesh.material_id;
                 mesh_data[mesh_data_write_offset].offset = mesh_offsets[mesh_ix];
                 mesh_data[mesh_data_write_offset].transform = model->mesh_transforms[mesh_ix];
-                mesh_data[mesh_data_write_offset].vertex_count = mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
+                mesh_data[mesh_data_write_offset].vertex_count =
+                    mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
                 mesh_data[mesh_data_write_offset].bounding_box = mesh.bounding_box;
 
                 mesh_data_write_offset++;

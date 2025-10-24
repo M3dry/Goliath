@@ -1,3 +1,4 @@
+#include "engine_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
@@ -11,9 +12,11 @@
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "imgui/imgui.h"
+#include "imgui/misc/cpp/imgui_stdlib.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
@@ -72,37 +75,69 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
 using ModelPushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 
 struct Model {
+    enum DataType {
+        GLTF,
+        GLB,
+        GOM,
+    };
+
+    struct Instance {
+        std::string name;
+
+        glm::vec3 translate{};
+        glm::vec3 rotate{};
+        glm::vec3 scale{};
+    };
+
     std::string name;
     std::filesystem::path filepath;
 
-    engine::Model data;
-};
+    engine::Model cpu_data;
+    engine::GPUModel gpu_data;
+    engine::Buffer indirect_draw_buffer;
+    engine::GPUGroup gpu_group;
 
-struct GPUModel {
-    std::string name;
-    bool draw;
+    std::vector<Instance> instances{};
+    std::vector<glm::mat4> instance_transforms{};
 
-    uint64_t cpu_side;
-    engine::GPUModel gpu_side;
+    engine::Model::Err load(DataType type, uint8_t* data, uint32_t size, VkBufferMemoryBarrier2* barrier) {
+        engine::Model::Err err;
+        if (type == GOM) {
+            err = engine::Model::load_optimized(&cpu_data, data) ? engine::Model::Ok : engine::Model::InvalidFormat;
+        } else if (type == GLTF) {
+            err = engine::Model::load_gltf(&cpu_data, {data, size});
+        } else if (type == GLB) {
+            err = engine::Model::load_glb(&cpu_data, {data, size}, nullptr);
+        } else {
+            err = engine::Model::InvalidFormat;
+        }
 
-    glm::vec3 translate;
-    glm::vec3 rotation;
-    glm::vec3 scale;
+        if (err != engine::Model::Ok) {
+            return err;
+        }
 
-    glm::mat4 transform;
-};
+        engine::model::begin_gpu_upload();
+        auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
+        gpu_data = _gpu_data;
+        indirect_draw_buffer = _indirect_draw_buffer;
+        gpu_group = engine::model::end_gpu_upload(barrier);
 
-struct ModelGroup {
-    std::string name;
+        return engine::Model::Ok;
+    }
 
-    engine::GPUGroup group;
-
-    std::vector<GPUModel> models;
+    void destroy() {
+        cpu_data.destroy();
+        gpu_group.destroy();
+        indirect_draw_buffer.destroy();
+    }
 };
 
 int main(int argc, char** argv) {
+    uint32_t frames_in_flight = engine::get_frames_in_flight();
+
     std::vector<Model> models{};
-    std::vector<ModelGroup> model_groups{};
+    std::vector<std::vector<Model>> models_to_destroy{};
+    models_to_destroy.resize(frames_in_flight);
 
     engine::init("Test window", 1000);
     NFD_Init();
@@ -125,10 +160,8 @@ int main(int argc, char** argv) {
                                                .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
-                              .depth_compare_op(engine::CompareOp::Less).cull_mode(engine::CullMode::NoCull);
-                              // .cull_mode(engine::CullMode::None);
-
-    uint32_t frames_in_flight = engine::get_frames_in_flight();
+                              .depth_compare_op(engine::CompareOp::Less)
+                              .cull_mode(engine::CullMode::NoCull);
     engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
     VkImageView* depth_image_views = new VkImageView[frames_in_flight];
     bool depth_barriers_applied = false;
@@ -136,29 +169,9 @@ int main(int argc, char** argv) {
 
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
 
-    uint32_t model_glb_size;
-    auto model_glb_data = engine::util::read_file(argv[1], &model_glb_size);
-    assert(model_glb_data != nullptr);
-
-    engine::Model model;
-    auto err = engine::Model::load_glb(&model, {model_glb_data, model_glb_size});
-    if (err != engine::Model::Err::Ok) {
-        printf("err: %d", err);
-        return 0;
-    }
-    free(model_glb_data);
-
-    engine::transport::begin();
-
-    engine::model::begin_gpu_upload();
-    auto [gpu_model, model_draw_buffer] = engine::model::upload(&model);
     VkBufferMemoryBarrier2 model_barrier{};
-    model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-    model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-    bool model_barrier_applied = false;
-    auto gpu_group = engine::model::end_gpu_upload(&model_barrier);
-
-    auto model_timeline = engine::transport::end();
+    bool model_barrier_applied = true;
+    uint64_t model_timeline = 0;
 
     float fov = 90.0f;
     glm::vec3 look_at{0.0f};
@@ -253,9 +266,6 @@ int main(int argc, char** argv) {
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Load model")) {
-                    models.emplace_back();
-                    models.back().name = "test";
-
                     nfdu8char_t* path;
                     nfdu8filteritem_t filters[1] = {
                         {"Model files", "gltf,glb,gom"},
@@ -271,16 +281,32 @@ int main(int argc, char** argv) {
                         std::filesystem::path file_path{path};
 
                         auto extension = file_path.extension();
-                        if (extension == "glb") {
-                            engine::Model::load_glb(&models.back().data, {file, size});
-                        } else if (extension == "gltf") {
-                            engine::Model::load_gltf(&models.back().data, {file, size});
-                        } else if (extension == "gom") {
-                            engine::Model::load_optimized(&models.back().data, file);
+                        model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                        model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                        Model::DataType type;
+                        if (extension == ".glb") {
+                            type = Model::GLB;
+                        } else if (extension == ".gltf") {
+                            type = Model::GLTF;
+                        } else if (extension == ".gom") {
+                            type = Model::GOM;
+                        } else {
+                            assert(false && "Wrong filetype");
                         }
 
-                        models.back().filepath = std::move(file_path);
+                        models.emplace_back();
                         models.back().name = file_path.stem();
+                        models.back().filepath = std::move(file_path);
+                        printf("stem: %s\n", models.back().name.c_str());
+
+                        engine::transport::begin();
+                        auto& model = models.back();
+                        auto err = model.load(type, file, size, &model_barrier);
+                        if (err != engine::Model::Ok) {
+                            printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
+                            assert(false);
+                        }
+                        model_timeline = engine::transport::end();
 
                         free(file);
                         NFD_FreePathU8(path);
@@ -302,11 +328,47 @@ int main(int argc, char** argv) {
         }
         ImGui::EndMainMenuBar();
 
-        if (ImGui::Begin("Loaded models on the CPU")) {
-            for (const auto& model : models) {
-                ImGui::SeparatorText(model.name.c_str());
+        if (ImGui::Begin("Models")) {
+            std::erase_if(models, [&](auto& model) {
+                // bool destroy = false;
+                //
+                // ImGui::PushID(model.gpu_group.vertex_data.address());
+                //
+                // bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+                //
+                // ImGui::SameLine();
+                // ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                // // ImGui::SetNextItemWidth(200);
+                // ImGui::InputText("##name", &model.name);
+                //
+                // ImGui::SameLine();
+                // if (ImGui::Button("Unload")) {
+                //     printf("current frame: %d, destroy frame: %d\n", engine::get_current_frame(), (engine::get_current_frame() - 1) % frames_in_flight);
+                //     models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
+                //
+                //     bool destroy = true;
+                // }
+                //
+                // if (open) {
+                //     ImGui::Text("file path: %s", model.filepath.c_str());
+                //     ImGui::TreePop();
+                // }
+
+                auto id = model.gpu_group.vertex_data.address();
+                ImGui::InputText(std::format("##{}", id).c_str(), &model.name);
+                ImGui::SameLine();
+                if (ImGui::Button(std::format("Unload##{}", id).c_str())) {
+                    models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
+                    return true;
+                }
+
                 ImGui::Text("file path: %s", model.filepath.c_str());
-            }
+
+                return false;
+
+                // ImGui::PopID();
+                // return destroy;
+            });
         }
         ImGui::End();
 
@@ -322,6 +384,7 @@ int main(int argc, char** argv) {
             }
             ImGui::Text("lock cam: %b", lock_cam);
         }
+
         ImGui::End();
         engine::imgui::end();
 
@@ -336,7 +399,6 @@ int main(int argc, char** argv) {
 
                 depth_barriers_applied = true;
             }
-
             if (!model_barrier_applied) {
                 engine::synchronization::apply_barrier(model_barrier);
 
@@ -360,16 +422,20 @@ int main(int argc, char** argv) {
                                                            .set_store_op(engine::StoreOp::Store)));
         if (engine::transport::timeline_value() >= model_timeline) {
             model_pipeline.bind();
-            uint8_t model_push_constant[ModelPushConstant::size]{};
-            ModelPushConstant::write(model_push_constant, gpu_group.vertex_data.address(), model_draw_buffer.address(),
-                                     cam.view_projection(), glm::identity<glm::mat4>());
 
-            model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
-                .push_constant = model_push_constant,
-                .draw_buffer = model_draw_buffer.data(),
-                .draw_count = gpu_model.second - gpu_model.first,
-                .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
-            });
+            for (auto& model : models) {
+                uint8_t model_push_constant[ModelPushConstant::size]{};
+                ModelPushConstant::write(model_push_constant, model.gpu_group.vertex_data.address(),
+                                         model.indirect_draw_buffer.address(), cam.view_projection(),
+                                         glm::identity<glm::mat4>());
+
+                model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                    .push_constant = model_push_constant,
+                    .draw_buffer = model.indirect_draw_buffer.data(),
+                    .draw_count = model.gpu_data.second - model.gpu_data.first,
+                    .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
+                });
+            }
         }
         engine::rendering::end();
 
@@ -382,6 +448,11 @@ int main(int argc, char** argv) {
         engine::rendering::end();
 
     end_of_frame:
+        for (auto& model : models_to_destroy[engine::get_current_frame()]) {
+            model.destroy();
+        }
+        models_to_destroy[engine::get_current_frame()].clear();
+
         if (engine::next_frame()) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
                 engine::GPUImageView::destroy(depth_image_views[i]);
@@ -400,12 +471,13 @@ int main(int argc, char** argv) {
     NFD_Quit();
 
     for (auto& model : models) {
-        model.data.destroy();
+        model.destroy();
     }
-
-    model_draw_buffer.destroy();
-    gpu_group.destroy();
-    model.destroy();
+    for (auto& models : models_to_destroy) {
+        for (auto& model : models) {
+            model.destroy();
+        }
+    }
 
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);

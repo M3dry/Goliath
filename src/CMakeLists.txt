@@ -16,6 +16,7 @@ set(IMGUI_SOURCES
     imgui/imgui_tables.cpp
     imgui/imgui_widgets.cpp
     imgui/imgui_demo.cpp
+    imgui/misc/cpp/imgui_stdlib.cpp
     imgui/backends/imgui_impl_glfw.cpp
     imgui/backends/imgui_impl_vulkan.cpp
 )

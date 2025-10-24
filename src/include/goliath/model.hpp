@@ -126,6 +126,7 @@ namespace engine {
             InvalidTangentElementSize,
             InvalidTexcoordElementSize,
             VertexCountDiffersBetweenAttributes,
+            InvalidFormat,
         };
 
         static Err load_gltf(Model* out, std::span<uint8_t> data, std::string* tinygltf_error = nullptr,
