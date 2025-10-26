@@ -162,7 +162,7 @@ namespace engine {
         vkDestroySemaphore(device, swapchain_semaphore, nullptr);
     }
 
-    void init(const char* window_name, uint32_t max_texture_count) {
+    void init(const char* window_name, uint32_t max_texture_count, bool fullscreen) {
         VK_CHECK(volkInitialize());
 
         vkb::InstanceBuilder instance_builder;
@@ -189,7 +189,7 @@ namespace engine {
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-        window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
+        window = glfwCreateWindow(mode->width, mode->height, window_name, fullscreen ? monitor : nullptr, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
@@ -323,7 +323,7 @@ namespace engine {
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
 
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
-                &swapchain_ix);
+                                            &swapchain_ix);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             swapchain_needs_rebuild = true;
             return true;

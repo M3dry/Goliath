@@ -20,5 +20,6 @@ set(COMMON_LINK_OPTIONS
 )
 
 add_subdirectory(src)
+add_subdirectory(editor)
 add_subdirectory(julip)
 add_subdirectory(ecs)

@@ -10,6 +10,6 @@
 [submodule "src/MikkTSpace"]
 	path = src/MikkTSpace
 	url = https://github.com/mmikk/MikkTSpace.git
-[submodule "src/nativefiledialog-extended"]
-	path = src/nativefiledialog-extended
+[submodule "editor/nativefiledialog-extended"]
+	path = editor/nativefiledialog-extended
 	url = https://github.com/btzy/nativefiledialog-extended.git

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 namespace engine::transport {
-    void begin();
+    uint64_t begin();
     uint64_t end();
 
     // `barrer` needs dstStageMask and dstAccessMask set
@@ -16,7 +16,8 @@ namespace engine::transport {
     void upload(VkImageMemoryBarrier2* barrier, void* src, uint32_t size, uint32_t width, uint32_t height,
                 VkFormat format, VkImage dst);
 
-    uint64_t timeline_value();
+    uint64_t timeline_value(bool log = false);
+    bool is_ready(uint64_t timeline_value);
 
     void transition(VkImageMemoryBarrier2* barrier, VkImageAspectFlags aspect_mask);
 }

@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_internal.h"
 
 void check_vk_result(VkResult err) {
     if (err == 0) return;

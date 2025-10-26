@@ -7,9 +7,6 @@ set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
 set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(./tinygltf)
 
-set(NFD_PORTAL ON CACHE BOOL "Use XDG portal backend" FORCE)
-add_subdirectory(./nativefiledialog-extended)
-
 set(IMGUI_SOURCES
     imgui/imgui.cpp
     imgui/imgui_draw.cpp
@@ -44,21 +41,14 @@ SET(ENGINE_SOURCES
     ${MIKKTSPACE_SOURCES}
 )
 
-add_library(engine ${ENGINE_SOURCES})
-# target_compile_options(engine PRIVATE ${COMMON_COMPILE_OPTIONS} -g)
-# target_link_options(engine PRIVATE ${COMMON_LINK_OPTIONS})
-target_include_directories(engine
+add_library(goliath ${ENGINE_SOURCES})
+target_include_directories(goliath
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui"
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
     )
-target_link_libraries(engine PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd)
-target_compile_definitions(engine PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
-
-add_executable(engine_demo engine_demo.cpp)
-# target_compile_options(engine_demo PRIVATE ${COMMON_COMPILE_OPTIONS} -g)
-# target_link_options(engine_demo PRIVATE ${COMMON_LINK_OPTIONS})
-target_link_libraries(engine_demo PRIVATE engine nfd)
+target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd)
+target_compile_definitions(goliath PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)

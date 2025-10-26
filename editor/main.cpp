@@ -1,4 +1,3 @@
-#include "engine_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
@@ -11,8 +10,8 @@
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
-#include "imgui/imgui.h"
-#include "imgui/misc/cpp/imgui_stdlib.h"
+#include "imgui.h"
+#include "misc/cpp/imgui_stdlib.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <filesystem>
@@ -84,14 +83,16 @@ struct Model {
     struct Instance {
         std::string name;
 
-        glm::vec3 translate{};
-        glm::vec3 rotate{};
-        glm::vec3 scale{};
+        glm::vec3 translate{0.0f};
+        glm::vec3 rotate{0.0f};
+        glm::vec3 scale{1.0f};
     };
+    uint64_t last_instance_id = 0;
 
     std::string name;
     std::filesystem::path filepath;
 
+    uint64_t timeline;
     engine::Model cpu_data;
     engine::GPUModel gpu_data;
     engine::Buffer indirect_draw_buffer;
@@ -132,6 +133,42 @@ struct Model {
     }
 };
 
+bool imgui_model_instance(Model::Instance& instance, glm::mat4& transform) {
+    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+    ImGui::InputText("##name", &instance.name);
+
+    ImGui::SameLine();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+    if (ImGui::Button("Remove")) {
+        if (open) ImGui::TreePop();
+        return true;
+    }
+
+    if (open) {
+        ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+
+        ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+        ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+        ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+
+        ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+        ImGui::TreePop();
+    }
+
+    transform =
+        glm::translate(glm::identity<glm::mat4>(), instance.translate) *
+        glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1, 0}),
+                                instance.rotate.y, glm::vec3{1, 0, 0}),
+                    instance.rotate.z, glm::vec3{0, 0, 1}) *
+        glm::scale(glm::identity<glm::mat4>(), instance.scale);
+
+    return false;
+}
+
 int main(int argc, char** argv) {
     uint32_t frames_in_flight = engine::get_frames_in_flight();
 
@@ -139,7 +176,7 @@ int main(int argc, char** argv) {
     std::vector<std::vector<Model>> models_to_destroy{};
     models_to_destroy.resize(frames_in_flight);
 
-    engine::init("Test window", 1000);
+    engine::init("Goliath editor", 1000, false);
     NFD_Init();
 
     uint32_t model_vertex_spv_size;
@@ -171,7 +208,6 @@ int main(int argc, char** argv) {
 
     VkBufferMemoryBarrier2 model_barrier{};
     bool model_barrier_applied = true;
-    uint64_t model_timeline = 0;
 
     float fov = 90.0f;
     glm::vec3 look_at{0.0f};
@@ -266,52 +302,68 @@ int main(int argc, char** argv) {
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Load model")) {
-                    nfdu8char_t* path;
                     nfdu8filteritem_t filters[1] = {
                         {"Model files", "gltf,glb,gom"},
                     };
-                    nfdopendialognargs_t args{};
+                    nfdopendialogu8args_t args{};
                     args.filterCount = 1;
                     args.filterList = filters;
                     NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-                    auto res = NFD_OpenDialogU8_With(&path, &args);
+
+                    // nfdu8char_t* path;
+                    // auto res = NFD_OpenDialogU8_With(&path, &args);
+
+                    const nfdpathset_t* paths;
+                    auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
                     if (res == NFD_OKAY) {
-                        uint32_t size;
-                        auto* file = engine::util::read_file(path, &size);
-                        std::filesystem::path file_path{path};
+                        nfdpathsetenum_t enumerator;
+                        NFD_PathSet_GetEnum(paths, &enumerator);
 
-                        auto extension = file_path.extension();
-                        model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                        model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                        Model::DataType type;
-                        if (extension == ".glb") {
-                            type = Model::GLB;
-                        } else if (extension == ".gltf") {
-                            type = Model::GLTF;
-                        } else if (extension == ".gom") {
-                            type = Model::GOM;
-                        } else {
-                            assert(false && "Wrong filetype");
+                        nfdchar_t* path;
+                        std::size_t i = 0;
+
+                        auto timeline_value = engine::transport::begin();
+                        while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
+                            uint32_t size;
+                            auto* file = engine::util::read_file(path, &size);
+                            std::filesystem::path file_path{path};
+
+                            auto extension = file_path.extension();
+                            model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                            model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                            Model::DataType type;
+                            if (extension == ".glb") {
+                                type = Model::GLB;
+                            } else if (extension == ".gltf") {
+                                type = Model::GLTF;
+                            } else if (extension == ".gom") {
+                                type = Model::GOM;
+                            } else {
+                                assert(false && "Wrong filetype");
+                            }
+
+                            models.emplace_back();
+                            models.back().name = file_path.stem();
+                            models.back().filepath = std::move(file_path);
+                            models.back().timeline = timeline_value;
+
+                            auto& model = models.back();
+                            auto err = model.load(type, file, size, &model_barrier);
+                            if (err != engine::Model::Ok) {
+                                printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
+                                assert(false);
+                            }
+
+                            free(file);
+                            NFD_PathSet_FreePath(path);
                         }
+                        engine::transport::end();
 
-                        models.emplace_back();
-                        models.back().name = file_path.stem();
-                        models.back().filepath = std::move(file_path);
-                        printf("stem: %s\n", models.back().name.c_str());
-
-                        engine::transport::begin();
-                        auto& model = models.back();
-                        auto err = model.load(type, file, size, &model_barrier);
-                        if (err != engine::Model::Ok) {
-                            printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
-                            assert(false);
-                        }
-                        model_timeline = engine::transport::end();
-
-                        free(file);
-                        NFD_FreePathU8(path);
+                        NFD_PathSet_FreeEnum(&enumerator);
+                        NFD_PathSet_Free(paths);
                     } else if (res != NFD_CANCEL) {
-                        assert(false && "NFD error");
+                        printf("NFD error: %s\n", NFD_GetError());
+                        assert(false);
                     }
                 }
 
@@ -330,44 +382,56 @@ int main(int argc, char** argv) {
 
         if (ImGui::Begin("Models")) {
             std::erase_if(models, [&](auto& model) {
-                // bool destroy = false;
-                //
-                // ImGui::PushID(model.gpu_group.vertex_data.address());
-                //
-                // bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
-                //
-                // ImGui::SameLine();
-                // ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-                // // ImGui::SetNextItemWidth(200);
-                // ImGui::InputText("##name", &model.name);
-                //
-                // ImGui::SameLine();
-                // if (ImGui::Button("Unload")) {
-                //     printf("current frame: %d, destroy frame: %d\n", engine::get_current_frame(), (engine::get_current_frame() - 1) % frames_in_flight);
-                //     models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
-                //
-                //     bool destroy = true;
-                // }
-                //
-                // if (open) {
-                //     ImGui::Text("file path: %s", model.filepath.c_str());
-                //     ImGui::TreePop();
-                // }
+                ImGui::PushID(model.gpu_group.vertex_data.address());
 
-                auto id = model.gpu_group.vertex_data.address();
-                ImGui::InputText(std::format("##{}", id).c_str(), &model.name);
+                bool open = ImGui::TreeNodeEx("##node",
+                                              ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+
                 ImGui::SameLine();
-                if (ImGui::Button(std::format("Unload##{}", id).c_str())) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                ImGui::InputText("##name", &model.name);
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                if (ImGui::Button("Unload")) {
                     models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
+
+                    if (open) ImGui::TreePop();
+                    ImGui::PopID();
+
                     return true;
                 }
 
-                ImGui::Text("file path: %s", model.filepath.c_str());
+                if (open) {
+                    ImGui::Text("file path: %s", model.filepath.c_str());
 
+                    if (ImGui::Button("add instance")) {
+                        model.instances.emplace_back();
+                        model.instances.back().name = std::format("Instance #{}", model.last_instance_id++);
+                    }
+
+                    model.instance_transforms.clear();
+                    model.instance_transforms.resize(model.instances.size());
+                    std::size_t i = 0;
+                    std::size_t instance_counter = 0;
+                    std::erase_if(model.instances, [&](auto& instance) {
+                        ImGui::PushID(i);
+                        auto remove =
+                            imgui_model_instance(model.instances[i], model.instance_transforms[instance_counter]);
+                        ImGui::PopID();
+
+                        if (!remove) instance_counter++;
+
+                        i++;
+                        return remove;
+                    });
+
+                    ImGui::TreePop();
+                }
+
+                ImGui::PopID();
                 return false;
-
-                // ImGui::PopID();
-                // return destroy;
             });
         }
         ImGui::End();
@@ -407,37 +471,41 @@ int main(int argc, char** argv) {
             engine::synchronization::end_barriers();
         }
 
-        engine::rendering::begin(engine::RenderPass{}
-                                     .add_color_attachment(engine::RenderingAttachement{}
-                                                               .set_image(engine::get_swapchain_view(),
-                                                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                                                               .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                                                               .set_load_op(engine::LoadOp::Clear)
-                                                               .set_store_op(engine::StoreOp::Store))
-                                     .depth_attachment(engine::RenderingAttachement{}
-                                                           .set_image(depth_image_views[engine::get_current_frame()],
-                                                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
-                                                           .set_clear_depth(1.0f)
-                                                           .set_load_op(engine::LoadOp::Clear)
-                                                           .set_store_op(engine::StoreOp::Store)));
-        if (engine::transport::timeline_value() >= model_timeline) {
+        {
+            engine::rendering::begin(
+                engine::RenderPass{}
+                    .add_color_attachment(
+                        engine::RenderingAttachement{}
+                            .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                            .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
+                            .set_load_op(engine::LoadOp::Clear)
+                            .set_store_op(engine::StoreOp::Store))
+                    .depth_attachment(engine::RenderingAttachement{}
+                                          .set_image(depth_image_views[engine::get_current_frame()],
+                                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                                          .set_clear_depth(1.0f)
+                                          .set_load_op(engine::LoadOp::Clear)
+                                          .set_store_op(engine::StoreOp::Store)));
             model_pipeline.bind();
+            uint8_t model_push_constant[ModelPushConstant::size]{};
 
             for (auto& model : models) {
-                uint8_t model_push_constant[ModelPushConstant::size]{};
-                ModelPushConstant::write(model_push_constant, model.gpu_group.vertex_data.address(),
-                                         model.indirect_draw_buffer.address(), cam.view_projection(),
-                                         glm::identity<glm::mat4>());
+                if (!engine::transport::is_ready(model.timeline)) continue;
 
-                model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
-                    .push_constant = model_push_constant,
-                    .draw_buffer = model.indirect_draw_buffer.data(),
-                    .draw_count = model.gpu_data.second - model.gpu_data.first,
-                    .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
-                });
+                for (const auto& transform : model.instance_transforms) {
+                    ModelPushConstant::write(model_push_constant, model.gpu_group.vertex_data.address(),
+                                             model.indirect_draw_buffer.address(), cam.view_projection(), transform);
+
+                    model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                        .push_constant = model_push_constant,
+                        .draw_buffer = model.indirect_draw_buffer.data(),
+                        .draw_count = model.gpu_data.second - model.gpu_data.first,
+                        .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
+                    });
+                }
             }
+            engine::rendering::end();
         }
-        engine::rendering::end();
 
         engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
             engine::RenderingAttachement{}

@@ -40,7 +40,7 @@ namespace engine {
     extern VkQueue transport_queue;
     extern uint32_t transport_queue_family;
 
-    void init(const char* window_name, uint32_t max_texture_count);
+    void init(const char* window_name, uint32_t max_texture_count, bool fullscreen);
     void destroy();
 
     VkCommandBuffer get_cmd_buf();
