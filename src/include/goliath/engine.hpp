@@ -10,12 +10,14 @@
 
 #include <vector>
 
+#include <cassert>
+
 #define VK_CHECK(x)                                                                                                    \
     do {                                                                                                               \
         VkResult err = x;                                                                                              \
         if (err) {                                                                                                     \
             fprintf(stderr, "Detected Vulkan error: %s @%d in %s\n", string_VkResult(err), __LINE__, __FILE__);        \
-            exit(-1);                                                                                                  \
+            assert(false);                                                                                             \
         }                                                                                                              \
     } while (0)
 

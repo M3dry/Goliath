@@ -1,7 +1,6 @@
 #pragma once
 
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
 
 namespace engine {
     enum struct CompareOp {
@@ -19,4 +18,5 @@ namespace engine {
 
 namespace engine::util {
     uint8_t* read_file(const char* path, uint32_t* size);
+    void save_file(const char* path, uint8_t* data, uint32_t size);
 }

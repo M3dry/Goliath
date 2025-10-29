@@ -36,6 +36,8 @@ SET(ENGINE_SOURCES
     camera.cpp
     model.cpp
     util.cpp
+    scene.cpp
+    gpu_group.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

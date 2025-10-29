@@ -7,7 +7,7 @@ layout(buffer_reference, std430) readonly buffer VertexData {
 };
 
 struct DrawCommand {
-    // vert count, instance count, first vert, first instance
+    // vert count, instance count, first vert, start offset
     uint data[5];
 };
 

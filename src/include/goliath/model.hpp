@@ -145,36 +145,27 @@ namespace engine {
         }
     };
 
-    using GPUModel = std::pair<uint32_t, uint32_t>;
-
-    struct GPUGroup {
-        uint32_t indexed_mesh_count;
+    struct GPUModel {
+        uint32_t data_start;
         uint32_t mesh_count;
-        Buffer vertex_data;
-        std::pair<uint32_t, uint32_t> texture_block;
-
-        void destroy();
     };
 }
 
 namespace engine::model {
-    // `F` is a callable object that takes in:
-    //   1) uint32_t - vertex count
-    //   2) uint32_t - material_id
-    //   3) GPUOffset
-    //   4) VkBuffer - vertex data
-    template <typename F> inline void draw(GPUGroup group, GPUModel model, F&& draw_fun) {
-        auto cmd_buf = get_cmd_buf();
+    struct DrawCommand {
+        VkDrawIndirectCommand cmd;
+        uint32_t start_offset;
+    };
 
-        // vkCmdDrawIndirect(cmd_buf, group)
-        for (std::size_t i = model.first; i < model.second; i++) {
-            // draw_fun(group.mesh_vertex_counts[i], group.material_ids[i], group.offsets[i], group.mesh_transforms[i],
-            //          group.vertex_data);
-        }
-    }
+    struct GPUMeshData {
+        GPUOffset offset;
+        uint16_t _padding{};
+        material_id mat_id;
+        uint32_t vertex_count;
+        glm::mat4 transform;
+        collisions::AABB bounding_box;
+    };
 
-    void begin_gpu_upload();
-    // the pointer to `model` must be valid until `end_gpu_upload` is called
     std::pair<GPUModel, Buffer> upload(const Model* model);
-    GPUGroup end_gpu_upload(VkBufferMemoryBarrier2* barrier);
+    GPUModel upload_raw(const Model* model);
 }

@@ -105,7 +105,6 @@ namespace engine {
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
         VK_CHECK(vmaCreateImage(allocator, &info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
 
@@ -125,7 +124,6 @@ namespace engine {
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        alloc_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
         VK_CHECK(
             vmaCreateImage(allocator, &builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));

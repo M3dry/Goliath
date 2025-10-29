@@ -1,7 +1,7 @@
 #include "goliath/model.hpp"
 #include "goliath/buffer.hpp"
+#include "goliath/gpu_group.hpp"
 #include "goliath/rendering.hpp"
-#include "goliath/transport.hpp"
 
 #include <format>
 #include <utility>
@@ -534,41 +534,58 @@ namespace engine {
 
         return true;
     }
-
-    void GPUGroup::destroy() {
-        vertex_data.destroy();
-        texture_pool::free(texture_block);
-    }
 }
 
 namespace engine::model {
-    std::vector<const Model*> upload_models{};
-    uint32_t mesh_count = 0;
-    uint32_t indexed_mesh_count = 0;
-    uint32_t needed_textures = 0;
+    void upload_func(uint8_t* data, uint32_t start, uint32_t size, void* ctx) {
+        const Model* model;
+        std::memcpy(&model, ctx, sizeof(void*));
+        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
-    void begin_gpu_upload() {
-        upload_models.clear();
-        mesh_count = 0;
-        indexed_mesh_count = 0;
-        needed_textures = 0;
-    }
+        for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
+            auto mesh_ix = model->mesh_indexes[i];
+            const auto& mesh = model->meshes[mesh_ix];
 
-    struct DrawCommand {
-        VkDrawIndirectCommand cmd;
-        uint32_t mesh_ix;
+            GPUMeshData m{};
+
+            m.mat_id = mesh.material_id;
+            m.offset= offsets[mesh_ix];
+            m.transform = model->mesh_transforms[mesh_ix];
+            m.vertex_count = mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
+            m.bounding_box = mesh.bounding_box;
+
+            std::memcpy(data, &m, sizeof(GPUMeshData));
+            data += sizeof(GPUMeshData);
+        }
+
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            data += model->meshes[i].upload_data(data);
+        }
+
+        free(ctx);
     };
 
     std::pair<GPUModel, Buffer> upload(const Model* model) {
-        upload_models.emplace_back(model);
-
+        uint32_t needed_textures = 0;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             needed_textures += model->meshes[i].material_texture_count;
         }
 
-        auto last_offset = indexed_mesh_count;
-        mesh_count += model->mesh_count;
-        indexed_mesh_count += model->mesh_indices_count;
+        auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
+        std::memcpy(ctx, &model, sizeof(void*));
+
+        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
+
+        uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            uint32_t size;
+            offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            mesh_sizes += size;
+        }
+        auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            offsets[i].start += data_offset;
+        }
 
         void* draw_buf_host;
         bool draw_buf_coherent;
@@ -576,7 +593,7 @@ namespace engine::model {
                                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        {{&draw_buf_host, &draw_buf_coherent}});
 
-        for (std::size_t i = last_offset; i < indexed_mesh_count; i++) {
+        for (uint32_t i = 0; i < model->mesh_indices_count; i++) {
             auto mesh_ix = model->mesh_indexes[i];
             auto& mesh = model->meshes[mesh_ix];
 
@@ -588,79 +605,37 @@ namespace engine::model {
                         .firstVertex = 0,
                         .firstInstance = 0,
                     },
-                .mesh_ix = (mesh_count - model->mesh_count) + mesh_ix,
+                .start_offset = data_offset + i * (uint32_t)sizeof(GPUMeshData),
             };
             std::memcpy((uint8_t*)draw_buf_host + i * sizeof(DrawCommand), &draw_cmd, sizeof(DrawCommand));
         }
         if (!draw_buf_coherent) draw_buf.flush_mapped(0, (uint32_t)draw_buf.size());
 
-        return {{last_offset, indexed_mesh_count}, draw_buf};
+        return {GPUModel{data_offset, model->mesh_indices_count}, draw_buf};
     }
 
-    struct GPUMeshData {
-        GPUOffset offset;
-        uint16_t _padding{};
-        material_id mat_id;
-        uint32_t vertex_count;
-        glm::mat4 transform;
-        collisions::AABB bounding_box;
-    };
-
-    GPUGroup end_gpu_upload(VkBufferMemoryBarrier2* barrier) {
-        auto group = GPUGroup{
-            .indexed_mesh_count = indexed_mesh_count,
-            .mesh_count = mesh_count,
-            .vertex_data = Buffer{},
-            .texture_block = texture_pool::alloc(needed_textures),
-        };
-
-        uint32_t total_size = indexed_mesh_count * sizeof(GPUMeshData);
-        GPUMeshData* mesh_data = (GPUMeshData*)malloc(indexed_mesh_count * sizeof(GPUMeshData));
-
-        uint32_t mesh_data_write_offset = 0;
-        for (auto model : upload_models) {
-            std::vector<GPUOffset> mesh_offsets{};
-            mesh_offsets.resize(model->mesh_count);
-
-            for (std::size_t i = 0; i < model->mesh_count; i++) {
-                uint32_t size = 0;
-                mesh_offsets[i] = model->meshes[i].calc_offset(total_size, &size);
-                total_size += size;
-            }
-
-            for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
-                auto mesh_ix = model->mesh_indexes[i];
-                const auto& mesh = model->meshes[mesh_ix];
-
-                mesh_data[mesh_data_write_offset].mat_id = mesh.material_id;
-                mesh_data[mesh_data_write_offset].offset = mesh_offsets[mesh_ix];
-                mesh_data[mesh_data_write_offset].transform = model->mesh_transforms[mesh_ix];
-                mesh_data[mesh_data_write_offset].vertex_count =
-                    mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
-                mesh_data[mesh_data_write_offset].bounding_box = mesh.bounding_box;
-
-                mesh_data_write_offset++;
-            }
+    GPUModel upload_raw(const Model* model) {
+        uint32_t needed_textures = 0;
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            needed_textures += model->meshes[i].material_texture_count;
         }
 
-        group.vertex_data =
-            Buffer::create(total_size, VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
-                           std::nullopt, VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
+        auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
+        std::memcpy(ctx, &model, sizeof(void*));
 
-        uint8_t* data = (uint8_t*)malloc(total_size);
-        std::memcpy(data, mesh_data, indexed_mesh_count * sizeof(GPUMeshData));
-        free(mesh_data);
+        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
-        uint32_t current_start = indexed_mesh_count * sizeof(GPUMeshData);
-        for (auto model : upload_models) {
-            for (std::size_t i = 0; i < model->mesh_count; i++) {
-                current_start += model->meshes[i].upload_data(data + current_start);
-            }
+        uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            uint32_t size;
+            offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            mesh_sizes += size;
+        }
+        auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            offsets[i].start += data_offset;
         }
 
-        transport::upload(barrier, data, total_size, group.vertex_data.data(), 0);
-
-        free(data);
-        return group;
+        return GPUModel{data_offset, model->mesh_indices_count};
     }
 }

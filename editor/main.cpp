@@ -2,10 +2,12 @@
 #include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
+#include "goliath/gpu_group.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/model.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/scene.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
@@ -72,6 +74,7 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
 }
 
 using ModelPushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
+using ScenePushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 
 struct Model {
     enum DataType {
@@ -91,6 +94,7 @@ struct Model {
 
     std::string name;
     std::filesystem::path filepath;
+    bool embed_optimized = false;
 
     uint64_t timeline;
     engine::Model cpu_data;
@@ -117,11 +121,11 @@ struct Model {
             return err;
         }
 
-        engine::model::begin_gpu_upload();
+        engine::gpu_group::begin();
         auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
         gpu_data = _gpu_data;
         indirect_draw_buffer = _indirect_draw_buffer;
-        gpu_group = engine::model::end_gpu_upload(barrier);
+        gpu_group = engine::gpu_group::end(barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
 
         return engine::Model::Ok;
     }
@@ -159,15 +163,140 @@ bool imgui_model_instance(Model::Instance& instance, glm::mat4& transform) {
         ImGui::TreePop();
     }
 
-    transform =
-        glm::translate(glm::identity<glm::mat4>(), instance.translate) *
-        glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1, 0}),
-                                instance.rotate.y, glm::vec3{1, 0, 0}),
-                    instance.rotate.z, glm::vec3{0, 0, 1}) *
-        glm::scale(glm::identity<glm::mat4>(), instance.scale);
+    transform = glm::translate(glm::identity<glm::mat4>(), instance.translate) *
+                glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1, 0}),
+                                        instance.rotate.y, glm::vec3{1, 0, 0}),
+                            instance.rotate.z, glm::vec3{0, 0, 1}) *
+                glm::scale(glm::identity<glm::mat4>(), instance.scale);
 
     return false;
 }
+
+// <model count><total instance count><external count><names size>{<is external><name metadata><name data|if <name
+// metadata> valid><instance count><instance transforms><model data size><model data> |*model count}
+// <model data> = <embedded||GLB||GLTF>(<binary embeded data> || <file path>)
+uint8_t* serialize_scene(const Model* models, uint32_t models_size, uint32_t* out_size) {
+    uint32_t total_size = sizeof(uint32_t) /* <model count> */ + sizeof(uint32_t) /* <total instance count> */ +
+                          sizeof(uint32_t) /* <external count> */ + sizeof(uint32_t) /* <names size> */ +
+                          sizeof(uint32_t) * models_size /* <name metadata>s */ +
+                          sizeof(uint32_t) * models_size /* <instance count>s */;
+    uint32_t total_instance_count = 0;
+    uint32_t names_size = 0;
+
+    for (uint32_t i = 0; i < models_size; i++) {
+        total_size += sizeof(uint8_t); // <is external>
+
+        auto& model = models[i];
+        names_size += model.name.size() + 1;
+
+        total_size += sizeof(uint8_t); // <embedded||GLB||GLTF>
+        if (model.embed_optimized) {
+            // total_size += model.cpu_data.; // <model data size>
+        } else {
+            total_size += sizeof(uint32_t);                   // <filepath size>
+            total_size += model.filepath.string().size() + 1; // <model data size>
+        }
+
+        total_instance_count += model.instances.size();
+    }
+    total_size += total_instance_count * sizeof(glm::mat4); // <instance transforms>s
+    total_size += names_size;                               // <names size>
+
+    uint8_t* out = (uint8_t*)malloc(total_size);
+
+    uint32_t offset = 0;
+    std::memcpy(out + offset, &models_size, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    std::memcpy(out + offset, &total_instance_count, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    std::memset(out + offset, 0, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    std::memcpy(out + offset, &names_size, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
+
+    for (std::size_t i = 0; i < models_size; i++) {
+        auto& model = models[i];
+
+        std::memset(out + offset, 0, sizeof(uint8_t));
+        offset += sizeof(uint8_t);
+
+        uint32_t name_size = model.name.size() + 1;
+        std::memcpy(out + offset, &name_size, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        std::memcpy(out + offset, model.name.c_str(), name_size);
+        offset += name_size;
+
+        uint32_t instance_count = model.instances.size();
+        std::memcpy(out + offset, &instance_count, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        std::memcpy(out + offset, model.instance_transforms.data(),
+                    model.instance_transforms.size() * sizeof(glm::mat4));
+        offset += model.instance_transforms.size() * sizeof(glm::mat4);
+
+        if (model.embed_optimized) {
+            std::memset(out + offset, 0, sizeof(uint8_t));
+            offset += sizeof(uint8_t);
+
+        } else {
+            uint8_t model_type = model.filepath.extension() == ".glb" ? 1 : 2;
+            std::memcpy(out + offset, &model_type, sizeof(uint8_t));
+            offset += sizeof(uint8_t);
+
+            uint32_t filepath_size = model.filepath.string().size() + 1;
+            std::memcpy(out + offset, &filepath_size, sizeof(uint32_t));
+            offset += sizeof(uint32_t);
+
+            std::memcpy(out + offset, model.filepath.c_str(), filepath_size);
+            offset += filepath_size;
+        }
+    }
+
+    printf("total size: %d\n", total_size);
+    printf("offset: %d\n", offset);
+    *out_size = total_size;
+    return out;
+}
+
+struct Scene {
+    engine::Scene cpu_data;
+
+    uint64_t timeline;
+    engine::GPUGroup gpu_group;
+    engine::GPUScene gpu_data;
+
+    glm::vec3 translate{0.0f};
+    glm::vec3 rotate{0.0f};
+    glm::vec3 scale{1.0f};
+
+    glm::mat4 transform = glm::identity<glm::mat4>();
+
+    void load(const char* path, VkBufferMemoryBarrier2* indirect_buffer_barrier,
+              VkBufferMemoryBarrier2* model_barrier) {
+        uint32_t file_size;
+        auto file = engine::util::read_file(path, &file_size);
+
+        engine::Scene::load(&cpu_data, file, file_size);
+
+        timeline = engine::transport::begin();
+        engine::gpu_group::begin();
+        engine::GPUScene::upload(&gpu_data, &cpu_data, indirect_buffer_barrier);
+        gpu_group = engine::gpu_group::end(model_barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
+        engine::transport::end();
+
+        free(file);
+    }
+
+    void destroy() {
+        cpu_data.destroy();
+        gpu_group.destroy();
+        gpu_data.destroy();
+    }
+};
 
 int main(int argc, char** argv) {
     uint32_t frames_in_flight = engine::get_frames_in_flight();
@@ -175,6 +304,8 @@ int main(int argc, char** argv) {
     std::vector<Model> models{};
     std::vector<std::vector<Model>> models_to_destroy{};
     models_to_destroy.resize(frames_in_flight);
+
+    std::vector<Scene> scenes{};
 
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
@@ -199,6 +330,28 @@ int main(int argc, char** argv) {
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
+
+    uint32_t scene_vertex_spv_size;
+    auto scene_vertex_spv_data = engine::util::read_file("scene_vertex.spv", &scene_vertex_spv_size);
+    auto scene_vertex_module = engine::create_shader({scene_vertex_spv_data, scene_vertex_spv_size});
+    free(scene_vertex_spv_data);
+
+    uint32_t scene_fragment_spv_size;
+    auto scene_fragment_spv_data = engine::util::read_file("scene_fragment.spv", &scene_fragment_spv_size);
+    auto scene_fragment_module = engine::create_shader({scene_fragment_spv_data, scene_fragment_spv_size});
+    free(scene_fragment_spv_data);
+
+    auto scene_pipeline = engine::Pipeline(engine::PipelineBuilder{}
+                                               .vertex(scene_vertex_module)
+                                               .fragment(scene_fragment_module)
+                                               .push_constant_size(ScenePushConstant::size)
+                                               .add_color_attachment(engine::swapchain_format)
+                                               .depth_format(VK_FORMAT_D16_UNORM))
+                              .depth_test(true)
+                              .depth_write(true)
+                              .depth_compare_op(engine::CompareOp::Less)
+                              .cull_mode(engine::CullMode::NoCull);
+
     engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
     VkImageView* depth_image_views = new VkImageView[frames_in_flight];
     bool depth_barriers_applied = false;
@@ -207,7 +360,9 @@ int main(int argc, char** argv) {
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
+    VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
     bool model_barrier_applied = true;
+    bool scene_indirect_buffer_barrier_applied = true;
 
     float fov = 90.0f;
     glm::vec3 look_at{0.0f};
@@ -305,13 +460,12 @@ int main(int argc, char** argv) {
                     nfdu8filteritem_t filters[1] = {
                         {"Model files", "gltf,glb,gom"},
                     };
+                    auto current_path = std::filesystem::current_path();
                     nfdopendialogu8args_t args{};
                     args.filterCount = 1;
                     args.filterList = filters;
+                    args.defaultPath = current_path.c_str();
                     NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-
-                    // nfdu8char_t* path;
-                    // auto res = NFD_OpenDialogU8_With(&path, &args);
 
                     const nfdpathset_t* paths;
                     auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
@@ -361,18 +515,61 @@ int main(int argc, char** argv) {
 
                         NFD_PathSet_FreeEnum(&enumerator);
                         NFD_PathSet_Free(paths);
-                    } else if (res != NFD_CANCEL) {
-                        printf("NFD error: %s\n", NFD_GetError());
-                        assert(false);
                     }
                 }
 
                 if (ImGui::MenuItem("Open scene")) {
-                    printf("clicked open\n");
+                    nfdu8filteritem_t filters[1] = {
+                        {"Scene file", "gos"},
+                    };
+
+                    auto current_path = std::filesystem::current_path();
+                    nfdopendialogu8args_t args{};
+                    args.filterCount = 1;
+                    args.filterList = filters;
+                    args.defaultPath = current_path.c_str();
+                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+
+                    nfdu8char_t* path;
+                    auto res = NFD_OpenDialogU8_With(&path, &args);
+                    if (res == NFD_OKAY) {
+                        scenes.emplace_back();
+
+                        model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                        model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                        scene_indirect_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+                        scene_indirect_buffer_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+                        scenes.back().load(path, &scene_indirect_buffer_barrier, &model_barrier);
+                        model_barrier_applied = false;
+                        scene_indirect_buffer_barrier_applied = false;
+
+                        NFD_FreePath(path);
+                    }
                 }
 
                 if (ImGui::MenuItem("Save scene")) {
-                    printf("clicked save\n");
+                    nfdu8filteritem_t filters[1] = {
+                        {"Scene file", "gos"},
+                    };
+
+                    auto current_path = std::filesystem::current_path();
+                    nfdsavedialogu8args_t args{};
+                    args.defaultName = "scene.gos";
+                    args.filterCount = 1;
+                    args.filterList = filters;
+                    args.defaultPath = current_path.c_str();
+                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+
+                    nfdu8char_t* path;
+                    auto res = NFD_SaveDialogU8_With(&path, &args);
+                    if (res == NFD_OKAY) {
+                        uint32_t data_size;
+                        auto data = serialize_scene(models.data(), models.size(), &data_size);
+                        engine::util::save_file(path, (uint8_t*)data, data_size);
+
+                        NFD_FreePath(path);
+                        free(data);
+                    }
                 }
 
                 ImGui::EndMenu();
@@ -382,7 +579,7 @@ int main(int argc, char** argv) {
 
         if (ImGui::Begin("Models")) {
             std::erase_if(models, [&](auto& model) {
-                ImGui::PushID(model.gpu_group.vertex_data.address());
+                ImGui::PushID(model.gpu_group.data.address());
 
                 bool open = ImGui::TreeNodeEx("##node",
                                               ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
@@ -402,6 +599,10 @@ int main(int argc, char** argv) {
 
                     return true;
                 }
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                ImGui::Checkbox("Embed", &model.embed_optimized);
 
                 if (open) {
                     ImGui::Text("file path: %s", model.filepath.c_str());
@@ -454,7 +655,7 @@ int main(int argc, char** argv) {
 
         engine::prepare_draw();
 
-        if (!depth_barriers_applied || !model_barrier_applied) {
+        if (!depth_barriers_applied || !model_barrier_applied || !scene_indirect_buffer_barrier_applied) {
             engine::synchronization::begin_barriers();
             if (!depth_barriers_applied) {
                 for (std::size_t i = 0; i < frames_in_flight; i++) {
@@ -467,6 +668,11 @@ int main(int argc, char** argv) {
                 engine::synchronization::apply_barrier(model_barrier);
 
                 model_barrier_applied = true;
+            }
+            if (!scene_indirect_buffer_barrier_applied) {
+                engine::synchronization::apply_barrier(scene_indirect_buffer_barrier);
+
+                scene_indirect_buffer_barrier_applied = true;
             }
             engine::synchronization::end_barriers();
         }
@@ -493,16 +699,48 @@ int main(int argc, char** argv) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
 
                 for (const auto& transform : model.instance_transforms) {
-                    ModelPushConstant::write(model_push_constant, model.gpu_group.vertex_data.address(),
+                    ModelPushConstant::write(model_push_constant, model.gpu_group.data.address(),
                                              model.indirect_draw_buffer.address(), cam.view_projection(), transform);
 
                     model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                         .push_constant = model_push_constant,
                         .draw_buffer = model.indirect_draw_buffer.data(),
-                        .draw_count = model.gpu_data.second - model.gpu_data.first,
+                        .draw_count = model.gpu_data.mesh_count,
                         .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
                     });
                 }
+            }
+            engine::rendering::end();
+        }
+
+        {
+            engine::rendering::begin(
+                engine::RenderPass{}
+                    .add_color_attachment(
+                        engine::RenderingAttachement{}
+                            .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                            .set_load_op(engine::LoadOp::Load)
+                            .set_store_op(engine::StoreOp::Store))
+                    .depth_attachment(engine::RenderingAttachement{}
+                                          .set_image(depth_image_views[engine::get_current_frame()],
+                                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                                          .set_load_op(engine::LoadOp::Load)
+                                          .set_store_op(engine::StoreOp::Store)));
+            uint8_t scene_push_constant[ScenePushConstant::size];
+            for (auto& scene : scenes) {
+                if (!engine::transport::is_ready(scene.timeline)) continue;
+
+                ScenePushConstant::write(scene_push_constant, scene.gpu_group.data.address(),
+                                         scene.gpu_data.draw_indirect.address(), cam.view_projection(),
+                                         glm::identity<glm::mat4>());
+
+                printf("draw count: %d\n", scene.gpu_data.draw_count);
+                scene_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                    .push_constant = scene_push_constant,
+                    .draw_buffer = scene.gpu_data.draw_indirect.data(),
+                    .draw_count = 0,
+                    .stride = sizeof(engine::GPUScene::DrawCommand),
+                });
             }
             engine::rendering::end();
         }
@@ -547,9 +785,17 @@ int main(int argc, char** argv) {
         }
     }
 
+    for (auto& scene : scenes) {
+        scene.destroy();
+    }
+
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);
     engine::destroy_shader(model_fragment_module);
+
+    scene_pipeline.destroy();
+    engine::destroy_shader(scene_vertex_module);
+    engine::destroy_shader(scene_fragment_module);
 
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         engine::GPUImageView::destroy(depth_image_views[i]);
