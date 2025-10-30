@@ -183,27 +183,27 @@ Vertex load_vertex(Offsets offs) {
 }
 
 void main() {
-    // MeshData mesh_data = read_mesh_data();
-    // Vertex vert = load_vertex(mesh_data.offsets);
-    // mat4 instance_transform = get_mesh_instance_transform();
+    MeshData mesh_data = read_mesh_data();
+    Vertex vert = load_vertex(mesh_data.offsets);
+    mat4 instance_transform = get_mesh_instance_transform();
 
-    // gl_Position = vp * m * instance_transform * mesh_data.transform * vec4(vert.pos, 1.0);
-    // f_normal = vert.normal;
-    // f_tangent = vert.tangent;
-    // f_texcoord0 = vert.texcoord0;
-    // f_texcoord1 = vert.texcoord1;
-    // f_texcoord2 = vert.texcoord2;
-    // f_texcoord3 = vert.texcoord3;
+    gl_Position = vp * m * instance_transform * mesh_data.transform * vec4(vert.pos, 1.0);
+    f_normal = vert.normal;
+    f_tangent = vert.tangent;
+    f_texcoord0 = vert.texcoord0;
+    f_texcoord1 = vert.texcoord1;
+    f_texcoord2 = vert.texcoord2;
+    f_texcoord3 = vert.texcoord3;
 
-    if (gl_VertexIndex == 0) {
-        gl_Position = vec4(5.0, 0.0, 0.0, 1.0);
-    } else if (gl_VertexIndex == 1) {
-        gl_Position = vec4(-5.0, 0.0, 0.0, 1.0);
-    } else if (gl_VertexIndex == 2) {
-        gl_Position = vec4(0.0, 0.0, 5.0, 1.0);
-    } else {
-        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-    }
-
-    gl_Position = vp * m * gl_Position;
+    // if (gl_VertexIndex == 0) {
+    //     gl_Position = vec4(5.0, 0.0, 0.0, 1.0);
+    // } else if (gl_VertexIndex == 1) {
+    //     gl_Position = vec4(-5.0, 0.0, 0.0, 1.0);
+    // } else if (gl_VertexIndex == 2) {
+    //     gl_Position = vec4(0.0, 0.0, 5.0, 1.0);
+    // } else {
+    //     gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    // }
+    //
+    // gl_Position = vp * m * gl_Position;
 }

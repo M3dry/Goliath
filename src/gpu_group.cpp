@@ -52,11 +52,12 @@ namespace engine::gpu_group {
 
         uint8_t* data = (uint8_t*)malloc(needed_data_size);
 
+        uint8_t* start_of_data = data;
         for (const auto& upload_func : upload_ptrs) {
             data = upload_func(data);
         }
 
-        transport::upload(barrier, data, needed_data_size, group.data.data(), 0);
+        transport::upload(barrier, start_of_data, needed_data_size, group.data.data(), 0);
 
         return group;
     }

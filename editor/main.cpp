@@ -727,6 +727,7 @@ int main(int argc, char** argv) {
                                           .set_load_op(engine::LoadOp::Load)
                                           .set_store_op(engine::StoreOp::Store)));
             uint8_t scene_push_constant[ScenePushConstant::size];
+            scene_pipeline.bind();
             for (auto& scene : scenes) {
                 if (!engine::transport::is_ready(scene.timeline)) continue;
 
@@ -734,11 +735,10 @@ int main(int argc, char** argv) {
                                          scene.gpu_data.draw_indirect.address(), cam.view_projection(),
                                          glm::identity<glm::mat4>());
 
-                printf("draw count: %d\n", scene.gpu_data.draw_count);
                 scene_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                     .push_constant = scene_push_constant,
                     .draw_buffer = scene.gpu_data.draw_indirect.data(),
-                    .draw_count = 0,
+                    .draw_count = scene.gpu_data.draw_count,
                     .stride = sizeof(engine::GPUScene::DrawCommand),
                 });
             }

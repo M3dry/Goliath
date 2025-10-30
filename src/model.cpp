@@ -538,6 +538,7 @@ namespace engine {
 
 namespace engine::model {
     void upload_func(uint8_t* data, uint32_t start, uint32_t size, void* ctx) {
+        const uint8_t* final_data = data + size;
         const Model* model;
         std::memcpy(&model, ctx, sizeof(void*));
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
