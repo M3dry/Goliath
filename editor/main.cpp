@@ -263,6 +263,9 @@ uint8_t* serialize_scene(const Model* models, uint32_t models_size, uint32_t* ou
 }
 
 struct Scene {
+    std::string name;
+    std::filesystem::path filepath;
+
     engine::Scene cpu_data;
 
     uint64_t timeline;
@@ -540,6 +543,10 @@ int main(int argc, char** argv) {
                         scene_indirect_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
                         scene_indirect_buffer_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
                         scenes.back().load(path, &scene_indirect_buffer_barrier, &model_barrier);
+                        std::filesystem::path path_fs = path;
+                        scenes.back().name = path_fs.stem();
+                        scenes.back().filepath = std::move(path_fs);
+
                         model_barrier_applied = false;
                         scene_indirect_buffer_barrier_applied = false;
 
@@ -627,6 +634,52 @@ int main(int argc, char** argv) {
                         i++;
                         return remove;
                     });
+
+                    ImGui::TreePop();
+                }
+
+                ImGui::PopID();
+                return false;
+            });
+        }
+        ImGui::End();
+
+        if (ImGui::Begin("Scenes")) {
+            std::erase_if(scenes, [&](auto& scene) {
+                ImGui::PushID(scene.gpu_group.data.address());
+
+                bool open = ImGui::TreeNodeEx("##node",
+                                              ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                ImGui::InputText("##name", &scene.name);
+
+                ImGui::SameLine();
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                if (ImGui::Button("Unload")) {
+                    scene.destroy();
+
+                    if (open) ImGui::TreePop();
+                    ImGui::PopID();
+                    return true;
+                }
+
+                if (open) {
+                    ImGui::DragFloat3("XYZ", glm::value_ptr(scene.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                    ImGui::DragFloat("yaw", &scene.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+                    ImGui::DragFloat("pitch", &scene.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+                    ImGui::DragFloat("roll", &scene.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+
+                    ImGui::DragFloat3("scale", glm::value_ptr(scene.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                    scene.transform = glm::translate(glm::identity<glm::mat4>(), scene.translate) *
+                                glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), scene.rotate.x, glm::vec3{0, 1, 0}),
+                                                        scene.rotate.y, glm::vec3{1, 0, 0}),
+                                            scene.rotate.z, glm::vec3{0, 0, 1}) *
+                                glm::scale(glm::identity<glm::mat4>(), scene.scale);
 
                     ImGui::TreePop();
                 }
@@ -733,7 +786,7 @@ int main(int argc, char** argv) {
 
                 ScenePushConstant::write(scene_push_constant, scene.gpu_group.data.address(),
                                          scene.gpu_data.draw_indirect.address(), cam.view_projection(),
-                                         glm::identity<glm::mat4>());
+                                         scene.transform);
 
                 scene_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                     .push_constant = scene_push_constant,
