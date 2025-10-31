@@ -207,6 +207,8 @@ namespace engine {
         features12.descriptorBindingVariableDescriptorCount = true;
         features12.shaderSampledImageArrayNonUniformIndexing = true;
         features12.descriptorBindingSampledImageUpdateAfterBind = true;
+        features12.descriptorBindingStorageImageUpdateAfterBind = true;
+        features12.descriptorBindingUniformBufferUpdateAfterBind = true;
         features12.runtimeDescriptorArray = true;
         features12.timelineSemaphore = true;
         VkPhysicalDeviceVulkan11Features features11{};

@@ -17,4 +17,5 @@ namespace engine::descriptor {
 
     void update_ubo(uint32_t binding, std::span<uint8_t> ubo);
     void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view, VkSampler sampler);
+    void update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view);
 }

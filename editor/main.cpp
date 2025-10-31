@@ -1,5 +1,6 @@
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
+#include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/gpu_group.hpp"
@@ -12,6 +13,7 @@
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
+#include "goliath/visbuffer.hpp"
 #include "imgui.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include <GLFW/glfw3.h>
@@ -313,6 +315,31 @@ int main(int argc, char** argv) {
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
 
+    VkImageMemoryBarrier2* visbuffer_barriers =
+        (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * frames_in_flight);
+    engine::visbuffer::init(visbuffer_barriers);
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        visbuffer_barriers[i].srcAccessMask = 0;
+        visbuffer_barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+        visbuffer_barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        visbuffer_barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    }
+    bool visbuffer_barriers_applied = false;
+
+    VkDescriptorSetLayoutBinding visbuffer_binding{};
+    visbuffer_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    visbuffer_binding.binding = 0;
+    visbuffer_binding.descriptorCount = 1;
+    visbuffer_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+
+    VkDescriptorSetLayoutCreateInfo visbuffer_layout_info{};
+    visbuffer_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    visbuffer_layout_info.bindingCount = 1;
+    visbuffer_layout_info.pBindings = &visbuffer_binding;
+
+    VkDescriptorSetLayout visbuffer_set_layout;
+    vkCreateDescriptorSetLayout(engine::device, &visbuffer_layout_info, nullptr, &visbuffer_set_layout);
+
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
     auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
@@ -328,7 +355,8 @@ int main(int argc, char** argv) {
                                                .fragment(model_fragment_module)
                                                .push_constant_size(ModelPushConstant::size)
                                                .add_color_attachment(engine::swapchain_format)
-                                               .depth_format(VK_FORMAT_D16_UNORM))
+                                               .depth_format(VK_FORMAT_D16_UNORM)
+                                               .descriptor_layout(2, visbuffer_set_layout))
                               .depth_test(true)
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
@@ -349,16 +377,18 @@ int main(int argc, char** argv) {
                                                .fragment(scene_fragment_module)
                                                .push_constant_size(ScenePushConstant::size)
                                                .add_color_attachment(engine::swapchain_format)
-                                               .depth_format(VK_FORMAT_D16_UNORM))
+                                               .depth_format(VK_FORMAT_D16_UNORM)
+                                               .descriptor_layout(2, visbuffer_set_layout))
                               .depth_test(true)
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
 
-    engine::GPUImage* depth_images = new engine::GPUImage[frames_in_flight];
-    VkImageView* depth_image_views = new VkImageView[frames_in_flight];
+    engine::GPUImage* depth_images = (engine::GPUImage*)malloc(sizeof(engine::GPUImage) * frames_in_flight);
+    VkImageView* depth_image_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
     bool depth_barriers_applied = false;
-    VkImageMemoryBarrier2* depth_barriers = new VkImageMemoryBarrier2[frames_in_flight];
+    VkImageMemoryBarrier2* depth_barriers =
+        (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * frames_in_flight);
 
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
 
@@ -456,281 +486,296 @@ int main(int argc, char** argv) {
             goto end_of_frame;
         }
 
-        engine::imgui::begin();
-        if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("Load model")) {
-                    nfdu8filteritem_t filters[1] = {
-                        {"Model files", "gltf,glb,gom"},
-                    };
-                    auto current_path = std::filesystem::current_path();
-                    nfdopendialogu8args_t args{};
-                    args.filterCount = 1;
-                    args.filterList = filters;
-                    args.defaultPath = current_path.c_str();
-                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+        {
+            engine::imgui::begin();
+            if (ImGui::BeginMainMenuBar()) {
+                if (ImGui::BeginMenu("File")) {
+                    if (ImGui::MenuItem("Load model")) {
+                        nfdu8filteritem_t filters[1] = {
+                            {"Model files", "gltf,glb,gom"},
+                        };
+                        auto current_path = std::filesystem::current_path();
+                        nfdopendialogu8args_t args{};
+                        args.filterCount = 1;
+                        args.filterList = filters;
+                        args.defaultPath = current_path.c_str();
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
 
-                    const nfdpathset_t* paths;
-                    auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
-                    if (res == NFD_OKAY) {
-                        nfdpathsetenum_t enumerator;
-                        NFD_PathSet_GetEnum(paths, &enumerator);
+                        const nfdpathset_t* paths;
+                        auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
+                        if (res == NFD_OKAY) {
+                            nfdpathsetenum_t enumerator;
+                            NFD_PathSet_GetEnum(paths, &enumerator);
 
-                        nfdchar_t* path;
-                        std::size_t i = 0;
+                            nfdchar_t* path;
+                            std::size_t i = 0;
 
-                        auto timeline_value = engine::transport::begin();
-                        while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                            uint32_t size;
-                            auto* file = engine::util::read_file(path, &size);
-                            std::filesystem::path file_path{path};
+                            auto timeline_value = engine::transport::begin();
+                            while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
+                                uint32_t size;
+                                auto* file = engine::util::read_file(path, &size);
+                                std::filesystem::path file_path{path};
 
-                            auto extension = file_path.extension();
+                                auto extension = file_path.extension();
+                                model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+                                model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                                Model::DataType type;
+                                if (extension == ".glb") {
+                                    type = Model::GLB;
+                                } else if (extension == ".gltf") {
+                                    type = Model::GLTF;
+                                } else if (extension == ".gom") {
+                                    type = Model::GOM;
+                                } else {
+                                    assert(false && "Wrong filetype");
+                                }
+
+                                models.emplace_back();
+                                models.back().name = file_path.stem();
+                                models.back().filepath = std::move(file_path);
+                                models.back().timeline = timeline_value;
+
+                                auto& model = models.back();
+                                auto err = model.load(type, file, size, &model_barrier);
+                                if (err != engine::Model::Ok) {
+                                    printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
+                                    assert(false);
+                                }
+
+                                free(file);
+                                NFD_PathSet_FreePath(path);
+                            }
+                            engine::transport::end();
+
+                            NFD_PathSet_FreeEnum(&enumerator);
+                            NFD_PathSet_Free(paths);
+                        }
+                    }
+
+                    if (ImGui::MenuItem("Open scene")) {
+                        nfdu8filteritem_t filters[1] = {
+                            {"Scene file", "gos"},
+                        };
+
+                        auto current_path = std::filesystem::current_path();
+                        nfdopendialogu8args_t args{};
+                        args.filterCount = 1;
+                        args.filterList = filters;
+                        args.defaultPath = current_path.c_str();
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+
+                        nfdu8char_t* path;
+                        auto res = NFD_OpenDialogU8_With(&path, &args);
+                        if (res == NFD_OKAY) {
+                            scenes.emplace_back();
+
                             model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
                             model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                            Model::DataType type;
-                            if (extension == ".glb") {
-                                type = Model::GLB;
-                            } else if (extension == ".gltf") {
-                                type = Model::GLTF;
-                            } else if (extension == ".gom") {
-                                type = Model::GOM;
-                            } else {
-                                assert(false && "Wrong filetype");
-                            }
+                            scene_indirect_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+                            scene_indirect_buffer_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+                            scenes.back().load(path, &scene_indirect_buffer_barrier, &model_barrier);
+                            std::filesystem::path path_fs = path;
+                            scenes.back().name = path_fs.stem();
+                            scenes.back().filepath = std::move(path_fs);
 
-                            models.emplace_back();
-                            models.back().name = file_path.stem();
-                            models.back().filepath = std::move(file_path);
-                            models.back().timeline = timeline_value;
+                            model_barrier_applied = false;
+                            scene_indirect_buffer_barrier_applied = false;
 
-                            auto& model = models.back();
-                            auto err = model.load(type, file, size, &model_barrier);
-                            if (err != engine::Model::Ok) {
-                                printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
-                                assert(false);
-                            }
-
-                            free(file);
-                            NFD_PathSet_FreePath(path);
+                            NFD_FreePath(path);
                         }
-                        engine::transport::end();
-
-                        NFD_PathSet_FreeEnum(&enumerator);
-                        NFD_PathSet_Free(paths);
                     }
-                }
 
-                if (ImGui::MenuItem("Open scene")) {
-                    nfdu8filteritem_t filters[1] = {
-                        {"Scene file", "gos"},
-                    };
+                    if (ImGui::MenuItem("Save scene")) {
+                        nfdu8filteritem_t filters[1] = {
+                            {"Scene file", "gos"},
+                        };
 
-                    auto current_path = std::filesystem::current_path();
-                    nfdopendialogu8args_t args{};
-                    args.filterCount = 1;
-                    args.filterList = filters;
-                    args.defaultPath = current_path.c_str();
-                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+                        auto current_path = std::filesystem::current_path();
+                        nfdsavedialogu8args_t args{};
+                        args.defaultName = "scene.gos";
+                        args.filterCount = 1;
+                        args.filterList = filters;
+                        args.defaultPath = current_path.c_str();
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
 
-                    nfdu8char_t* path;
-                    auto res = NFD_OpenDialogU8_With(&path, &args);
-                    if (res == NFD_OKAY) {
-                        scenes.emplace_back();
+                        nfdu8char_t* path;
+                        auto res = NFD_SaveDialogU8_With(&path, &args);
+                        if (res == NFD_OKAY) {
+                            uint32_t data_size;
+                            auto data = serialize_scene(models.data(), models.size(), &data_size);
+                            engine::util::save_file(path, (uint8_t*)data, data_size);
 
-                        model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                        model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                        scene_indirect_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-                        scene_indirect_buffer_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-                        scenes.back().load(path, &scene_indirect_buffer_barrier, &model_barrier);
-                        std::filesystem::path path_fs = path;
-                        scenes.back().name = path_fs.stem();
-                        scenes.back().filepath = std::move(path_fs);
-
-                        model_barrier_applied = false;
-                        scene_indirect_buffer_barrier_applied = false;
-
-                        NFD_FreePath(path);
+                            NFD_FreePath(path);
+                            free(data);
+                        }
                     }
+
+                    ImGui::EndMenu();
                 }
-
-                if (ImGui::MenuItem("Save scene")) {
-                    nfdu8filteritem_t filters[1] = {
-                        {"Scene file", "gos"},
-                    };
-
-                    auto current_path = std::filesystem::current_path();
-                    nfdsavedialogu8args_t args{};
-                    args.defaultName = "scene.gos";
-                    args.filterCount = 1;
-                    args.filterList = filters;
-                    args.defaultPath = current_path.c_str();
-                    NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-
-                    nfdu8char_t* path;
-                    auto res = NFD_SaveDialogU8_With(&path, &args);
-                    if (res == NFD_OKAY) {
-                        uint32_t data_size;
-                        auto data = serialize_scene(models.data(), models.size(), &data_size);
-                        engine::util::save_file(path, (uint8_t*)data, data_size);
-
-                        NFD_FreePath(path);
-                        free(data);
-                    }
-                }
-
-                ImGui::EndMenu();
             }
-        }
-        ImGui::EndMainMenuBar();
+            ImGui::EndMainMenuBar();
 
-        if (ImGui::Begin("Models")) {
-            std::erase_if(models, [&](auto& model) {
-                ImGui::PushID(model.gpu_group.data.address());
+            if (ImGui::Begin("Models")) {
+                std::erase_if(models, [&](auto& model) {
+                    ImGui::PushID(model.gpu_group.data.address());
 
-                bool open = ImGui::TreeNodeEx("##node",
-                                              ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+                    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap |
+                                                                ImGuiTreeNodeFlags_SpanLabelWidth);
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                ImGui::InputText("##name", &model.name);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    ImGui::InputText("##name", &model.name);
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                if (ImGui::Button("Unload")) {
-                    models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    if (ImGui::Button("Unload")) {
+                        models_to_destroy[(engine::get_current_frame() - 1) % frames_in_flight].emplace_back(model);
 
-                    if (open) ImGui::TreePop();
-                    ImGui::PopID();
-
-                    return true;
-                }
-
-                ImGui::SameLine();
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                ImGui::Checkbox("Embed", &model.embed_optimized);
-
-                if (open) {
-                    ImGui::Text("file path: %s", model.filepath.c_str());
-
-                    if (ImGui::Button("add instance")) {
-                        model.instances.emplace_back();
-                        model.instances.back().name = std::format("Instance #{}", model.last_instance_id++);
-                    }
-
-                    model.instance_transforms.clear();
-                    model.instance_transforms.resize(model.instances.size());
-                    std::size_t i = 0;
-                    std::size_t instance_counter = 0;
-                    std::erase_if(model.instances, [&](auto& instance) {
-                        ImGui::PushID(i);
-                        auto remove =
-                            imgui_model_instance(model.instances[i], model.instance_transforms[instance_counter]);
+                        if (open) ImGui::TreePop();
                         ImGui::PopID();
 
-                        if (!remove) instance_counter++;
+                        return true;
+                    }
 
-                        i++;
-                        return remove;
-                    });
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    ImGui::Checkbox("Embed", &model.embed_optimized);
 
-                    ImGui::TreePop();
-                }
+                    if (open) {
+                        ImGui::Text("file path: %s", model.filepath.c_str());
 
-                ImGui::PopID();
-                return false;
-            });
-        }
-        ImGui::End();
+                        if (ImGui::Button("add instance")) {
+                            model.instances.emplace_back();
+                            model.instances.back().name = std::format("Instance #{}", model.last_instance_id++);
+                        }
 
-        if (ImGui::Begin("Scenes")) {
-            std::erase_if(scenes, [&](auto& scene) {
-                ImGui::PushID(scene.gpu_group.data.address());
+                        model.instance_transforms.clear();
+                        model.instance_transforms.resize(model.instances.size());
+                        std::size_t i = 0;
+                        std::size_t instance_counter = 0;
+                        std::erase_if(model.instances, [&](auto& instance) {
+                            ImGui::PushID(i);
+                            auto remove =
+                                imgui_model_instance(model.instances[i], model.instance_transforms[instance_counter]);
+                            ImGui::PopID();
 
-                bool open = ImGui::TreeNodeEx("##node",
-                                              ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+                            if (!remove) instance_counter++;
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                ImGui::InputText("##name", &scene.name);
+                            i++;
+                            return remove;
+                        });
 
-                ImGui::SameLine();
-                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                if (ImGui::Button("Unload")) {
-                    scene.destroy();
+                        ImGui::TreePop();
+                    }
 
-                    if (open) ImGui::TreePop();
                     ImGui::PopID();
-                    return true;
+                    return false;
+                });
+            }
+            ImGui::End();
+
+            if (ImGui::Begin("Scenes")) {
+                std::erase_if(scenes, [&](auto& scene) {
+                    ImGui::PushID(scene.gpu_group.data.address());
+
+                    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap |
+                                                                ImGuiTreeNodeFlags_SpanLabelWidth);
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    ImGui::InputText("##name", &scene.name);
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    if (ImGui::Button("Unload")) {
+                        scene.destroy();
+
+                        if (open) ImGui::TreePop();
+                        ImGui::PopID();
+                        return true;
+                    }
+
+                    if (open) {
+                        ImGui::DragFloat3("XYZ", glm::value_ptr(scene.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                        ImGui::DragFloat("yaw", &scene.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+                        ImGui::DragFloat("pitch", &scene.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+                        ImGui::DragFloat("roll", &scene.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+
+                        ImGui::DragFloat3("scale", glm::value_ptr(scene.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                        scene.transform = glm::translate(glm::identity<glm::mat4>(), scene.translate) *
+                                          glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(),
+                                                                              scene.rotate.x, glm::vec3{0, 1, 0}),
+                                                                  scene.rotate.y, glm::vec3{1, 0, 0}),
+                                                      scene.rotate.z, glm::vec3{0, 0, 1}) *
+                                          glm::scale(glm::identity<glm::mat4>(), scene.scale);
+
+                        ImGui::TreePop();
+                    }
+
+                    ImGui::PopID();
+                    return false;
+                });
+            }
+            ImGui::End();
+
+            if (ImGui::Begin("Window")) {
+                ImGui::SeparatorText("Camera");
+                ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
+                ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
+                ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
+                ImGui::DragFloat3("look at", glm::value_ptr(look_at), 0.1f);
+                if (ImGui::Button("update look at")) {
+                    cam.look_at(look_at);
+                    cam.update_matrices();
+                }
+                ImGui::Text("lock cam: %b", lock_cam);
+            }
+
+            ImGui::End();
+            engine::imgui::end();
+
+            engine::prepare_draw();
+
+            if (!visbuffer_barriers_applied || !depth_barriers_applied || !model_barrier_applied ||
+                !scene_indirect_buffer_barrier_applied) {
+                engine::synchronization::begin_barriers();
+                if (!visbuffer_barriers_applied) {
+                    for (std::size_t i = 0; i < frames_in_flight; i++) {
+                        engine::synchronization::apply_barrier(visbuffer_barriers[i]);
+                    }
+
+                    visbuffer_barriers_applied = true;
                 }
 
-                if (open) {
-                    ImGui::DragFloat3("XYZ", glm::value_ptr(scene.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+                if (!depth_barriers_applied) {
+                    for (std::size_t i = 0; i < frames_in_flight; i++) {
+                        engine::synchronization::apply_barrier(depth_barriers[i]);
+                    }
 
-                    ImGui::DragFloat("yaw", &scene.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-                    ImGui::DragFloat("pitch", &scene.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-                    ImGui::DragFloat("roll", &scene.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
-
-                    ImGui::DragFloat3("scale", glm::value_ptr(scene.scale), 0.1f, 0.0f, 0.0f, "%.2f");
-
-                    scene.transform = glm::translate(glm::identity<glm::mat4>(), scene.translate) *
-                                glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), scene.rotate.x, glm::vec3{0, 1, 0}),
-                                                        scene.rotate.y, glm::vec3{1, 0, 0}),
-                                            scene.rotate.z, glm::vec3{0, 0, 1}) *
-                                glm::scale(glm::identity<glm::mat4>(), scene.scale);
-
-                    ImGui::TreePop();
+                    depth_barriers_applied = true;
                 }
+                if (!model_barrier_applied) {
+                    engine::synchronization::apply_barrier(model_barrier);
 
-                ImGui::PopID();
-                return false;
-            });
-        }
-        ImGui::End();
-
-        if (ImGui::Begin("Window")) {
-            ImGui::SeparatorText("Camera");
-            ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
-            ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
-            ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
-            ImGui::DragFloat3("look at", glm::value_ptr(look_at), 0.1f);
-            if (ImGui::Button("update look at")) {
-                cam.look_at(look_at);
-                cam.update_matrices();
-            }
-            ImGui::Text("lock cam: %b", lock_cam);
-        }
-
-        ImGui::End();
-        engine::imgui::end();
-
-        engine::prepare_draw();
-
-        if (!depth_barriers_applied || !model_barrier_applied || !scene_indirect_buffer_barrier_applied) {
-            engine::synchronization::begin_barriers();
-            if (!depth_barriers_applied) {
-                for (std::size_t i = 0; i < frames_in_flight; i++) {
-                    engine::synchronization::apply_barrier(depth_barriers[i]);
+                    model_barrier_applied = true;
                 }
+                if (!scene_indirect_buffer_barrier_applied) {
+                    engine::synchronization::apply_barrier(scene_indirect_buffer_barrier);
 
-                depth_barriers_applied = true;
+                    scene_indirect_buffer_barrier_applied = true;
+                }
+                engine::synchronization::end_barriers();
             }
-            if (!model_barrier_applied) {
-                engine::synchronization::apply_barrier(model_barrier);
 
-                model_barrier_applied = true;
-            }
-            if (!scene_indirect_buffer_barrier_applied) {
-                engine::synchronization::apply_barrier(scene_indirect_buffer_barrier);
+            auto visbuffer_descriptor_id = engine::descriptor::new_set(visbuffer_set_layout);
+            engine::descriptor::begin_update(visbuffer_descriptor_id);
+            engine::visbuffer::bind(0);
+            engine::descriptor::end_update();
 
-                scene_indirect_buffer_barrier_applied = true;
-            }
-            engine::synchronization::end_barriers();
-        }
-
-        {
             engine::rendering::begin(
                 engine::RenderPass{}
                     .add_color_attachment(
@@ -757,6 +802,12 @@ int main(int argc, char** argv) {
 
                     model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                         .push_constant = model_push_constant,
+                        .descriptor_indexes =
+                            {
+                                engine::descriptor::null_set,
+                                engine::descriptor::null_set,
+                                visbuffer_descriptor_id,
+                            },
                         .draw_buffer = model.indirect_draw_buffer.data(),
                         .draw_count = model.gpu_data.mesh_count,
                         .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
@@ -764,9 +815,9 @@ int main(int argc, char** argv) {
                 }
             }
             engine::rendering::end();
-        }
 
-        {
+            // TODO:  should do sync here for depth and vis buffer? Also maybe pass in the vis buffer as an attachement?
+
             engine::rendering::begin(
                 engine::RenderPass{}
                     .add_color_attachment(
@@ -790,21 +841,27 @@ int main(int argc, char** argv) {
 
                 scene_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
                     .push_constant = scene_push_constant,
+                    .descriptor_indexes =
+                        {
+                            engine::descriptor::null_set,
+                            engine::descriptor::null_set,
+                            visbuffer_descriptor_id,
+                        },
                     .draw_buffer = scene.gpu_data.draw_indirect.data(),
                     .draw_count = scene.gpu_data.draw_count,
                     .stride = sizeof(engine::GPUScene::DrawCommand),
                 });
             }
             engine::rendering::end();
-        }
 
-        engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
-            engine::RenderingAttachement{}
-                .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                .set_load_op(engine::LoadOp::Load)
-                .set_store_op(engine::StoreOp::Store)));
-        engine::imgui::render();
-        engine::rendering::end();
+            engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
+                engine::RenderingAttachement{}
+                    .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                    .set_load_op(engine::LoadOp::Load)
+                    .set_store_op(engine::StoreOp::Store)));
+            engine::imgui::render();
+            engine::rendering::end();
+        }
 
     end_of_frame:
         for (auto& model : models_to_destroy[engine::get_current_frame()]) {
@@ -822,6 +879,16 @@ int main(int argc, char** argv) {
 
             model_pipeline.update_viewport_to_swapchain();
             model_pipeline.update_scissor_to_viewport();
+
+            engine::visbuffer::destroy();
+            engine::visbuffer::init(visbuffer_barriers);
+            for (std::size_t i = 0; i < frames_in_flight; i++) {
+                visbuffer_barriers[i].srcAccessMask = 0;
+                visbuffer_barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                visbuffer_barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                visbuffer_barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            }
+            visbuffer_barriers_applied = false;
         }
     }
 
@@ -842,6 +909,7 @@ int main(int argc, char** argv) {
         scene.destroy();
     }
 
+    vkDestroyDescriptorSetLayout(engine::device, visbuffer_set_layout, nullptr);
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);
     engine::destroy_shader(model_fragment_module);
@@ -854,8 +922,11 @@ int main(int argc, char** argv) {
         engine::GPUImageView::destroy(depth_image_views[i]);
         depth_images[i].destroy();
     }
-    delete[] depth_images;
+    free(depth_images);
+    free(depth_image_views);
+    free(depth_barriers);
 
+    engine::visbuffer::destroy();
     engine::destroy();
     return 0;
 }

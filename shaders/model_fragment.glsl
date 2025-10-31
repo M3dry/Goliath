@@ -22,6 +22,7 @@ layout(push_constant, std430) uniform Push {
     mat4 m;
 };
 
+layout(set = 2, binding = 0, rgba32f) uniform image2D vis_buffer;
 layout(set = 3, binding = 0) uniform sampler2D textures[];
 
 layout(location = 0) in vec3 f_position;

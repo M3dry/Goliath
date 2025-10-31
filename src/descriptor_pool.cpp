@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <vulkan/vulkan_core.h>
 
 namespace engine {
     DescriptorPool::DescriptorPool() {
@@ -96,6 +97,7 @@ namespace engine {
                     write.pBufferInfo = &write_buffer_infos[(std::size_t)write.pBufferInfo];
                     break;
                 case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
                     write.pImageInfo = &write_image_infos[(std::size_t)write.pImageInfo];
                     break;
                 default: continue;
@@ -156,6 +158,26 @@ namespace engine {
         write_queue.emplace_back(write);
     }
 
+    void DescriptorPool::update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view) {
+        assert(write_id != (uint64_t)-1);
+
+        VkDescriptorImageInfo image_info{};
+        image_info.imageLayout = layout;
+        image_info.imageView = view;
+
+        write_image_infos.emplace_back(image_info);
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.descriptorCount = 1;
+        write.pImageInfo = (VkDescriptorImageInfo*)(write_image_infos.size() - 1);
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        write.dstSet = sets[write_id];
+        write.dstBinding = binding;
+
+        write_queue.emplace_back(write);
+    }
+
     void DescriptorPool::clear() {
         VK_CHECK(vkResetDescriptorPool(device, pool, 0));
 
@@ -193,5 +215,9 @@ namespace engine::descriptor {
 
     void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view, VkSampler sampler) {
         get_frame_descriptor_pool().update_sampled_image(binding, layout, view, sampler);
+    }
+
+    void update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view) {
+        get_frame_descriptor_pool().update_storage_image(binding, layout, view);
     }
 }
