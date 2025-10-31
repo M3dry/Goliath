@@ -1,5 +1,6 @@
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
+#include "goliath/compute.hpp"
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
@@ -43,35 +44,48 @@
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
                   uint32_t frames_in_flight) {
-    int width, height;
-    glfwGetFramebufferSize(engine::window, &width, &height);
-
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         auto [depth_img, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
-                                                                 .image_type(VK_IMAGE_TYPE_2D)
                                                                  .format(VK_FORMAT_D16_UNORM)
-                                                                 .width((uint32_t)width)
-                                                                 .height((uint32_t)height)
-                                                                 .layer_count(1)
                                                                  .extent(VkExtent3D{
-                                                                     .width = (uint32_t)width,
-                                                                     .height = (uint32_t)height,
+                                                                     .width = engine::swapchain_extent.width,
+                                                                     .height = engine::swapchain_extent.height,
                                                                      .depth = 1,
                                                                  })
                                                                  .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
                                                                  .new_layout(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
-                                                                 .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-                                                                 .size((uint32_t)(width * height * 2)));
+                                                                 .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
 
         barrier.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         barrier.dstAccessMask =
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         images[i] = depth_img;
         barriers[i] = barrier;
-        image_views[i] = engine::GPUImageView{images[i]}
-                             .view_type(VK_IMAGE_VIEW_TYPE_2D)
-                             .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
-                             .create();
+        image_views[i] = engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT).create();
+    }
+}
+
+void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
+                   uint32_t frames_in_flight) {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        auto [target_img, barrier] =
+            engine::GPUImage::upload(engine::GPUImageInfo{}
+                                         .format(VK_FORMAT_R32G32B32A32_SFLOAT)
+                                         .extent(VkExtent3D{
+                                             .width = engine::swapchain_extent.width,
+                                             .height = engine::swapchain_extent.height,
+                                             .depth = 1,
+                                         })
+                                         .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                         .new_layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                         .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        images[i] = target_img;
+        barriers[i] = barrier;
+        image_views[i] = engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
     }
 }
 
@@ -326,20 +340,6 @@ int main(int argc, char** argv) {
     }
     bool visbuffer_barriers_applied = false;
 
-    VkDescriptorSetLayoutBinding visbuffer_binding{};
-    visbuffer_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    visbuffer_binding.binding = 0;
-    visbuffer_binding.descriptorCount = 1;
-    visbuffer_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-
-    VkDescriptorSetLayoutCreateInfo visbuffer_layout_info{};
-    visbuffer_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    visbuffer_layout_info.bindingCount = 1;
-    visbuffer_layout_info.pBindings = &visbuffer_binding;
-
-    VkDescriptorSetLayout visbuffer_set_layout;
-    vkCreateDescriptorSetLayout(engine::device, &visbuffer_layout_info, nullptr, &visbuffer_set_layout);
-
     uint32_t model_vertex_spv_size;
     auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
     auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
@@ -350,13 +350,13 @@ int main(int argc, char** argv) {
     auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
     free(model_fragment_spv_data);
 
-    auto model_pipeline = engine::Pipeline(engine::PipelineBuilder{}
-                                               .vertex(model_vertex_module)
-                                               .fragment(model_fragment_module)
-                                               .push_constant_size(ModelPushConstant::size)
-                                               .add_color_attachment(engine::swapchain_format)
-                                               .depth_format(VK_FORMAT_D16_UNORM)
-                                               .descriptor_layout(2, visbuffer_set_layout))
+    auto model_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
+                                                       .vertex(model_vertex_module)
+                                                       .fragment(model_fragment_module)
+                                                       .push_constant_size(ModelPushConstant::size)
+                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
+                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
+                                                       .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
@@ -372,17 +372,50 @@ int main(int argc, char** argv) {
     auto scene_fragment_module = engine::create_shader({scene_fragment_spv_data, scene_fragment_spv_size});
     free(scene_fragment_spv_data);
 
-    auto scene_pipeline = engine::Pipeline(engine::PipelineBuilder{}
-                                               .vertex(scene_vertex_module)
-                                               .fragment(scene_fragment_module)
-                                               .push_constant_size(ScenePushConstant::size)
-                                               .add_color_attachment(engine::swapchain_format)
-                                               .depth_format(VK_FORMAT_D16_UNORM)
-                                               .descriptor_layout(2, visbuffer_set_layout))
+    auto scene_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
+                                                       .vertex(scene_vertex_module)
+                                                       .fragment(scene_fragment_module)
+                                                       .push_constant_size(ScenePushConstant::size)
+                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
+                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
+                                                       .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
+
+    VkDescriptorSetLayoutBinding pp_bindings[2]{};
+    pp_bindings[0].binding = 0;
+    pp_bindings[0].descriptorCount = 1;
+    pp_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    pp_bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pp_bindings[1].binding = 1;
+    pp_bindings[1].descriptorCount = 1;
+    pp_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    pp_bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo pp_set_layout_info{};
+    pp_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    pp_set_layout_info.bindingCount = 2;
+    pp_set_layout_info.pBindings = pp_bindings;
+
+    VkDescriptorSetLayout postprocessing_set_layout;
+    vkCreateDescriptorSetLayout(engine::device, &pp_set_layout_info, nullptr, &postprocessing_set_layout);
+
+    uint32_t postprocessing_spv_size;
+    auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
+    auto postprocessing_module = engine::create_shader({postprocessing_spv_data, postprocessing_spv_size});
+    free(postprocessing_spv_data);
+
+    auto postprocessing_pipeline = engine::ComputePipeline(
+        engine::ComputePipelineBuilder{}.shader(postprocessing_module).descriptor_layout(0, postprocessing_set_layout));
+
+    // uint32_t debug_visbuffer_spv_size;
+    // auto debug_visbuffer_spv_data = engine::util::read_file("debug_visbuffer.spv", &debug_visbuffer_spv_size);
+    // auto debug_visbuffer_module = engine::create_shader({debug_visbuffer_spv_data, debug_visbuffer_spv_size});
+    // free(debug_visbuffer_spv_data);
+    //
+    // auto debug_visbuffer_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{});
 
     engine::GPUImage* depth_images = (engine::GPUImage*)malloc(sizeof(engine::GPUImage) * frames_in_flight);
     VkImageView* depth_image_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
@@ -391,6 +424,14 @@ int main(int argc, char** argv) {
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * frames_in_flight);
 
     update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
+
+    engine::GPUImage* target_images = (engine::GPUImage*)malloc(sizeof(engine::GPUImage) * frames_in_flight);
+    VkImageView* target_image_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
+    bool target_barriers_applied = false;
+    VkImageMemoryBarrier2* target_barriers =
+        (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * frames_in_flight);
+
+    update_target(target_images, target_image_views, target_barriers, frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
@@ -740,8 +781,8 @@ int main(int argc, char** argv) {
 
             engine::prepare_draw();
 
-            if (!visbuffer_barriers_applied || !depth_barriers_applied || !model_barrier_applied ||
-                !scene_indirect_buffer_barrier_applied) {
+            if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
+                !model_barrier_applied || !scene_indirect_buffer_barrier_applied) {
                 engine::synchronization::begin_barriers();
                 if (!visbuffer_barriers_applied) {
                     for (std::size_t i = 0; i < frames_in_flight; i++) {
@@ -750,10 +791,16 @@ int main(int argc, char** argv) {
 
                     visbuffer_barriers_applied = true;
                 }
-
                 if (!depth_barriers_applied) {
                     for (std::size_t i = 0; i < frames_in_flight; i++) {
                         engine::synchronization::apply_barrier(depth_barriers[i]);
+                    }
+
+                    depth_barriers_applied = true;
+                }
+                if (!target_barriers_applied) {
+                    for (std::size_t i = 0; i < frames_in_flight; i++) {
+                        engine::synchronization::apply_barrier(target_barriers[i]);
                     }
 
                     depth_barriers_applied = true;
@@ -771,19 +818,16 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
-            auto visbuffer_descriptor_id = engine::descriptor::new_set(visbuffer_set_layout);
-            engine::descriptor::begin_update(visbuffer_descriptor_id);
-            engine::visbuffer::bind(0);
-            engine::descriptor::end_update();
-
             engine::rendering::begin(
                 engine::RenderPass{}
+                    .add_color_attachment(engine::RenderingAttachement{}
+                                              .set_image(target_image_views[engine::get_current_frame()],
+                                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                              .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
+                                              .set_load_op(engine::LoadOp::Clear)
+                                              .set_store_op(engine::StoreOp::Store))
                     .add_color_attachment(
-                        engine::RenderingAttachement{}
-                            .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                            .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                            .set_load_op(engine::LoadOp::Clear)
-                            .set_store_op(engine::StoreOp::Store))
+                        engine::visbuffer::attach().set_load_op(engine::LoadOp::Clear).set_clear_color(glm::vec4{0.0f}))
                     .depth_attachment(engine::RenderingAttachement{}
                                           .set_image(depth_image_views[engine::get_current_frame()],
                                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
@@ -800,36 +844,15 @@ int main(int argc, char** argv) {
                     ModelPushConstant::write(model_push_constant, model.gpu_group.data.address(),
                                              model.indirect_draw_buffer.address(), cam.view_projection(), transform);
 
-                    model_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                    model_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
                         .push_constant = model_push_constant,
-                        .descriptor_indexes =
-                            {
-                                engine::descriptor::null_set,
-                                engine::descriptor::null_set,
-                                visbuffer_descriptor_id,
-                            },
                         .draw_buffer = model.indirect_draw_buffer.data(),
                         .draw_count = model.gpu_data.mesh_count,
                         .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
                     });
                 }
             }
-            engine::rendering::end();
 
-            // TODO:  should do sync here for depth and vis buffer? Also maybe pass in the vis buffer as an attachement?
-
-            engine::rendering::begin(
-                engine::RenderPass{}
-                    .add_color_attachment(
-                        engine::RenderingAttachement{}
-                            .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                            .set_load_op(engine::LoadOp::Load)
-                            .set_store_op(engine::StoreOp::Store))
-                    .depth_attachment(engine::RenderingAttachement{}
-                                          .set_image(depth_image_views[engine::get_current_frame()],
-                                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
-                                          .set_load_op(engine::LoadOp::Load)
-                                          .set_store_op(engine::StoreOp::Store)));
             uint8_t scene_push_constant[ScenePushConstant::size];
             scene_pipeline.bind();
             for (auto& scene : scenes) {
@@ -839,20 +862,157 @@ int main(int argc, char** argv) {
                                          scene.gpu_data.draw_indirect.address(), cam.view_projection(),
                                          scene.transform);
 
-                scene_pipeline.draw_indirect(engine::Pipeline::DrawIndirectParams{
+                scene_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
                     .push_constant = scene_push_constant,
-                    .descriptor_indexes =
-                        {
-                            engine::descriptor::null_set,
-                            engine::descriptor::null_set,
-                            visbuffer_descriptor_id,
-                        },
                     .draw_buffer = scene.gpu_data.draw_indirect.data(),
                     .draw_count = scene.gpu_data.draw_count,
                     .stride = sizeof(engine::GPUScene::DrawCommand),
                 });
             }
             engine::rendering::end();
+
+            VkImageMemoryBarrier2 target_barrier{};
+            target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            target_barrier.pNext = nullptr;
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            target_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            target_barrier.image = target_images[engine::get_current_frame()].image;
+            target_barrier.subresourceRange = VkImageSubresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            VkImageMemoryBarrier2 visbuffer_barrier{};
+            engine::visbuffer::barrier(&visbuffer_barrier);
+            visbuffer_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            visbuffer_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            visbuffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            visbuffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            visbuffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(visbuffer_barrier);
+            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::end_barriers();
+
+            auto pp_set = engine::descriptor::new_set(postprocessing_set_layout);
+            engine::descriptor::begin_update(pp_set);
+            engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
+                                                     target_image_views[engine::get_current_frame()]);
+            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL,
+                                                     engine::visbuffer::get_view());
+            engine::descriptor::end_update();
+
+            postprocessing_pipeline.bind();
+            postprocessing_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .descriptor_indexes =
+                    {
+                        pp_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                    },
+                .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_z = 1,
+            });
+
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_NONE;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            VkImageMemoryBarrier2 swapchain_barrier{};
+            swapchain_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            swapchain_barrier.pNext = nullptr;
+            swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            swapchain_barrier.image = engine::get_swapchain();
+            swapchain_barrier.subresourceRange = VkImageSubresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            swapchain_barrier.dstAccessMask = VK_ACCESS_2_NONE;
+            swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(swapchain_barrier);
+            engine::synchronization::end_barriers();
+
+            VkImageBlit2 blit_region{};
+            blit_region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+            blit_region.srcOffsets[0] = VkOffset3D{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            };
+            blit_region.srcOffsets[1] = VkOffset3D{
+                .x = (int32_t)engine::swapchain_extent.width,
+                .y = (int32_t)engine::swapchain_extent.height,
+                .z = 1,
+            };
+            blit_region.srcSubresource = VkImageSubresourceLayers{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            blit_region.dstOffsets[0] = VkOffset3D{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            };
+            blit_region.dstOffsets[1] = VkOffset3D{
+                .x = (int32_t)engine::swapchain_extent.width,
+                .y = (int32_t)engine::swapchain_extent.height,
+                .z = 1,
+            };
+            blit_region.dstSubresource = VkImageSubresourceLayers{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            VkBlitImageInfo2 blit_info{};
+            blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+            blit_info.srcImage = target_images[engine::get_current_frame()].image;
+            blit_info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            blit_info.dstImage = engine::get_swapchain();
+            blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            blit_info.filter = VK_FILTER_NEAREST;
+            blit_info.regionCount = 1;
+            blit_info.pRegions = &blit_region;
+            vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+
+            swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            swapchain_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(swapchain_barrier);
+            engine::synchronization::end_barriers();
 
             engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
                 engine::RenderingAttachement{}
@@ -861,6 +1021,25 @@ int main(int argc, char** argv) {
                     .set_store_op(engine::StoreOp::Store)));
             engine::imgui::render();
             engine::rendering::end();
+
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            target_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            visbuffer_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            visbuffer_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            visbuffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+            visbuffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            visbuffer_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            visbuffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(visbuffer_barrier);
+            engine::synchronization::end_barriers();
         }
 
     end_of_frame:
@@ -873,9 +1052,16 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
                 engine::GPUImageView::destroy(depth_image_views[i]);
                 depth_images[i].destroy();
+
+                engine::GPUImageView::destroy(target_image_views[i]);
+                target_images[i].destroy();
             }
+
             update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
             depth_barriers_applied = false;
+
+            update_target(target_images, target_image_views, target_barriers, frames_in_flight);
+            target_barriers_applied = false;
 
             model_pipeline.update_viewport_to_swapchain();
             model_pipeline.update_scissor_to_viewport();
@@ -909,7 +1095,6 @@ int main(int argc, char** argv) {
         scene.destroy();
     }
 
-    vkDestroyDescriptorSetLayout(engine::device, visbuffer_set_layout, nullptr);
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);
     engine::destroy_shader(model_fragment_module);
@@ -918,13 +1103,24 @@ int main(int argc, char** argv) {
     engine::destroy_shader(scene_vertex_module);
     engine::destroy_shader(scene_fragment_module);
 
+    vkDestroyDescriptorSetLayout(engine::device, postprocessing_set_layout, nullptr);
+    postprocessing_pipeline.destroy();
+    engine::destroy_shader(postprocessing_module);
+
+    // debug_visbuffer_pipeline.destroy();
+    // engine::destroy_shader(debug_visbuffer_module);
+
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         engine::GPUImageView::destroy(depth_image_views[i]);
         depth_images[i].destroy();
+
+        engine::GPUImageView::destroy(target_image_views[i]);
+        target_images[i].destroy();
     }
-    free(depth_images);
-    free(depth_image_views);
-    free(depth_barriers);
+
+    free(target_images);
+    free(target_image_views);
+    free(target_barriers);
 
     engine::visbuffer::destroy();
     engine::destroy();

@@ -39,6 +39,7 @@ SET(ENGINE_SOURCES
     scene.cpp
     gpu_group.cpp
     visbuffer.cpp
+    compute.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

@@ -189,6 +189,19 @@ namespace engine {
 }
 
 namespace engine::descriptor {
+    VkDescriptorSetLayout empty_set;
+
+    void create_empty_set() {
+        VkDescriptorSetLayoutCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &info, nullptr, &empty_set));
+    }
+
+    void destroy_empty_set() {
+        vkDestroyDescriptorSetLayout(device, empty_set, nullptr);
+    }
+
     uint64_t new_set(VkDescriptorSetLayout layout) {
         return get_frame_descriptor_pool().new_set(layout);
     }

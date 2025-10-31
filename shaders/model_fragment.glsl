@@ -22,7 +22,6 @@ layout(push_constant, std430) uniform Push {
     mat4 m;
 };
 
-layout(set = 2, binding = 0, rgba32f) uniform image2D vis_buffer;
 layout(set = 3, binding = 0) uniform sampler2D textures[];
 
 layout(location = 0) in vec3 f_position;
@@ -34,6 +33,7 @@ layout(location = 5) in vec2 f_texcoord2;
 layout(location = 6) in vec2 f_texcoord3;
 
 layout(location = 0) out vec4 frag_color;
+layout(location = 1) out uvec4 vis_buffer;
 
 void main() {
     frag_color = vec4(f_texcoord0, 0.0, 1.0);

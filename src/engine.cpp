@@ -1,7 +1,6 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
-#include "rendering_.hpp"
 #include "texture_pool_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -215,6 +214,7 @@ namespace engine {
         features11.shaderDrawParameters = true;
         VkPhysicalDeviceFeatures features{};
         features.multiDrawIndirect = true;
+        features.independentBlend = true;
 
         auto physical_device_selected = vkb::PhysicalDeviceSelector{vkb_inst}
                                             .set_minimum_version(1, 3)
@@ -270,7 +270,7 @@ namespace engine {
         texture_pool::init(max_texture_count);
         imgui::init();
         event::register_glfw_callbacks();
-        rendering::create_empty_set();
+        descriptor::create_empty_set();
 
         glfwShowWindow(window);
     };
@@ -278,7 +278,7 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
-        rendering::destroy_empty_set();
+        descriptor::destroy_empty_set();
         imgui::destroy();
         texture_pool::destroy();
         transport::destroy();

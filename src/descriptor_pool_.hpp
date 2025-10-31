@@ -51,3 +51,8 @@ namespace engine {
         std::vector<VkWriteDescriptorSet> write_queue;
     };
 }
+
+namespace engine::descriptor {
+    void create_empty_set();
+    void destroy_empty_set();
+}

@@ -7,21 +7,6 @@
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
-namespace engine::rendering {
-    VkDescriptorSetLayout empty_set;
-
-    void create_empty_set() {
-        VkDescriptorSetLayoutCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-
-        vkCreateDescriptorSetLayout(device, &info, nullptr, &empty_set);
-    }
-
-    void destroy_empty_set() {
-        vkDestroyDescriptorSetLayout(device, empty_set, nullptr);
-    }
-}
-
 engine::RenderPass::RenderPass() {
     _info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     _info.pNext = nullptr;
@@ -53,19 +38,20 @@ void engine::destroy_shader(VkShaderModule shader) {
     vkDestroyShaderModule(device, shader, nullptr);
 }
 
-engine::PipelineBuilder::PipelineBuilder() {
-    _set_layout[0] = rendering::empty_set;
-    _set_layout[1] = rendering::empty_set;
-    _set_layout[2] = rendering::empty_set;
+engine::GraphicsPipelineBuilder::GraphicsPipelineBuilder() {
+    _set_layout[0] = descriptor::empty_set;
+    _set_layout[1] = descriptor::empty_set;
+    _set_layout[2] = descriptor::empty_set;
     _set_layout[3] = texture_pool::set_layout;
 }
 
-engine::PipelineBuilder&& engine::PipelineBuilder::clear_descriptor(uint32_t index) {
-    _set_layout[index] = rendering::empty_set;
+engine::GraphicsPipelineBuilder&& engine::GraphicsPipelineBuilder::clear_descriptor(uint32_t index) {
+    _set_layout[index] = descriptor::empty_set;
     return std::move(*this);
 }
 
-engine::Pipeline::Pipeline(const engine::PipelineBuilder& builder) : _push_constant_size(builder._push_constant_size) {
+engine::GraphicsPipeline::GraphicsPipeline(const engine::GraphicsPipelineBuilder& builder)
+    : _push_constant_size(builder._push_constant_size) {
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -137,7 +123,7 @@ engine::Pipeline::Pipeline(const engine::PipelineBuilder& builder) : _push_const
     layout_info.pSetLayouts = builder._set_layout;
     layout_info.pushConstantRangeCount = builder._push_constant_size == 0 ? 0 : 1;
     layout_info.pPushConstantRanges = &push_constant_range;
-    vkCreatePipelineLayout(device, &layout_info, nullptr, &_pipeline_layout);
+    VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &_pipeline_layout));
 
     VkPipelineRenderingCreateInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -162,13 +148,13 @@ engine::Pipeline::Pipeline(const engine::PipelineBuilder& builder) : _push_const
     info.pDynamicState = &dynamic_state;
     info.layout = _pipeline_layout;
 
-    vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &_pipeline);
+    VK_CHECK(vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &_pipeline));
 
     update_viewport_to_swapchain();
     update_scissor_to_viewport();
 }
 
-void engine::Pipeline::bind() {
+void engine::GraphicsPipeline::bind() {
     auto cmd_buf = get_cmd_buf();
 
     vkCmdSetPrimitiveTopologyEXT(cmd_buf, static_cast<VkPrimitiveTopology>(_topology));
@@ -202,7 +188,7 @@ void engine::Pipeline::bind() {
     vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
 }
 
-void engine::Pipeline::draw(const DrawParams& params) {
+void engine::GraphicsPipeline::draw(const DrawParams& params) {
     auto cmd_buf = get_cmd_buf();
     auto& descriptor_pool = get_frame_descriptor_pool();
 
@@ -214,7 +200,6 @@ void engine::Pipeline::draw(const DrawParams& params) {
     for (uint32_t i = 0; i < 3; i++) {
         if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
 
-        printf("binding descritor[%u] to %lu\n", i, params.descriptor_indexes[i]);
         descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  _pipeline_layout, i);
     }
@@ -223,7 +208,7 @@ void engine::Pipeline::draw(const DrawParams& params) {
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
 }
 
-void engine::Pipeline::draw_indirect(const DrawIndirectParams& params) {
+void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
     auto cmd_buf = get_cmd_buf();
     auto& descriptor_pool = get_frame_descriptor_pool();
 
@@ -235,7 +220,6 @@ void engine::Pipeline::draw_indirect(const DrawIndirectParams& params) {
     for (uint32_t i = 0; i < 3; i++) {
         if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
 
-        printf("binding descritor[%u] to %lu\n", i, params.descriptor_indexes[i]);
         descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  _pipeline_layout, i);
     }
@@ -244,7 +228,7 @@ void engine::Pipeline::draw_indirect(const DrawIndirectParams& params) {
     vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);
 }
 
-void engine::Pipeline::destroy() {
+void engine::GraphicsPipeline::destroy() {
     vkDestroyPipeline(device, _pipeline, nullptr);
     vkDestroyPipelineLayout(device, _pipeline_layout, nullptr);
 }
