@@ -186,6 +186,10 @@ namespace engine {
 
         ubo_offset = 0;
     }
+
+    void destroy_descriptor_set_layout(VkDescriptorSetLayout set_layout) {
+        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
+    }
 }
 
 namespace engine::descriptor {

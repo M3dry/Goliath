@@ -200,6 +200,9 @@ engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& mod
     out->bounding_box = aabb;
     model_aabb.extend(aabb);
 
+    // TODO: PBR loading
+    out->material_id = 0;
+
     return engine::Model::Ok;
 }
 

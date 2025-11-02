@@ -5,11 +5,15 @@
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba32f) uniform image2D target;
-layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
+layout(set = 0, binding = 0, rgba32ui) readonly uniform uimage2D visbuffer;
+
+layout(buffer_reference, std430) buffer MatCounters {
+    uint counter[];
+};
 
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
+    MatCounters mat_counters;
 };
 
 layout(buffer_reference, std430) readonly buffer VertexData {
@@ -89,12 +93,7 @@ void main() {
 
     VertexData verts = VertexData(vis.xy);
     MeshData mesh_data = read_mesh_data(verts);
-    uint primitive_id = vis.y;
 
-    vec4 color;
-    if (mesh_data.material_id == 0u) color = vec4(0.0, 1.0, 0.0, 1.0);
-    else if (mesh_data.material_id == -1u) color = vec4(1.0, 0.0, 0.0, 1.0);
-    else color = vec4(1.0, 1.0, 1.0, 1.0);
-
-    imageStore(target, ivec2(gid), color);
+    mesh_data.material_id;
+    atomicAdd(mat_counters.counter[mesh_data.material_id], 1);
 }

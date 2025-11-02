@@ -89,8 +89,17 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
     }
 }
 
-using ModelPushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
-using ScenePushConstant = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
+void update_count_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                                            std::nullopt);
+    }
+}
+
+using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
+using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
+using VisbufferMatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
+using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct Model {
     enum DataType {
@@ -345,15 +354,15 @@ int main(int argc, char** argv) {
     auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
     free(model_vertex_spv_data);
 
-    uint32_t model_fragment_spv_size;
-    auto model_fragment_spv_data = engine::util::read_file("model_fragment.spv", &model_fragment_spv_size);
-    auto model_fragment_module = engine::create_shader({model_fragment_spv_data, model_fragment_spv_size});
-    free(model_fragment_spv_data);
+    uint32_t mesh_fragment_spv_size;
+    auto mesh_fragment_spv_data = engine::util::read_file("mesh_fragment.spv", &mesh_fragment_spv_size);
+    auto mesh_fragment_module = engine::create_shader({mesh_fragment_spv_data, mesh_fragment_spv_size});
+    free(mesh_fragment_spv_data);
 
     auto model_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
                                                        .vertex(model_vertex_module)
-                                                       .fragment(model_fragment_module)
-                                                       .push_constant_size(ModelPushConstant::size)
+                                                       .fragment(mesh_fragment_module)
+                                                       .push_constant_size(ModelPC::size)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
                                                        .depth_format(VK_FORMAT_D16_UNORM))
@@ -367,15 +376,10 @@ int main(int argc, char** argv) {
     auto scene_vertex_module = engine::create_shader({scene_vertex_spv_data, scene_vertex_spv_size});
     free(scene_vertex_spv_data);
 
-    uint32_t scene_fragment_spv_size;
-    auto scene_fragment_spv_data = engine::util::read_file("scene_fragment.spv", &scene_fragment_spv_size);
-    auto scene_fragment_module = engine::create_shader({scene_fragment_spv_data, scene_fragment_spv_size});
-    free(scene_fragment_spv_data);
-
     auto scene_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
                                                        .vertex(scene_vertex_module)
-                                                       .fragment(scene_fragment_module)
-                                                       .push_constant_size(ScenePushConstant::size)
+                                                       .fragment(mesh_fragment_module)
+                                                       .push_constant_size(ScenePC::size)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
                                                        .depth_format(VK_FORMAT_D16_UNORM))
@@ -384,38 +388,43 @@ int main(int argc, char** argv) {
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
 
-    VkDescriptorSetLayoutBinding pp_bindings[2]{};
-    pp_bindings[0].binding = 0;
-    pp_bindings[0].descriptorCount = 1;
-    pp_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pp_bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pp_bindings[1].binding = 1;
-    pp_bindings[1].descriptorCount = 1;
-    pp_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pp_bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    uint32_t visbuffer_mat_count_spv_size;
+    auto visbuffer_mat_count_spv_data =
+        engine::util::read_file("visbuffer_mat_count.spv", &visbuffer_mat_count_spv_size);
+    auto visbuffer_mat_count_module =
+        engine::create_shader({visbuffer_mat_count_spv_data, visbuffer_mat_count_spv_size});
+    free(visbuffer_mat_count_spv_data);
 
-    VkDescriptorSetLayoutCreateInfo pp_set_layout_info{};
-    pp_set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    pp_set_layout_info.bindingCount = 2;
-    pp_set_layout_info.pBindings = pp_bindings;
-
-    VkDescriptorSetLayout postprocessing_set_layout;
-    vkCreateDescriptorSetLayout(engine::device, &pp_set_layout_info, nullptr, &postprocessing_set_layout);
+    auto visbuffer_mat_count_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+        .count = 1,
+        .type = engine::descriptor::Binding::StorageImage,
+        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+    }>::create();
+    auto visbuffer_mat_count_pipeline =
+        engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                    .shader(visbuffer_mat_count_module)
+                                    .descriptor_layout(0, visbuffer_mat_count_set_layout)
+                                    .push_constant(VisbufferMatCountPC::size));
 
     uint32_t postprocessing_spv_size;
     auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
     auto postprocessing_module = engine::create_shader({postprocessing_spv_data, postprocessing_spv_size});
     free(postprocessing_spv_data);
 
-    auto postprocessing_pipeline = engine::ComputePipeline(
-        engine::ComputePipelineBuilder{}.shader(postprocessing_module).descriptor_layout(0, postprocessing_set_layout));
-
-    // uint32_t debug_visbuffer_spv_size;
-    // auto debug_visbuffer_spv_data = engine::util::read_file("debug_visbuffer.spv", &debug_visbuffer_spv_size);
-    // auto debug_visbuffer_module = engine::create_shader({debug_visbuffer_spv_data, debug_visbuffer_spv_size});
-    // free(debug_visbuffer_spv_data);
-    //
-    // auto debug_visbuffer_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{});
+    auto postprocessing_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+                                                               .count = 1,
+                                                               .type = engine::descriptor::Binding::StorageImage,
+                                                               .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                           },
+                                                           engine::descriptor::Binding{
+                                                               .count = 1,
+                                                               .type = engine::descriptor::Binding::StorageImage,
+                                                               .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                           }>::create();
+    auto postprocessing_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                                               .shader(postprocessing_module)
+                                                               .descriptor_layout(0, postprocessing_set_layout)
+                                                               .push_constant(PostprocessingPC::size));
 
     engine::GPUImage* depth_images = (engine::GPUImage*)malloc(sizeof(engine::GPUImage) * frames_in_flight);
     VkImageView* depth_image_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
@@ -432,6 +441,10 @@ int main(int argc, char** argv) {
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * frames_in_flight);
 
     update_target(target_images, target_image_views, target_barriers, frames_in_flight);
+
+    uint32_t max_material_id = 0;
+    engine::Buffer* count_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    update_count_buffers(count_buffers, max_material_id, frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
@@ -835,14 +848,14 @@ int main(int argc, char** argv) {
                                           .set_load_op(engine::LoadOp::Clear)
                                           .set_store_op(engine::StoreOp::Store)));
             model_pipeline.bind();
-            uint8_t model_push_constant[ModelPushConstant::size]{};
+            uint8_t model_push_constant[ModelPC::size]{};
 
             for (auto& model : models) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
 
                 for (const auto& transform : model.instance_transforms) {
-                    ModelPushConstant::write(model_push_constant, model.gpu_group.data.address(),
-                                             model.indirect_draw_buffer.address(), cam.view_projection(), transform);
+                    ModelPC::write(model_push_constant, model.gpu_group.data.address(),
+                                   model.indirect_draw_buffer.address(), cam.view_projection(), transform);
 
                     model_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
                         .push_constant = model_push_constant,
@@ -853,14 +866,13 @@ int main(int argc, char** argv) {
                 }
             }
 
-            uint8_t scene_push_constant[ScenePushConstant::size];
+            uint8_t scene_push_constant[ScenePC::size];
             scene_pipeline.bind();
             for (auto& scene : scenes) {
                 if (!engine::transport::is_ready(scene.timeline)) continue;
 
-                ScenePushConstant::write(scene_push_constant, scene.gpu_group.data.address(),
-                                         scene.gpu_data.draw_indirect.address(), cam.view_projection(),
-                                         scene.transform);
+                ScenePC::write(scene_push_constant, scene.gpu_group.data.address(),
+                               scene.gpu_data.draw_indirect.address(), cam.view_projection(), scene.transform);
 
                 scene_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
                     .push_constant = scene_push_constant,
@@ -901,6 +913,54 @@ int main(int argc, char** argv) {
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(visbuffer_barrier);
+            engine::synchronization::end_barriers();
+
+            auto mat_count_set = engine::descriptor::new_set(visbuffer_mat_count_set_layout);
+            engine::descriptor::begin_update(mat_count_set);
+            engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
+            engine::descriptor::end_update();
+
+            auto& current_count_buf = count_buffers[engine::get_current_frame()];
+            uint8_t visbuffer_mat_count_pc[VisbufferMatCountPC::size]{};
+            VisbufferMatCountPC::write(
+                visbuffer_mat_count_pc,
+                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                current_count_buf.address());
+
+            visbuffer_mat_count_pipeline.bind();
+            visbuffer_mat_count_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = visbuffer_mat_count_pc,
+                .descriptor_indexes =
+                    {
+                        mat_count_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                    },
+                .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_z = 1,
+            });
+
+            VkBufferMemoryBarrier2 count_buffer_barrier{};
+            count_buffer_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            count_buffer_barrier.buffer = current_count_buf.data();
+            count_buffer_barrier.offset = 0;
+            count_buffer_barrier.size = current_count_buf.size();
+            count_buffer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            count_buffer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::end_barriers();
+
+            // material offset gen
+
+            engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
@@ -908,12 +968,17 @@ int main(int argc, char** argv) {
             engine::descriptor::begin_update(pp_set);
             engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
                                                      target_image_views[engine::get_current_frame()]);
-            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL,
-                                                     engine::visbuffer::get_view());
+            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
             engine::descriptor::end_update();
+
+            uint8_t postprocessing_push_constant[PostprocessingPC::size]{};
+            PostprocessingPC::write(
+                postprocessing_push_constant,
+                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height});
 
             postprocessing_pipeline.bind();
             postprocessing_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = postprocessing_push_constant,
                 .descriptor_indexes =
                     {
                         pp_set,
@@ -1097,18 +1162,19 @@ int main(int argc, char** argv) {
 
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);
-    engine::destroy_shader(model_fragment_module);
 
     scene_pipeline.destroy();
     engine::destroy_shader(scene_vertex_module);
-    engine::destroy_shader(scene_fragment_module);
 
-    vkDestroyDescriptorSetLayout(engine::device, postprocessing_set_layout, nullptr);
+    engine::destroy_shader(mesh_fragment_module);
+
+    engine::destroy_descriptor_set_layout(visbuffer_mat_count_set_layout);
+    visbuffer_mat_count_pipeline.destroy();
+    engine::destroy_shader(visbuffer_mat_count_module);
+
+    engine::destroy_descriptor_set_layout(postprocessing_set_layout);
     postprocessing_pipeline.destroy();
     engine::destroy_shader(postprocessing_module);
-
-    // debug_visbuffer_pipeline.destroy();
-    // engine::destroy_shader(debug_visbuffer_module);
 
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         engine::GPUImageView::destroy(depth_image_views[i]);
@@ -1116,6 +1182,8 @@ int main(int argc, char** argv) {
 
         engine::GPUImageView::destroy(target_image_views[i]);
         target_images[i].destroy();
+
+        count_buffers[i].destroy();
     }
 
     free(target_images);

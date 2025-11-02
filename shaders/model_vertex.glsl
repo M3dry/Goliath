@@ -29,6 +29,8 @@ layout(location = 3) out vec2 f_texcoord0;
 layout(location = 4) out vec2 f_texcoord1;
 layout(location = 5) out vec2 f_texcoord2;
 layout(location = 6) out vec2 f_texcoord3;
+layout(location = 7) flat out uint mesh_data_offset;
+layout(location = 8) flat out uint primitive_id;
 
 uint get_mesh_data_offset() {
     return draws.data[gl_DrawID].data[4];
@@ -181,6 +183,9 @@ void main() {
     f_texcoord1 = vert.texcoord1;
     f_texcoord2 = vert.texcoord2;
     f_texcoord3 = vert.texcoord3;
+
+    mesh_data_offset = get_mesh_data_offset();
+    primitive_id = gl_VertexIndex / 3;
 
     // if (gl_VertexIndex == 0) {
     //     gl_Position = vec4(5.0, 0.0, 0.0, 1.0);
