@@ -96,9 +96,25 @@ void update_count_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t
     }
 }
 
+void update_offset_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                                            std::nullopt);
+    }
+}
+
+// void update_used_mat_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
+//     for (std::size_t i = 0; i < frames_in_flight; i++) {
+//         buffers[i] = engine::Buffer::create(sizeof(uint32_t) + sizeof(uint32_t) * (max_mat_id + 1),
+//                                             VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
+//     }
+// }
+
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
-using VisbufferMatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
+using MatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
+using OffsetsPC = engine::PushConstant<uint64_t, uint64_t, uint32_t, uint32_t>;
+// using UsedMatPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct Model {
@@ -388,23 +404,36 @@ int main(int argc, char** argv) {
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
 
-    uint32_t visbuffer_mat_count_spv_size;
-    auto visbuffer_mat_count_spv_data =
-        engine::util::read_file("visbuffer_mat_count.spv", &visbuffer_mat_count_spv_size);
-    auto visbuffer_mat_count_module =
-        engine::create_shader({visbuffer_mat_count_spv_data, visbuffer_mat_count_spv_size});
-    free(visbuffer_mat_count_spv_data);
+    uint32_t mat_count_spv_size;
+    auto mat_count_spv_data = engine::util::read_file("mat_count.spv", &mat_count_spv_size);
+    auto mat_count_module = engine::create_shader({mat_count_spv_data, mat_count_spv_size});
+    free(mat_count_spv_data);
 
-    auto visbuffer_mat_count_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+    auto mat_count_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
         .count = 1,
         .type = engine::descriptor::Binding::StorageImage,
         .stages = VK_SHADER_STAGE_COMPUTE_BIT,
     }>::create();
-    auto visbuffer_mat_count_pipeline =
-        engine::ComputePipeline(engine::ComputePipelineBuilder{}
-                                    .shader(visbuffer_mat_count_module)
-                                    .descriptor_layout(0, visbuffer_mat_count_set_layout)
-                                    .push_constant(VisbufferMatCountPC::size));
+    auto mat_count_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                                          .shader(mat_count_module)
+                                                          .descriptor_layout(0, mat_count_set_layout)
+                                                          .push_constant(MatCountPC::size));
+
+    uint32_t offsets_spv_size;
+    auto offsets_spv_data = engine::util::read_file("offsets.spv", &offsets_spv_size);
+    auto offsets_module = engine::create_shader({offsets_spv_data, offsets_spv_size});
+    free(offsets_spv_data);
+
+    auto offsets_pipeline =
+        engine::ComputePipeline(engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(OffsetsPC::size));
+
+    // uint32_t used_mat_spv_size;
+    // auto used_mat_spv_data = engine::util::read_file("used_mat.spv", &used_mat_spv_size);
+    // auto used_mat_module = engine::create_shader({used_mat_spv_data, used_mat_spv_size});
+    // free(used_mat_spv_data);
+    //
+    // auto used_mat_pipeline = engine::ComputePipeline(
+    //     engine::ComputePipelineBuilder{}.shader(used_mat_module).push_constant(UsedMatPC::size));
 
     uint32_t postprocessing_spv_size;
     auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
@@ -445,6 +474,12 @@ int main(int argc, char** argv) {
     uint32_t max_material_id = 0;
     engine::Buffer* count_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
     update_count_buffers(count_buffers, max_material_id, frames_in_flight);
+
+    engine::Buffer* offsets_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    update_offset_buffers(offsets_buffers, max_material_id, frames_in_flight);
+
+    // engine::Buffer* used_mat_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    // update_used_mat_buffers(used_mat_buffers, max_material_id, frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
@@ -915,21 +950,20 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(visbuffer_barrier);
             engine::synchronization::end_barriers();
 
-            auto mat_count_set = engine::descriptor::new_set(visbuffer_mat_count_set_layout);
+            auto mat_count_set = engine::descriptor::new_set(mat_count_set_layout);
             engine::descriptor::begin_update(mat_count_set);
             engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
             engine::descriptor::end_update();
 
             auto& current_count_buf = count_buffers[engine::get_current_frame()];
-            uint8_t visbuffer_mat_count_pc[VisbufferMatCountPC::size]{};
-            VisbufferMatCountPC::write(
-                visbuffer_mat_count_pc,
-                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-                current_count_buf.address());
+            uint8_t mat_count_pc[MatCountPC::size]{};
+            MatCountPC::write(mat_count_pc,
+                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                              current_count_buf.address());
 
-            visbuffer_mat_count_pipeline.bind();
-            visbuffer_mat_count_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
-                .push_constant = visbuffer_mat_count_pc,
+            mat_count_pipeline.bind();
+            mat_count_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = mat_count_pc,
                 .descriptor_indexes =
                     {
                         mat_count_set,
@@ -958,7 +992,30 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(count_buffer_barrier);
             engine::synchronization::end_barriers();
 
-            // material offset gen
+            auto& current_offsets_buf = offsets_buffers[engine::get_current_frame()];
+
+            uint8_t offsets_pc[OffsetsPC::size]{};
+            OffsetsPC::write(offsets_pc, current_count_buf.address(), current_offsets_buf.address(), max_material_id + 1, 1 + max_material_id/256);
+
+            offsets_pipeline.bind();
+            offsets_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = offsets_pc,
+                .group_count_x = (uint32_t)std::ceil((max_material_id + 1) / 256.0f),
+                .group_count_y = 1,
+                .group_count_z = 1,
+            });
+
+            VkBufferMemoryBarrier2 offsets_barrier{};
+            offsets_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            offsets_barrier.buffer = current_offsets_buf.data();
+            offsets_barrier.offset = 0;
+            offsets_barrier.size = current_offsets_buf.size();
+            offsets_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            offsets_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            offsets_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            offsets_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            offsets_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
@@ -1168,9 +1225,15 @@ int main(int argc, char** argv) {
 
     engine::destroy_shader(mesh_fragment_module);
 
-    engine::destroy_descriptor_set_layout(visbuffer_mat_count_set_layout);
-    visbuffer_mat_count_pipeline.destroy();
-    engine::destroy_shader(visbuffer_mat_count_module);
+    engine::destroy_descriptor_set_layout(mat_count_set_layout);
+    mat_count_pipeline.destroy();
+    engine::destroy_shader(mat_count_module);
+
+    offsets_pipeline.destroy();
+    engine::destroy_shader(offsets_module);
+
+    // used_mat_pipeline.destroy();
+    // engine::destroy_shader(used_mat_module);
 
     engine::destroy_descriptor_set_layout(postprocessing_set_layout);
     postprocessing_pipeline.destroy();
@@ -1184,11 +1247,23 @@ int main(int argc, char** argv) {
         target_images[i].destroy();
 
         count_buffers[i].destroy();
+
+        offsets_buffers[i].destroy();
+
+        // used_mat_buffers[i].destroy();
+        // used_mat_buffers[frames_in_flight + i].destroy();
     }
 
     free(target_images);
     free(target_image_views);
     free(target_barriers);
+
+    free(depth_image_views);
+    free(depth_images);
+
+    free(count_buffers);
+    free(offsets_buffers);
+    // free(used_mat_buffers);
 
     engine::visbuffer::destroy();
     engine::destroy();
