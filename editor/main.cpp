@@ -91,15 +91,25 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 
 void update_count_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1),
+                                            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
                                             std::nullopt);
     }
 }
 
 void update_offset_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1),
+                                            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
                                             std::nullopt);
+    }
+}
+
+void update_frag_id_buffers(engine::Buffer* buffers, uint32_t frames_in_flight) {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        buffers[i] =
+            engine::Buffer::create(sizeof(uint32_t) * engine::swapchain_extent.width * engine::swapchain_extent.height,
+                                   VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
     }
 }
 
@@ -477,6 +487,9 @@ int main(int argc, char** argv) {
 
     engine::Buffer* offsets_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
     update_offset_buffers(offsets_buffers, max_material_id, frames_in_flight);
+
+    engine::Buffer* frag_id_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    update_frag_id_buffers(offsets_buffers, frames_in_flight);
 
     // engine::Buffer* used_mat_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
     // update_used_mat_buffers(used_mat_buffers, max_material_id, frames_in_flight);
@@ -995,7 +1008,8 @@ int main(int argc, char** argv) {
             auto& current_offsets_buf = offsets_buffers[engine::get_current_frame()];
 
             uint8_t offsets_pc[OffsetsPC::size]{};
-            OffsetsPC::write(offsets_pc, current_count_buf.address(), current_offsets_buf.address(), max_material_id + 1, 1 + max_material_id/256);
+            OffsetsPC::write(offsets_pc, current_count_buf.address(), current_offsets_buf.address(),
+                             max_material_id + 1, 1 + max_material_id / 256);
 
             offsets_pipeline.bind();
             offsets_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
@@ -1016,6 +1030,27 @@ int main(int argc, char** argv) {
             offsets_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             offsets_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
             offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::end_barriers();
+
+            vkCmdFillBuffer(engine::get_cmd_buf(), current_count_buf, 0, current_count_buf.size(), 0);
+
+            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
+            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(offsets_barrier);
+            engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::end_barriers();
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
@@ -1158,6 +1193,24 @@ int main(int argc, char** argv) {
             visbuffer_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
             visbuffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
+            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            offsets_barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            offsets_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            offsets_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::apply_barrier(offsets_barrier);
+            engine::synchronization::end_barriers();
+
+            vkCmdFillBuffer(engine::get_cmd_buf(), current_count_buf, 0, current_count_buf.size(), 0);
+            vkCmdFillBuffer(engine::get_cmd_buf(), current_offsets_buf, 0, current_offsets_buf.size(), 0);
+
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::apply_barrier(visbuffer_barrier);
@@ -1177,6 +1230,8 @@ int main(int argc, char** argv) {
 
                 engine::GPUImageView::destroy(target_image_views[i]);
                 target_images[i].destroy();
+
+                frag_id_buffers[i].destroy();
             }
 
             update_depth(depth_images, depth_image_views, depth_barriers, frames_in_flight);
@@ -1184,6 +1239,8 @@ int main(int argc, char** argv) {
 
             update_target(target_images, target_image_views, target_barriers, frames_in_flight);
             target_barriers_applied = false;
+
+            update_frag_id_buffers(frag_id_buffers, frames_in_flight);
 
             model_pipeline.update_viewport_to_swapchain();
             model_pipeline.update_scissor_to_viewport();
@@ -1250,6 +1307,8 @@ int main(int argc, char** argv) {
 
         offsets_buffers[i].destroy();
 
+        frag_id_buffers[i].destroy();
+
         // used_mat_buffers[i].destroy();
         // used_mat_buffers[frames_in_flight + i].destroy();
     }
@@ -1263,6 +1322,7 @@ int main(int argc, char** argv) {
 
     free(count_buffers);
     free(offsets_buffers);
+    free(frag_id_buffers);
     // free(used_mat_buffers);
 
     engine::visbuffer::destroy();
