@@ -42,6 +42,14 @@ namespace engine {
             uint32_t group_count_z;
         };
 
+        struct IndirectDispatchParams {
+            void* push_constant = nullptr;
+            std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set};
+            VkBuffer indirect_buffer;
+            uint32_t buffer_offset;
+        };
+
         VkPipeline _pipeline;
         VkPipelineLayout _pipeline_layout;
         const uint32_t _push_constant_size;
@@ -50,6 +58,7 @@ namespace engine {
 
         void bind();
         void dispatch(DispatchParams params);
+        void dispatch_indirect(IndirectDispatchParams params);
 
         void destroy();
     };

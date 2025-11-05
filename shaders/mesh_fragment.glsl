@@ -41,7 +41,7 @@ uvec2 addToAddr(uvec2 addr, uint offsetBytes) {
 }
 
 void main() {
-    frag_color = vec4(f_texcoord0, 0.0, 1.0);
+    // frag_color = vec4(f_texcoord0, 0.0, 1.0);
     // frag_color = vec4(1.0, 0.0, 0.0, 1.0);
 
     uvec2 addr = uvec2(verts);

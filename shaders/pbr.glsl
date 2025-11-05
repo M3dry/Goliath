@@ -8,8 +8,16 @@ layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba32f) uniform image2D target;
 layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
 
+layout(buffer_reference, std430) readonly buffer DispatchCommand {
+    uvec4 vk_dispatch;
+    uint offset;
+    uint count;
+};
+
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
+    DispatchCommand dispatch;
+    uint mat_id;
 };
 
 layout(buffer_reference, std430) readonly buffer VertexData {
@@ -81,16 +89,16 @@ MeshData read_mesh_data(VertexData verts) {
 }
 
 void main() {
-    uvec2 gid = gl_GlobalInvocationID.xy;
-    if (gid.x >= screen.x || gid.y >= screen.y) return;
-
-    uvec4 vis = imageLoad(visbuffer, ivec2(gid));
-    if (vis.x == 0 && vis.y == 0) return;
-
-    VertexData verts = VertexData(vis.xy);
-    MeshData mesh_data = read_mesh_data(verts);
-    uint primitive_id = vis.y;
-
+    // uvec2 gid = gl_GlobalInvocationID.xy;
+    // if (gid.x >= screen.x || gid.y >= screen.y) return;
+    //
+    // uvec4 vis = imageLoad(visbuffer, ivec2(gid));
+    // if (vis.x == 0 && vis.y == 0) return;
+    //
+    // VertexData verts = VertexData(vis.xy);
+    // MeshData mesh_data = read_mesh_data(verts);
+    // uint primitive_id = vis.y;
+    //
     // vec4 color;
     // if (mesh_data.material_id == 0u) color = vec4(0.0, 1.0, 0.0, 1.0);
     // else if (mesh_data.material_id == -1u) color = vec4(1.0, 0.0, 0.0, 1.0);

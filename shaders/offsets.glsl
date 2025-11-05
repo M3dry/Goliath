@@ -15,9 +15,19 @@ layout(buffer_reference, std430) buffer OutData {
     uint val[];
 };
 
+struct Draw {
+    uint vals[5];
+};
+
+layout(buffer_reference, std430) buffer Draws {
+    Draw draw[];
+};
+
 layout(push_constant, std430) uniform Push {
+    uvec2 screen;
     InData in_data;
     OutData out_data;
+    Draws draws;
     uint data_size;
     uint elements_per_thread;
 };
@@ -68,6 +78,11 @@ void main() {
         uint idx = start + i;
         if (idx < n) {
             out_data.val[idx] = running;
+            draws.draw[idx].vals[0] = uint(ceil(screen.x/16.0));
+            draws.draw[idx].vals[1] = uint(ceil(screen.y/16.0));
+            draws.draw[idx].vals[2] = 1;
+            draws.draw[idx].vals[3] = running;
+            draws.draw[idx].vals[4] = in_data.val[idx];
             running += in_data.val[idx];
         }
     }

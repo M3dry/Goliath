@@ -1,6 +1,7 @@
 #include "goliath/compute.hpp"
 #include "engine_.hpp"
 #include "goliath/engine.hpp"
+#include "include/goliath/compute.hpp"
 
 #include <volk.h>
 
@@ -67,8 +68,27 @@ namespace engine {
         }
 
         vkCmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
-
     }
+
+    void ComputePipeline::dispatch_indirect(IndirectDispatchParams params) {
+        auto cmd_buf = get_cmd_buf();
+        auto& descriptor_pool = get_frame_descriptor_pool();
+
+        if (_push_constant_size != 0) {
+            vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, _push_constant_size,
+                               params.push_constant);
+        }
+
+        for (uint32_t i = 0; i < 3; i++) {
+            if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+
+            descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                     _pipeline_layout, i);
+        }
+
+        vkCmdDispatchIndirect(cmd_buf, params.indirect_buffer, params.buffer_offset);
+    }
+
     void ComputePipeline::destroy() {
         vkDestroyPipelineLayout(device, _pipeline_layout, nullptr);
         vkDestroyPipeline(device, _pipeline, nullptr);

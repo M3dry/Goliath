@@ -105,26 +105,28 @@ void update_offset_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_
     }
 }
 
-void update_frag_id_buffers(engine::Buffer* buffers, uint32_t frames_in_flight) {
+void update_shading_dispatch_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] =
-            engine::Buffer::create(sizeof(uint32_t) * engine::swapchain_extent.width * engine::swapchain_extent.height,
-                                   VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
+        buffers[i] = engine::Buffer::create(
+            (sizeof(VkDispatchIndirectCommand) + 2*sizeof(uint32_t)) * (max_mat_id + 1),
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT, std::nullopt);
     }
 }
 
-// void update_used_mat_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
-//     for (std::size_t i = 0; i < frames_in_flight; i++) {
-//         buffers[i] = engine::Buffer::create(sizeof(uint32_t) + sizeof(uint32_t) * (max_mat_id + 1),
-//                                             VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
-//     }
-// }
+void update_frag_id_buffers(engine::Buffer* buffers, uint32_t frames_in_flight) {
+    for (std::size_t i = 0; i < frames_in_flight; i++) {
+        buffers[i] = engine::Buffer::create(
+            sizeof(uint32_t) * engine::swapchain_extent.width * engine::swapchain_extent.height,
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+    }
+}
 
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using MatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
-using OffsetsPC = engine::PushConstant<uint64_t, uint64_t, uint32_t, uint32_t>;
-// using UsedMatPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
+using OffsetsPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t>;
+using FragIdPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
+using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct Model {
@@ -437,13 +439,40 @@ int main(int argc, char** argv) {
     auto offsets_pipeline =
         engine::ComputePipeline(engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(OffsetsPC::size));
 
-    // uint32_t used_mat_spv_size;
-    // auto used_mat_spv_data = engine::util::read_file("used_mat.spv", &used_mat_spv_size);
-    // auto used_mat_module = engine::create_shader({used_mat_spv_data, used_mat_spv_size});
-    // free(used_mat_spv_data);
-    //
-    // auto used_mat_pipeline = engine::ComputePipeline(
-    //     engine::ComputePipelineBuilder{}.shader(used_mat_module).push_constant(UsedMatPC::size));
+    uint32_t frag_id_spv_size;
+    auto frag_id_spv_data = engine::util::read_file("frag_id.spv", &frag_id_spv_size);
+    auto frag_id_module = engine::create_shader({frag_id_spv_data, frag_id_spv_size});
+    free(frag_id_spv_data);
+
+    auto frag_id_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+        .count = 1,
+        .type = engine::descriptor::Binding::StorageImage,
+        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+    }>::create();
+    auto frag_id_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                                        .shader(frag_id_module)
+                                                        .descriptor_layout(0, frag_id_set_layout)
+                                                        .push_constant(FragIdPC::size));
+
+    uint32_t pbr_spv_size;
+    auto pbr_spv_data = engine::util::read_file("pbr.spv", &pbr_spv_size);
+    auto pbr_module = engine::create_shader({pbr_spv_data, pbr_spv_size});
+    free(pbr_spv_data);
+
+    auto pbr_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+                                                    .count = 1,
+                                                    .type = engine::descriptor::Binding::StorageImage,
+                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                },
+                                                engine::descriptor::Binding{
+                                                    .count = 1,
+                                                    .type = engine::descriptor::Binding::StorageImage,
+                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                }>::create();
+    auto pbr_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                                    .shader(pbr_module)
+                                                    .descriptor_layout(0, pbr_set_layout)
+                                                    .push_constant(PBRPC::size));
 
     uint32_t postprocessing_spv_size;
     auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
@@ -488,11 +517,11 @@ int main(int argc, char** argv) {
     engine::Buffer* offsets_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
     update_offset_buffers(offsets_buffers, max_material_id, frames_in_flight);
 
-    engine::Buffer* frag_id_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
-    update_frag_id_buffers(offsets_buffers, frames_in_flight);
+    engine::Buffer* shading_dispatch_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    update_shading_dispatch_buffers(shading_dispatch_buffers, max_material_id, frames_in_flight);
 
-    // engine::Buffer* used_mat_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
-    // update_used_mat_buffers(used_mat_buffers, max_material_id, frames_in_flight);
+    engine::Buffer* frag_id_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * frames_in_flight);
+    update_frag_id_buffers(frag_id_buffers, frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
@@ -931,26 +960,6 @@ int main(int argc, char** argv) {
             }
             engine::rendering::end();
 
-            VkImageMemoryBarrier2 target_barrier{};
-            target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            target_barrier.pNext = nullptr;
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            target_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            target_barrier.image = target_images[engine::get_current_frame()].image;
-            target_barrier.subresourceRange = VkImageSubresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-
             VkImageMemoryBarrier2 visbuffer_barrier{};
             engine::visbuffer::barrier(&visbuffer_barrier);
             visbuffer_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -959,7 +968,21 @@ int main(int argc, char** argv) {
             visbuffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
             visbuffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
+            auto& current_count_buf = count_buffers[engine::get_current_frame()];
+            VkBufferMemoryBarrier2 count_buffer_barrier{};
+            count_buffer_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            count_buffer_barrier.buffer = current_count_buf.data();
+            count_buffer_barrier.offset = 0;
+            count_buffer_barrier.size = current_count_buf.size();
+            count_buffer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            count_buffer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
             engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(count_buffer_barrier);
             engine::synchronization::apply_barrier(visbuffer_barrier);
             engine::synchronization::end_barriers();
 
@@ -968,7 +991,6 @@ int main(int argc, char** argv) {
             engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
             engine::descriptor::end_update();
 
-            auto& current_count_buf = count_buffers[engine::get_current_frame()];
             uint8_t mat_count_pc[MatCountPC::size]{};
             MatCountPC::write(mat_count_pc,
                               glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
@@ -989,27 +1011,50 @@ int main(int argc, char** argv) {
                 .group_count_z = 1,
             });
 
-            VkBufferMemoryBarrier2 count_buffer_barrier{};
-            count_buffer_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            count_buffer_barrier.buffer = current_count_buf.data();
-            count_buffer_barrier.offset = 0;
-            count_buffer_barrier.size = current_count_buf.size();
-            count_buffer_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            count_buffer_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             count_buffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             count_buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
             count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
+            auto& current_offsets_buf = offsets_buffers[engine::get_current_frame()];
+            VkBufferMemoryBarrier2 offsets_barrier{};
+            offsets_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            offsets_barrier.buffer = current_offsets_buf.data();
+            offsets_barrier.offset = 0;
+            offsets_barrier.size = current_offsets_buf.size();
+            offsets_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            offsets_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            offsets_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            offsets_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            offsets_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            auto& current_shading_dispatch_buf = shading_dispatch_buffers[engine::get_current_frame()];
+            VkBufferMemoryBarrier2 shading_dispatch_barrier{};
+            shading_dispatch_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            shading_dispatch_barrier.buffer = current_shading_dispatch_buf.data();
+            shading_dispatch_barrier.offset = 0;
+            shading_dispatch_barrier.size = current_shading_dispatch_buf.size();
+            shading_dispatch_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shading_dispatch_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            shading_dispatch_barrier.srcAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            shading_dispatch_barrier.srcStageMask =
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR;
+            shading_dispatch_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            shading_dispatch_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
             engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(offsets_barrier);
             engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::apply_barrier(shading_dispatch_barrier);
             engine::synchronization::end_barriers();
 
-            auto& current_offsets_buf = offsets_buffers[engine::get_current_frame()];
-
             uint8_t offsets_pc[OffsetsPC::size]{};
-            OffsetsPC::write(offsets_pc, current_count_buf.address(), current_offsets_buf.address(),
-                             max_material_id + 1, 1 + max_material_id / 256);
+            OffsetsPC::write(offsets_pc,
+                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                             current_count_buf.address(), current_offsets_buf.address(),
+                             current_shading_dispatch_buf.address(), max_material_id + 1, 1 + max_material_id / 256);
 
             offsets_pipeline.bind();
             offsets_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
@@ -1019,38 +1064,126 @@ int main(int argc, char** argv) {
                 .group_count_z = 1,
             });
 
-            VkBufferMemoryBarrier2 offsets_barrier{};
-            offsets_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            offsets_barrier.buffer = current_offsets_buf.data();
-            offsets_barrier.offset = 0;
-            offsets_barrier.size = current_offsets_buf.size();
-            offsets_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            offsets_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             offsets_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             offsets_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
             offsets_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
             offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
-            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
-            engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(count_buffer_barrier);
-            engine::synchronization::end_barriers();
-
-            vkCmdFillBuffer(engine::get_cmd_buf(), current_count_buf, 0, current_count_buf.size(), 0);
-
-            count_buffer_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            count_buffer_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            count_buffer_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
-            count_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            auto& current_frag_id_buf = frag_id_buffers[engine::get_current_frame()];
+            VkBufferMemoryBarrier2 frag_id_barrier{};
+            frag_id_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            frag_id_barrier.buffer = current_frag_id_buf.data();
+            frag_id_barrier.offset = 0;
+            frag_id_barrier.size = current_frag_id_buf.size();
+            frag_id_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            frag_id_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            frag_id_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            frag_id_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            frag_id_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            frag_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(offsets_barrier);
-            engine::synchronization::apply_barrier(count_buffer_barrier);
+            engine::synchronization::apply_barrier(frag_id_barrier);
             engine::synchronization::end_barriers();
+
+            uint8_t frag_id_pc[FragIdPC::size]{};
+            FragIdPC::write(frag_id_pc,
+                            glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                            current_offsets_buf.address(), current_frag_id_buf.address(), max_material_id);
+
+            auto frag_id_set = engine::descriptor::new_set(frag_id_set_layout);
+            engine::descriptor::begin_update(frag_id_set);
+            engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
+            engine::descriptor::end_update();
+
+            frag_id_pipeline.bind();
+            frag_id_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = frag_id_pc,
+                .descriptor_indexes =
+                    {
+                        frag_id_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                        engine::descriptor::null_set,
+                    },
+                .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.height / 16.0f),
+                .group_count_z = 1,
+            });
+
+            frag_id_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            frag_id_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            frag_id_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            frag_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            shading_dispatch_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            shading_dispatch_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            shading_dispatch_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            shading_dispatch_barrier.dstStageMask =
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT_KHR;
+
+            VkImageMemoryBarrier2 target_barrier{};
+            target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            target_barrier.pNext = nullptr;
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            target_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            target_barrier.image = target_images[engine::get_current_frame()].image;
+            target_barrier.subresourceRange = VkImageSubresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(frag_id_barrier);
+            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(shading_dispatch_barrier);
+            engine::synchronization::end_barriers();
+
+            for (uint32_t id = 0; id <= max_material_id; id++) {
+                uint8_t pbr_pc[PBRPC::size]{};
+                PBRPC::write(pbr_pc,
+                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},
+                             current_shading_dispatch_buf.address(), id);
+
+                auto pbr_set = engine::descriptor::new_set(pbr_set_layout);
+                engine::descriptor::begin_update(pbr_set);
+                engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
+                                                         target_image_views[engine::get_current_frame()]);
+                engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
+                engine::descriptor::end_update();
+
+                pbr_pipeline.bind();
+                pbr_pipeline.dispatch_indirect(engine::ComputePipeline::IndirectDispatchParams{
+                    .push_constant = pbr_pc,
+                    .descriptor_indexes =
+                        {
+                            pbr_set,
+                            engine::descriptor::null_set,
+                            engine::descriptor::null_set,
+                            engine::descriptor::null_set,
+                        },
+                    .indirect_buffer = current_shading_dispatch_buf.data(),
+                    .buffer_offset = (uint32_t)(sizeof(VkDispatchIndirectCommand) + 2*sizeof(uint32_t)) * id,
+                });
+            }
+
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
@@ -1079,7 +1212,7 @@ int main(int argc, char** argv) {
                         engine::descriptor::null_set,
                     },
                 .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
-                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
+                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.height / 16.0f),
                 .group_count_z = 1,
             });
 
@@ -1203,13 +1336,20 @@ int main(int argc, char** argv) {
             offsets_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             offsets_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
+            frag_id_barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            frag_id_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            frag_id_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            frag_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(count_buffer_barrier);
             engine::synchronization::apply_barrier(offsets_barrier);
+            engine::synchronization::apply_barrier(frag_id_barrier);
             engine::synchronization::end_barriers();
 
             vkCmdFillBuffer(engine::get_cmd_buf(), current_count_buf, 0, current_count_buf.size(), 0);
             vkCmdFillBuffer(engine::get_cmd_buf(), current_offsets_buf, 0, current_offsets_buf.size(), 0);
+            vkCmdFillBuffer(engine::get_cmd_buf(), current_frag_id_buf, 0, current_frag_id_buf.size(), 0);
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
@@ -1289,8 +1429,13 @@ int main(int argc, char** argv) {
     offsets_pipeline.destroy();
     engine::destroy_shader(offsets_module);
 
-    // used_mat_pipeline.destroy();
-    // engine::destroy_shader(used_mat_module);
+    engine::destroy_descriptor_set_layout(frag_id_set_layout);
+    frag_id_pipeline.destroy();
+    engine::destroy_shader(frag_id_module);
+
+    engine::destroy_descriptor_set_layout(pbr_set_layout);
+    pbr_pipeline.destroy();
+    engine::destroy_shader(pbr_module);
 
     engine::destroy_descriptor_set_layout(postprocessing_set_layout);
     postprocessing_pipeline.destroy();
@@ -1301,16 +1446,12 @@ int main(int argc, char** argv) {
         depth_images[i].destroy();
 
         engine::GPUImageView::destroy(target_image_views[i]);
+
         target_images[i].destroy();
-
         count_buffers[i].destroy();
-
         offsets_buffers[i].destroy();
-
+        shading_dispatch_buffers[i].destroy();
         frag_id_buffers[i].destroy();
-
-        // used_mat_buffers[i].destroy();
-        // used_mat_buffers[frames_in_flight + i].destroy();
     }
 
     free(target_images);
@@ -1322,8 +1463,8 @@ int main(int argc, char** argv) {
 
     free(count_buffers);
     free(offsets_buffers);
+    free(shading_dispatch_buffers);
     free(frag_id_buffers);
-    // free(used_mat_buffers);
 
     engine::visbuffer::destroy();
     engine::destroy();
