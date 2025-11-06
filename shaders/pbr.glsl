@@ -9,14 +9,17 @@ layout(set = 0, binding = 0, rgba32f) uniform image2D target;
 layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
 
 layout(buffer_reference, std430) readonly buffer DispatchCommand {
-    uvec4 vk_dispatch;
-    uint offset;
-    uint count;
+    uint val[5];
+};
+
+layout(buffer_reference, std430) readonly buffer FragIDs {
+    uint id[];
 };
 
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
     DispatchCommand dispatch;
+    FragIDs frag_ids;
     uint mat_id;
 };
 
@@ -89,20 +92,21 @@ MeshData read_mesh_data(VertexData verts) {
 }
 
 void main() {
-    // uvec2 gid = gl_GlobalInvocationID.xy;
-    // if (gid.x >= screen.x || gid.y >= screen.y) return;
-    //
-    // uvec4 vis = imageLoad(visbuffer, ivec2(gid));
-    // if (vis.x == 0 && vis.y == 0) return;
-    //
-    // VertexData verts = VertexData(vis.xy);
-    // MeshData mesh_data = read_mesh_data(verts);
-    // uint primitive_id = vis.y;
-    //
-    // vec4 color;
-    // if (mesh_data.material_id == 0u) color = vec4(0.0, 1.0, 0.0, 1.0);
-    // else if (mesh_data.material_id == -1u) color = vec4(1.0, 0.0, 0.0, 1.0);
-    // else color = vec4(1.0, 1.0, 1.0, 1.0);
-    //
-    // imageStore(target, ivec2(gid), color);
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= dispatch.val[4]) return;
+
+    uint frag_id = frag_ids.id[dispatch.val[3] + gid];
+    uvec2 frag = uvec2(frag_id / screen.x, frag_id % screen.x);
+
+    uvec4 vis = imageLoad(visbuffer, ivec2(frag));
+    VertexData verts = VertexData(vis.xy);
+    MeshData mesh_data = read_mesh_data(verts);
+    uint primitive_id = vis.z;
+
+    vec4 color;
+    if (mesh_data.material_id == 0u) color = vec4(0.0, 1.0, 0.0, 1.0);
+    else if (mesh_data.material_id == -1u) color = vec4(1.0, 0.0, 0.0, 1.0);
+    else color = vec4(1.0, 1.0, 1.0, 1.0);
+
+    imageStore(target, ivec2(frag), color);
 }

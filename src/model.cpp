@@ -482,12 +482,12 @@ namespace engine {
         return total_size;
     }
 
-    Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, std::string* tinygltf_error,
+    Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error,
                                 std::string* tinygltf_warning) {
         tinygltf::Model model;
 
         if (!loader.LoadASCIIFromString(&model, tinygltf_error, tinygltf_warning, (const char*)data.data(),
-                                        (uint32_t)data.size(), "")) {
+                                        (uint32_t)data.size(), base_dir)) {
             return TinyGLTFErr;
         }
 
@@ -496,12 +496,12 @@ namespace engine {
         return parse_res;
     }
 
-    Model::Err Model::load_glb(Model* out, std::span<uint8_t> data, std::string* tinygltf_error,
+    Model::Err Model::load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error,
                                std::string* tinygltf_warning) {
         tinygltf::Model model;
 
         if (!loader.LoadBinaryFromMemory(&model, tinygltf_error, tinygltf_warning, data.data(),
-                                         (uint32_t)data.size())) {
+                                         (uint32_t)data.size(), base_dir)) {
             return TinyGLTFErr;
         }
 

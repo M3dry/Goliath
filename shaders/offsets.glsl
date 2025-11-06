@@ -78,8 +78,8 @@ void main() {
         uint idx = start + i;
         if (idx < n) {
             out_data.val[idx] = running;
-            draws.draw[idx].vals[0] = uint(ceil(screen.x/16.0));
-            draws.draw[idx].vals[1] = uint(ceil(screen.y/16.0));
+            draws.draw[idx].vals[0] = uint(ceil(in_data.val[idx]/16.0));
+            draws.draw[idx].vals[1] = 1;
             draws.draw[idx].vals[2] = 1;
             draws.draw[idx].vals[3] = running;
             draws.draw[idx].vals[4] = in_data.val[idx];

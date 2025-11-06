@@ -2,6 +2,7 @@
 #include "goliath/gpu_group.hpp"
 #include "goliath/model.hpp"
 #include "goliath/transport.hpp"
+#include <filesystem>
 #include <vulkan/vulkan_core.h>
 
 void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
@@ -99,7 +100,8 @@ void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
             auto file = engine::util::read_file((const char*)(data + offset), &file_size);
             assert(file != nullptr);
 
-            auto res = Model::load_glb(&out->models[i], {file, file_size});
+            std::filesystem::path path{(const char*)data};
+            auto res = Model::load_glb(&out->models[i], {file, file_size}, path.parent_path());
             assert(res == Model::Ok);
 
             free(file);
@@ -108,7 +110,8 @@ void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
             auto file = engine::util::read_file((const char*)(data + offset), &file_size);
             assert(file != nullptr);
 
-            auto res = Model::load_gltf(&out->models[i], {file, file_size});
+            std::filesystem::path path{(const char*)data};
+            auto res = Model::load_gltf(&out->models[i], {file, file_size}, path.parent_path());
             assert(res == Model::Ok);
 
             free(file);

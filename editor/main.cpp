@@ -126,7 +126,7 @@ using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using MatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
 using OffsetsPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t>;
 using FragIdPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
-using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint32_t>;
+using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct Model {
@@ -158,14 +158,14 @@ struct Model {
     std::vector<Instance> instances{};
     std::vector<glm::mat4> instance_transforms{};
 
-    engine::Model::Err load(DataType type, uint8_t* data, uint32_t size, VkBufferMemoryBarrier2* barrier) {
+    engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size, VkBufferMemoryBarrier2* barrier) {
         engine::Model::Err err;
         if (type == GOM) {
             err = engine::Model::load_optimized(&cpu_data, data) ? engine::Model::Ok : engine::Model::InvalidFormat;
         } else if (type == GLTF) {
-            err = engine::Model::load_gltf(&cpu_data, {data, size});
+            err = engine::Model::load_gltf(&cpu_data, {data, size}, cwd);
         } else if (type == GLB) {
-            err = engine::Model::load_glb(&cpu_data, {data, size}, nullptr);
+            err = engine::Model::load_glb(&cpu_data, {data, size}, cwd);
         } else {
             err = engine::Model::InvalidFormat;
         }
@@ -667,7 +667,7 @@ int main(int argc, char** argv) {
                                 models.back().timeline = timeline_value;
 
                                 auto& model = models.back();
-                                auto err = model.load(type, file, size, &model_barrier);
+                                auto err = model.load(models.back().filepath.parent_path(), type, file, size, &model_barrier);
                                 if (err != engine::Model::Ok) {
                                     printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
                                     assert(false);
@@ -1154,7 +1154,7 @@ int main(int argc, char** argv) {
                 uint8_t pbr_pc[PBRPC::size]{};
                 PBRPC::write(pbr_pc,
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},
-                             current_shading_dispatch_buf.address(), id);
+                             current_shading_dispatch_buf.address() + (sizeof(VkDispatchIndirectCommand) + 2*sizeof(uint32_t)) * id, current_frag_id_buf.address(), id);
 
                 auto pbr_set = engine::descriptor::new_set(pbr_set_layout);
                 engine::descriptor::begin_update(pbr_set);
