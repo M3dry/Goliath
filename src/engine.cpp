@@ -223,7 +223,7 @@ namespace engine {
                                             .set_required_features_11(features11)
                                             .set_required_features(features)
                                             .set_surface(surface)
-                                            .add_required_extensions({"VK_EXT_shader_object", "VK_KHR_fragment_shader_barycentric"})
+                                            .add_required_extensions({"VK_EXT_shader_object"})
                                             .select();
         if (!physical_device_selected) {
             std::println("vkb error: {}", physical_device_selected.error().message());
@@ -239,14 +239,9 @@ namespace engine {
             .pNext = nullptr,
             .shaderObject = true,
         };
-        VkPhysicalDeviceShaderObjectFeaturesEXT barycentric_extension{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR,
-            .pNext = &shader_object_extension,
-            .shaderObject = true,
-        };
 
         vkb::Device vkb_device =
-            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&barycentric_extension).build().value();
+            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&shader_object_extension).build().value();
         device = vkb_device.device;
 
         volkLoadDevice(device);
