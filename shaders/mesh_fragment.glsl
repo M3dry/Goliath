@@ -29,6 +29,7 @@ layout(location = 5) in vec2 f_texcoord2;
 layout(location = 6) in vec2 f_texcoord3;
 layout(location = 7) flat in uint mesh_data_offset;
 layout(location = 8) flat in uint primitive_id;
+layout(location = 9) in vec3 barycentric;
 
 layout(location = 0) out vec4 frag_color;
 layout(location = 1) out uvec4 vis_buffer;
@@ -47,5 +48,6 @@ void main() {
     uvec2 addr = uvec2(verts);
     addr = addToAddr(addr, mesh_data_offset);
 
-    vis_buffer = uvec4(addr.x, addr.y, primitive_id, 0);
+    uint bary_ui = packHalf2x16(vec2(barycentric.x, barycentric.y));
+    vis_buffer = uvec4(addr.x, addr.y, primitive_id, bary_ui);
 }

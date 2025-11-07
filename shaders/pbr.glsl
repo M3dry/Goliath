@@ -91,6 +91,76 @@ MeshData read_mesh_data(VertexData verts) {
     return data;
 }
 
+struct Vertex {
+    vec3 pos;
+    vec3 normal;
+    vec4 tangent;
+    vec2 texcoord0;
+    vec2 texcoord1;
+    vec2 texcoord2;
+    vec2 texcoord3;
+};
+
+Vertex load_vertex(VertexData verts, Offsets offs, uint vertex) {
+    Vertex vert;
+
+    uint ix = vertex;
+    uint start = offs.start/4;
+    if (offs.indices_offset != uint(-1)) {
+        ix = verts.data[start + offs.indices_offset/4 + ix];
+    }
+
+    uint stride = offs.stride/4;
+
+    if (offs.position_offset != uint(-1)) {
+        vert.pos.x = uintBitsToFloat(verts.data[start + offs.position_offset/4 + ix*stride]);
+        vert.pos.y = uintBitsToFloat(verts.data[start + offs.position_offset/4 + ix*stride + 1]);
+        vert.pos.z = uintBitsToFloat(verts.data[start + offs.position_offset/4 + ix*stride + 2]);
+    }
+
+    if (offs.normal_offset != uint(-1)) {
+        vert.normal.x = uintBitsToFloat(verts.data[start + offs.normal_offset/4 + ix*stride]);
+        vert.normal.y = uintBitsToFloat(verts.data[start + offs.normal_offset/4 + ix*stride + 1]);
+        vert.normal.z = uintBitsToFloat(verts.data[start + offs.normal_offset/4 + ix*stride + 2]);
+    }
+
+    if (offs.tangent_offset != uint(-1)) {
+        if (offs.indexed_tangents) {
+            vert.tangent.x = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride]);
+            vert.tangent.y = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 1]);
+            vert.tangent.z = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 2]);
+            vert.tangent.w = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*stride + 3]);
+        } else {
+            vert.tangent.x = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4]);
+            vert.tangent.y = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 1]);
+            vert.tangent.z = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 2]);
+            vert.tangent.w = uintBitsToFloat(verts.data[start + offs.tangent_offset/4 + ix*4 + 3]);
+        }
+    }
+
+    if (offs.texcoord0_offset != uint(-1)) {
+        vert.texcoord0.x = uintBitsToFloat(verts.data[start + offs.texcoord0_offset/4 + ix*stride]);
+        vert.texcoord0.y = uintBitsToFloat(verts.data[start + offs.texcoord0_offset/4 + ix*stride + 1]);
+    }
+
+    if (offs.texcoord1_offset != uint(-1)) {
+        vert.texcoord1.x = uintBitsToFloat(verts.data[start + offs.texcoord1_offset/4 + ix*stride]);
+        vert.texcoord1.y = uintBitsToFloat(verts.data[start + offs.texcoord1_offset/4 + ix*stride + 1]);
+    }
+
+    if (offs.texcoord2_offset != uint(-1)) {
+        vert.texcoord2.x = uintBitsToFloat(verts.data[start + offs.texcoord2_offset/4 + ix*stride]);
+        vert.texcoord2.y = uintBitsToFloat(verts.data[start + offs.texcoord2_offset/4 + ix*stride + 1]);
+    }
+
+    if (offs.texcoord3_offset != uint(-1)) {
+        vert.texcoord3.x = uintBitsToFloat(verts.data[start + offs.texcoord3_offset/4 + ix*stride]);
+        vert.texcoord3.y = uintBitsToFloat(verts.data[start + offs.texcoord3_offset/4 + ix*stride + 1]);
+    }
+
+    return vert;
+}
+
 void main() {
     uint gid = gl_GlobalInvocationID.x;
     if (gid >= dispatch.val[4]) return;
@@ -102,11 +172,20 @@ void main() {
     VertexData verts = VertexData(vis.xy);
     MeshData mesh_data = read_mesh_data(verts);
     uint primitive_id = vis.z;
+    uint bary_ui = vis.w;
+    vec3 bary = vec3(unpackHalf2x16(bary_ui), 0.0);
+    bary.z = 1.0 - bary.x - bary.y;
+
+    Vertex v1 = load_vertex(verts, mesh_data.offsets, primitive_id * 3);
+    Vertex v2 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 1);
+    Vertex v3 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 2);
+
+    vec3 normal = bary.x*v1.normal + bary.y*v2.normal + bary.z*v3.normal;
 
     vec4 color;
     if (mesh_data.material_id == 0u) color = vec4(0.0, 1.0, 0.0, 1.0);
     else if (mesh_data.material_id == -1u) color = vec4(1.0, 0.0, 0.0, 1.0);
     else color = vec4(1.0, 1.0, 1.0, 1.0);
 
-    imageStore(target, ivec2(frag), color);
+    imageStore(target, ivec2(frag), vec4(normal, 1.0));
 }

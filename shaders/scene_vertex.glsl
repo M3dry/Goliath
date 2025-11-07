@@ -31,6 +31,7 @@ layout(location = 5) out vec2 f_texcoord2;
 layout(location = 6) out vec2 f_texcoord3;
 layout(location = 7) flat out uint mesh_data_offset;
 layout(location = 8) flat out uint primitive_id;
+layout(location = 9) out vec3 barycentric;
 
 uint get_mesh_data_offset() {
     return draws.data[gl_DrawID].data[4];
@@ -199,6 +200,8 @@ void main() {
 
     mesh_data_offset = get_mesh_data_offset();
     primitive_id = gl_VertexIndex / 3;
+    barycentric = vec3(0.0);
+    barycentric[gl_VertexIndex % 3] = 1;
 
     // if (gl_VertexIndex == 0) {
     //     gl_Position = vec4(5.0, 0.0, 0.0, 1.0);
