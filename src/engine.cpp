@@ -198,6 +198,7 @@ namespace engine {
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.dynamicRendering = true;
         features13.synchronization2 = true;
+        features13.robustImageAccess = true;
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features12.bufferDeviceAddress = true;
@@ -215,6 +216,7 @@ namespace engine {
         VkPhysicalDeviceFeatures features{};
         features.multiDrawIndirect = true;
         features.independentBlend = true;
+        features.robustBufferAccess = true;
 
         auto physical_device_selected = vkb::PhysicalDeviceSelector{vkb_inst}
                                             .set_minimum_version(1, 3)
@@ -223,7 +225,7 @@ namespace engine {
                                             .set_required_features_11(features11)
                                             .set_required_features(features)
                                             .set_surface(surface)
-                                            .add_required_extensions({"VK_EXT_shader_object"})
+                                            .add_required_extensions({"VK_EXT_shader_object", "VK_EXT_robustness2"})
                                             .select();
         if (!physical_device_selected) {
             std::println("vkb error: {}", physical_device_selected.error().message());
@@ -239,9 +241,16 @@ namespace engine {
             .pNext = nullptr,
             .shaderObject = true,
         };
+        VkPhysicalDeviceRobustness2FeaturesEXT robustness2_extension{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+            .pNext = &shader_object_extension,
+            .robustBufferAccess2 = true,
+            .robustImageAccess2 = true,
+            .nullDescriptor = true,
+        };
 
         vkb::Device vkb_device =
-            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&shader_object_extension).build().value();
+            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&robustness2_extension).build().value();
         device = vkb_device.device;
 
         volkLoadDevice(device);

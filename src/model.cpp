@@ -384,8 +384,8 @@ namespace engine {
         model::GPUOffset offset{
             .start = start_offset,
             .material_offset = 0,
-            .indexed_tangents = indexed_tangents,
         };
+        offset.set_indexed_tangetns(indexed_tangents);
 
         if (indices != nullptr) {
             offset.indices_offset = size;
@@ -425,7 +425,7 @@ namespace engine {
             }
         }
 
-        offset.stride = stride;
+        offset.set_stride(stride);
 
         *total_size = size + stride * vertex_count;
         return offset;
@@ -449,7 +449,7 @@ namespace engine {
             auto buf_ = buf + offset.position_offset;
             for (std::size_t i = 0; i < vertex_count; i++) {
                 std::memcpy(buf_, &positions[i], sizeof(glm::vec3));
-                buf_ += offset.stride;
+                buf_ += offset.get_stride();
             }
         }
 
@@ -457,7 +457,7 @@ namespace engine {
             auto buf_ = buf + offset.normal_offset;
             for (std::size_t i = 0; i < vertex_count; i++) {
                 std::memcpy(buf_, &normals[i], sizeof(glm::vec3));
-                buf_ += offset.stride;
+                buf_ += offset.get_stride();
             }
         }
 
@@ -465,7 +465,7 @@ namespace engine {
             auto buf_ = buf + offset.tangent_offset;
             for (std::size_t i = 0; i < vertex_count; i++) {
                 std::memcpy(buf_, &tangents[i], sizeof(glm::vec4));
-                buf_ += offset.stride;
+                buf_ += offset.get_stride();
             }
         }
 
@@ -475,7 +475,7 @@ namespace engine {
             auto buf_ = buf + offset.texcoords_offset[t];
             for (std::size_t i = 0; i < vertex_count; i++) {
                 std::memcpy(buf_, &texcoords[t][i], sizeof(glm::vec2));
-                buf_ += offset.stride;
+                buf_ += offset.get_stride();
             }
         }
 
@@ -584,6 +584,7 @@ namespace engine::model {
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
             mesh_sizes += size;
         }
         auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);
@@ -633,6 +634,7 @@ namespace engine::model {
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
             mesh_sizes += size;
         }
         auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);

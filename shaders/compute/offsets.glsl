@@ -38,7 +38,6 @@ void main() {
 
     uint start = tid * elements_per_thread;
 
-    // Step 1: compute each thread's sum
     uint thread_sum = 0;
     for (uint i = 0; i < elements_per_thread; ++i) {
         uint idx = start + i;
@@ -46,11 +45,9 @@ void main() {
             thread_sum += in_data.val[idx];
     }
 
-    // Step 2: store each thread's total into shared memory
     shared_sums[tid] = thread_sum;
     barrier();
 
-    // ---- Step 3: Blelloch scan of shared_sums ----
     for (uint offset = 1; offset < 256; offset <<= 1) {
         uint idx = (tid + 1) * offset * 2 - 1;
         if (idx < 256)
@@ -72,7 +69,6 @@ void main() {
         barrier();
     }
 
-    // ---- Step 4: apply scanned block offset ----
     uint running = shared_sums[tid];
     for (uint i = 0; i < elements_per_thread; ++i) {
         uint idx = start + i;

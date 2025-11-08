@@ -1,11 +1,8 @@
 #version 460
 
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_buffer_reference_uvec2 : require
+#include "library/vertex_data.glsl"
 
-layout(buffer_reference, std430) readonly buffer VertexData {
-    uint data[];
-};
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(buffer_reference, std430) readonly buffer DrawCommands {
     uint data[];

@@ -16,6 +16,7 @@
 namespace engine::model {
     struct GPUOffset {
         uint32_t start = (uint32_t)-1;
+        uint32_t relative_start = (uint32_t)-1;
         uint32_t stride = 0;
         uint32_t material_offset = (uint32_t)-1;
         uint32_t indices_offset = (uint32_t)-1;
@@ -23,7 +24,26 @@ namespace engine::model {
         uint32_t normal_offset = (uint32_t)-1;
         uint32_t tangent_offset = (uint32_t)-1;
         std::array<uint32_t, 4> texcoords_offset = {(uint32_t)-1, (uint32_t)-1, (uint32_t)-1, (uint32_t)-1};
-        uint32_t indexed_tangents = false;
+
+        static constexpr uint32_t STRIDE_MASK = 0x7FFFFFFFu;
+        static constexpr uint32_t INDEXED_TANGENTS_MASK = 0x80000000u;
+
+        void set_stride(uint32_t value) {
+            stride = (stride & INDEXED_TANGENTS_MASK) | (value & STRIDE_MASK);
+        }
+
+        uint32_t get_stride() const {
+            return stride & STRIDE_MASK;
+        }
+
+        void set_indexed_tangetns(bool value) {
+            if (value) stride |= INDEXED_TANGENTS_MASK;
+            else stride &= STRIDE_MASK;
+        }
+
+        bool get_indexed_tangetns() const {
+            return (stride & INDEXED_TANGENTS_MASK) != 0;
+        }
     };
 
     struct Material_PBR {
