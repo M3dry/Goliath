@@ -33,7 +33,7 @@ FormatInfo get_format_info(VkFormat format) {
 }
 
 namespace engine::transport {
-    inline constexpr std::size_t BUFFER_SIZE = 64000000;
+    inline constexpr std::size_t BUFFER_SIZE = 256000000;
 
     VkDeviceSize alignment = 1;
 

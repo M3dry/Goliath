@@ -175,10 +175,6 @@ struct Model {
             return err;
         }
 
-        for (std::size_t i = 0; i < cpu_data.mesh_count; i++) {
-            printf("index count[%zu]: %d\n", i, cpu_data.meshes[i].index_count);
-        }
-
         engine::gpu_group::begin();
         auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
         gpu_data = _gpu_data;
