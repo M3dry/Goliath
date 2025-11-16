@@ -16,7 +16,6 @@ namespace engine {
         ~FrameData();
     };
 
-    static constexpr std::size_t frames_in_flight = 2;
     extern FrameData* frames;
 
     DescriptorPool& get_frame_descriptor_pool();

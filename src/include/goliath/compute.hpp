@@ -47,13 +47,14 @@ namespace engine {
             std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
                                                           descriptor::null_set};
             VkBuffer indirect_buffer;
-            uint32_t buffer_offset;
+            uint64_t buffer_offset;
         };
 
         VkPipeline _pipeline;
         VkPipelineLayout _pipeline_layout;
-        const uint32_t _push_constant_size;
+        uint32_t _push_constant_size = 0;
 
+        ComputePipeline() = default;
         ComputePipeline(ComputePipelineBuilder&& builder);
 
         void bind();

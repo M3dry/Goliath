@@ -22,6 +22,8 @@
     } while (0)
 
 namespace engine {
+    static constexpr std::size_t frames_in_flight = 2;
+
     extern GLFWwindow* window;
 
     extern VkInstance instance;
@@ -52,6 +54,5 @@ namespace engine {
     void prepare_draw();
     bool next_frame();
 
-    uint32_t get_frames_in_flight();
     uint32_t get_current_frame();
 }

@@ -51,9 +51,10 @@ namespace engine::push_constant::__ {
         if constexpr (is_padding<T>::value) {
             write<offset + sizeof(T), Ts...>(out, std::forward<Arg>(arg), std::forward<Args>(args)...);
         } else {
-            static_assert(std::is_same_v<T, std::remove_cvref_t<Arg>>);
+            static_assert(std::is_convertible_v<std::remove_cvref_t<Arg>, T>);
 
-            std::memcpy((uint8_t*)out + offset, &arg, sizeof(T));
+            auto arg_ = static_cast<T>(arg);
+            std::memcpy((uint8_t*)out + offset, &arg_, sizeof(T));
             write<offset + sizeof(T), Ts...>(out, std::forward<Args>(args)...);
         }
     }

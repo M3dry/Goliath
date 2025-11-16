@@ -431,10 +431,6 @@ namespace engine {
         return get_current_frame_data().descriptor_pool;
     }
 
-    uint32_t get_frames_in_flight() {
-        return frames_in_flight;
-    }
-
     uint32_t get_current_frame() {
         return current_frame;
     }
