@@ -5,6 +5,14 @@
 #include <cassert>
 
 namespace engine::texture_pool {
+    VkImage default_texture;
+    VkImageView default_texture_view;
+    VkSampler default_sampler;
+
+    void init_default() {
+
+    }
+
     VkDescriptorPool pool;
     VkDescriptorSetLayout set_layout;
     VkDescriptorSet set;

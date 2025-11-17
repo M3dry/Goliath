@@ -123,9 +123,6 @@ void update_frag_id_buffers(engine::Buffer* buffers, uint32_t frames_in_flight) 
 
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
-using MatCountPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
-using OffsetsPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t>;
-using FragIdPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
 
@@ -414,44 +411,6 @@ int main(int argc, char** argv) {
                               .depth_write(true)
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
-
-    uint32_t mat_count_spv_size;
-    auto mat_count_spv_data = engine::util::read_file("mat_count.spv", &mat_count_spv_size);
-    auto mat_count_module = engine::create_shader({mat_count_spv_data, mat_count_spv_size});
-    free(mat_count_spv_data);
-
-    auto mat_count_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
-        .count = 1,
-        .type = engine::descriptor::Binding::StorageImage,
-        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-    }>::create();
-    auto mat_count_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
-                                                          .shader(mat_count_module)
-                                                          .descriptor_layout(0, mat_count_set_layout)
-                                                          .push_constant(MatCountPC::size));
-
-    uint32_t offsets_spv_size;
-    auto offsets_spv_data = engine::util::read_file("offsets.spv", &offsets_spv_size);
-    auto offsets_module = engine::create_shader({offsets_spv_data, offsets_spv_size});
-    free(offsets_spv_data);
-
-    auto offsets_pipeline =
-        engine::ComputePipeline(engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(OffsetsPC::size));
-
-    uint32_t frag_id_spv_size;
-    auto frag_id_spv_data = engine::util::read_file("frag_id.spv", &frag_id_spv_size);
-    auto frag_id_module = engine::create_shader({frag_id_spv_data, frag_id_spv_size});
-    free(frag_id_spv_data);
-
-    auto frag_id_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
-        .count = 1,
-        .type = engine::descriptor::Binding::StorageImage,
-        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-    }>::create();
-    auto frag_id_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
-                                                        .shader(frag_id_module)
-                                                        .descriptor_layout(0, frag_id_set_layout)
-                                                        .push_constant(FragIdPC::size));
 
     uint32_t pbr_spv_size;
     auto pbr_spv_data = engine::util::read_file("pbr.spv", &pbr_spv_size);
@@ -1196,7 +1155,6 @@ int main(int argc, char** argv) {
             scene_pipeline.update_viewport_to_swapchain();
             scene_pipeline.update_scissor_to_viewport();
 
-            engine::visbuffer::destroy();
             engine::visbuffer::resize(visbuffer_barriers, true, false);
             for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
                 visbuffer_barriers[i].srcAccessMask = 0;
@@ -1232,17 +1190,6 @@ int main(int argc, char** argv) {
     engine::destroy_shader(scene_vertex_module);
 
     engine::destroy_shader(mesh_fragment_module);
-
-    engine::destroy_descriptor_set_layout(mat_count_set_layout);
-    mat_count_pipeline.destroy();
-    engine::destroy_shader(mat_count_module);
-
-    offsets_pipeline.destroy();
-    engine::destroy_shader(offsets_module);
-
-    engine::destroy_descriptor_set_layout(frag_id_set_layout);
-    frag_id_pipeline.destroy();
-    engine::destroy_shader(frag_id_module);
 
     engine::destroy_descriptor_set_layout(pbr_set_layout);
     pbr_pipeline.destroy();

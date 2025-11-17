@@ -201,7 +201,7 @@ namespace engine {
         vkDestroyImageView(device, view, nullptr);
     }
 
-    VkSampler Sampler::create() {
+    VkSampler Sampler::create() const {
         VkSampler sampler;
         vkCreateSampler(device, &_info, nullptr, &sampler);
         return sampler;

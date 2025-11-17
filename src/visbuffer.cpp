@@ -54,58 +54,11 @@ namespace engine::visbuffer {
 
     VkDescriptorSetLayout shading_set_layout;
 
-    // using PBR = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
-    // ComputePipeline pbr_pipeline;
-
     uint32_t max_material_id = 1;
 
-    void init(VkImageMemoryBarrier2* img_barriers) {
-        vis_buffers = (GPUImage*)malloc(sizeof(GPUImage) * frames_in_flight);
-        vis_buffer_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
-        resize(img_barriers, true, true);
-
-        storage_image_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
-            .count = 1,
-            .type = engine::descriptor::Binding::StorageImage,
-            .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-        }>::create();
-
-        auto material_count_module = engine::create_shader({material_count_spv, material_count_spv_size});
-        material_count_pipeline = ComputePipeline{ComputePipelineBuilder{}
-                                                      .shader(material_count_module)
-                                                      .descriptor_layout(0, storage_image_set_layout)
-                                                      .push_constant(MaterialCount::size)};
-        engine::destroy_shader(material_count_module);
-
-        auto offsets_module = engine::create_shader({offsets_spv, offsets_spv_size});
-        offsets_pipeline = engine::ComputePipeline(
-            engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(Offsets::size));
-        engine::destroy_shader(offsets_module);
-
-        auto fragment_id_module = engine::create_shader({fragment_id_spv, fragment_id_spv_size});
-        fragment_id_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
-                                                           .shader(fragment_id_module)
-                                                           .descriptor_layout(0, storage_image_set_layout)
-                                                           .push_constant(FragmentID::size));
-        engine::destroy_shader(fragment_id_module);
-
-        // auto pbr_module = engine::create_shader({});
-        shading_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
-                                                       .count = 1,
-                                                       .type = engine::descriptor::Binding::StorageImage,
-                                                       .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                   },
-                                                   engine::descriptor::Binding{
-                                                       .count = 1,
-                                                       .type = engine::descriptor::Binding::StorageImage,
-                                                       .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                   }>::create();
-    }
-
-    void resize(VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
+    void _resize(VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
         if (swapchain_changed) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
-                printf("resize width: %d, height: %d\n", swapchain_extent.width, swapchain_extent.height);
                 auto [img, barrier] =
                     GPUImage::upload(GPUImageInfo{}
                                          .new_layout(VK_IMAGE_LAYOUT_GENERAL)
@@ -160,6 +113,61 @@ namespace engine::visbuffer {
         }
     }
 
+    void init(VkImageMemoryBarrier2* img_barriers) {
+        vis_buffers = (GPUImage*)malloc(sizeof(GPUImage) * frames_in_flight);
+        vis_buffer_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
+        _resize(img_barriers, true, true);
+
+        storage_image_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+            .count = 1,
+            .type = engine::descriptor::Binding::StorageImage,
+            .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+        }>::create();
+
+        auto material_count_module = engine::create_shader({material_count_spv, material_count_spv_size});
+        material_count_pipeline = ComputePipeline{ComputePipelineBuilder{}
+                                                      .shader(material_count_module)
+                                                      .descriptor_layout(0, storage_image_set_layout)
+                                                      .push_constant(MaterialCount::size)};
+        engine::destroy_shader(material_count_module);
+
+        auto offsets_module = engine::create_shader({offsets_spv, offsets_spv_size});
+        offsets_pipeline = engine::ComputePipeline(
+            engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(Offsets::size));
+        engine::destroy_shader(offsets_module);
+
+        auto fragment_id_module = engine::create_shader({fragment_id_spv, fragment_id_spv_size});
+        fragment_id_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                                           .shader(fragment_id_module)
+                                                           .descriptor_layout(0, storage_image_set_layout)
+                                                           .push_constant(FragmentID::size));
+        engine::destroy_shader(fragment_id_module);
+
+        shading_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+                                                       .count = 1,
+                                                       .type = engine::descriptor::Binding::StorageImage,
+                                                       .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                   },
+                                                   engine::descriptor::Binding{
+                                                       .count = 1,
+                                                       .type = engine::descriptor::Binding::StorageImage,
+                                                       .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                   }>::create();
+    }
+
+    void resize(VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
+        if (swapchain_changed) {
+            for (std::size_t i = 0; i < frames_in_flight; i++) {
+                vis_buffers[i].destroy();
+                GPUImageView::destroy(vis_buffer_views[i]);
+            }
+        }
+
+        if (swapchain_changed || material_count_changed) stages.destroy();
+
+        _resize(img_barriers, swapchain_changed, material_count_changed);
+    }
+
     void destroy() {
         for (std::size_t i = 0; i < frames_in_flight; i++) {
             vis_buffers[i].destroy();
@@ -174,9 +182,9 @@ namespace engine::visbuffer {
         fragment_id_pipeline.destroy();
 
         engine::destroy_descriptor_set_layout(shading_set_layout);
-        // pbr_pipeline.destroy();
 
         free(vis_buffers);
+        free(vis_buffer_views);
     }
 
     void push_material(uint16_t n) {

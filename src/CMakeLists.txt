@@ -7,6 +7,9 @@ set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
 set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(./tinygltf)
 
+set(XXHASH_BUNDLED_MODE ON CACHE BOOL "" FORCE)
+add_subdirectory(xxHash/build/cmake)
+
 set(IMGUI_SOURCES
     imgui/imgui.cpp
     imgui/imgui_draw.cpp
@@ -40,6 +43,7 @@ SET(ENGINE_SOURCES
     gpu_group.cpp
     visbuffer.cpp
     compute.cpp
+    texture_registry.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}
@@ -54,5 +58,5 @@ target_include_directories(goliath
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
-target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd)
-target_compile_definitions(goliath PUBLIC ENGINE_MODE PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
+target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd xxHash::xxhash)
+target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
