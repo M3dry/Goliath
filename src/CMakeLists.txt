@@ -8,7 +8,7 @@ set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
 add_subdirectory(./tinygltf)
 
 set(XXHASH_BUNDLED_MODE ON CACHE BOOL "" FORCE)
-add_subdirectory(xxHash/build/cmake)
+add_subdirectory(xxHash/cmake_unofficial)
 
 set(IMGUI_SOURCES
     imgui/imgui.cpp
