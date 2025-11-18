@@ -8,6 +8,7 @@
 #include <cstring>
 #include <queue>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include "xxHash/xxhash.h"
@@ -15,9 +16,18 @@
 #include "stb_image.h"
 
 namespace engine::texture_registry {
+    struct Metadata {
+        uint32_t width;
+        uint32_t height;
+        VkFormat format;
+    };
+
+    using Path = std::variant<std::filesystem::path, uint32_t>;
+
     std::vector<std::string> names{};
-    std::vector<std::filesystem::path> paths{};
+    std::vector<Path> paths{};
     std::vector<std::pair<uint8_t*, uint32_t>> blobs{};
+    std::vector<Metadata> metadatas{};
 
     std::vector<uint32_t> ref_counts{};
     std::vector<GPUImage> gpu_images{};
@@ -34,17 +44,21 @@ namespace engine::texture_registry {
     std::atomic<uint32_t> gpu_queue_write_ix{0};
     std::atomic<uint32_t> gpu_queue_processing_ix{0};
 
-    void load_texture_data(uint32_t gid, bool new_path) {
+    void load_texture_data(uint32_t gid) {
         const auto& path = paths[gid];
         auto& blob = blobs[gid];
 
-        if (!path.empty() && !(!new_path && blob.first != nullptr)) {
-            if (new_path && blob.first != nullptr) free(blob.first);
-
-            auto image = Image::load8(path.c_str());
+        if (std::holds_alternative<std::filesystem::path>(path) && blobs[gid].first == nullptr) {
+            auto image = Image::load8(std::get<std::filesystem::path>(path).c_str());
 
             blobs[gid].first = (uint8_t*)image.data;
             blobs[gid].second = image.size;
+
+            metadatas[gid] = Metadata{
+                .width = image.width,
+                .height = image.height,
+                .format = image.format,
+            };
         } else {
             assert(blob.first != nullptr);
         }
@@ -52,8 +66,6 @@ namespace engine::texture_registry {
 
     struct task {
         uint32_t gid;
-        bool path_changed;
-        bool gpu_upload;
     };
 
     struct queue_pool {
@@ -70,8 +82,7 @@ namespace engine::texture_registry {
                             tasks.pop();
                         }
 
-                        load_texture_data(task.gid, task.path_changed);
-                        if (!task.gpu_upload) return;
+                        load_texture_data(task.gid);
 
                         uint32_t ix = gpu_queue_write_ix.fetch_add(1, std::memory_order_acq_rel);
                         uint32_t slot = ix % gpu_queue_size;
@@ -172,7 +183,11 @@ namespace engine::texture_registry {
 
         gpu_queue_processing_ix.store(end, std::memory_order_release);
 
-        for (const auto& gid : gids) {}
+        for (const auto& gid : gids) {
+            // TODO: upload to GPU please
+
+            free(blobs[gid].first);
+        }
     }
 
     void init() {}
@@ -181,17 +196,54 @@ namespace engine::texture_registry {
         for (auto& sampler : initialized_samplers) {
             vkDestroySampler(device, sampler, nullptr);
         }
+
+        for (std::size_t i = 0; i < names.size(); i++) {
+            if (ref_counts[i] == 0) continue;
+
+            gpu_images[i].destroy();
+            GPUImageView::destroy(gpu_image_views[i]);
+        }
     }
 
     void load(uint8_t* file_data, uint32_t file_size, bool load_names) {}
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
+
+        names.emplace_back(std::move(name));
+        paths.emplace_back(std::move(path));
+        blobs.emplace_back(nullptr, 0);
+        metadatas.emplace_back();
+        ref_counts.emplace_back(0);
+        gpu_images.emplace_back();
+        gpu_image_views.emplace_back();
+        samplers.emplace_back(sampler_ix);
+
+        return names.size() - 1;
     }
 
     // makes a copy of `data`, no ownership assumed
-    uint32_t add(uint8_t* data, uint32_t data_size, std::string name, const Sampler& sampler) {
+    uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name, const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
+
+        names.emplace_back(std::move(name));
+        paths.emplace_back((uint32_t)-1);
+
+        void* data_copy = malloc(data_size);
+        std::memcpy(data_copy, data, data_size);
+        blobs.emplace_back((uint8_t*)data_copy, data_size);
+
+        metadatas.emplace_back(Metadata{
+            .width = width,
+            .height = height,
+            .format = format,
+        });
+        ref_counts.emplace_back(0);
+        gpu_images.emplace_back();
+        gpu_image_views.emplace_back();
+        samplers.emplace_back(sampler_ix);
+
+        return names.size() - 1;
     }
 
     void remove(uint32_t gid) {}
@@ -201,7 +253,11 @@ namespace engine::texture_registry {
             auto gid = gids[i];
             if (ref_counts[gid]++ != 1) continue;
 
-            // dispatch load thread
+            task task{
+                .gid = gid,
+            };
+            upload_queue.enqueue(&task, 1);
+
             texture_pool::update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                                  texture_pool::default_sampler);
         }
