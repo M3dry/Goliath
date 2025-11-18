@@ -8,7 +8,6 @@
 #include <cstring>
 #include <queue>
 #include <thread>
-#include <variant>
 #include <vector>
 
 #include "xxHash/xxhash.h"
@@ -22,10 +21,8 @@ namespace engine::texture_registry {
         VkFormat format;
     };
 
-    using Path = std::variant<std::filesystem::path, uint32_t>;
-
     std::vector<std::string> names{};
-    std::vector<Path> paths{};
+    std::vector<std::filesystem::path> paths{};
     std::vector<std::pair<uint8_t*, uint32_t>> blobs{};
     std::vector<Metadata> metadatas{};
 
@@ -48,8 +45,8 @@ namespace engine::texture_registry {
         const auto& path = paths[gid];
         auto& blob = blobs[gid];
 
-        if (std::holds_alternative<std::filesystem::path>(path) && blobs[gid].first == nullptr) {
-            auto image = Image::load8(std::get<std::filesystem::path>(path).c_str());
+        if (!path.empty() && blobs[gid].first == nullptr) {
+            auto image = Image::load8(path.c_str());
 
             blobs[gid].first = (uint8_t*)image.data;
             blobs[gid].second = image.size;
@@ -186,6 +183,7 @@ namespace engine::texture_registry {
         for (const auto& gid : gids) {
             // TODO: upload to GPU please
 
+            printf("freed: %s\n", names[gid].c_str());
             free(blobs[gid].first);
         }
     }
@@ -205,7 +203,13 @@ namespace engine::texture_registry {
         }
     }
 
-    void load(uint8_t* file_data, uint32_t file_size, bool load_names) {}
+    void load(uint8_t* file_data, uint32_t file_size) {
+
+    }
+
+    void save(const std::filesystem::path& save_file) {
+
+    }
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
@@ -227,7 +231,7 @@ namespace engine::texture_registry {
         auto sampler_ix = acquire_sampler(sampler);
 
         names.emplace_back(std::move(name));
-        paths.emplace_back((uint32_t)-1);
+        paths.emplace_back();
 
         void* data_copy = malloc(data_size);
         std::memcpy(data_copy, data, data_size);
@@ -251,7 +255,7 @@ namespace engine::texture_registry {
     void acquire(uint32_t* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (ref_counts[gid]++ != 1) continue;
+            if (++ref_counts[gid] != 1) continue;
 
             task task{
                 .gid = gid,

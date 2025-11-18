@@ -344,7 +344,6 @@ namespace engine::transport {
         barrier->pNext = nullptr;
         barrier->srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         barrier->srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-
         barrier->subresourceRange = VkImageSubresourceRange{
             .aspectMask = aspect_mask,
             .baseMipLevel = 0,

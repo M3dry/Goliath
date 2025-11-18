@@ -3,14 +3,37 @@
 
 #include "goliath/engine.hpp"
 #include <cassert>
+#include <vulkan/vulkan_core.h>
 
 namespace engine::texture_pool {
-    VkImage default_texture;
+    GPUImage default_texture;
     VkImageView default_texture_view;
     VkSampler default_sampler;
 
-    void init_default() {
+    VkImageMemoryBarrier2 init_default_texture() {
+        uint8_t white[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+        auto [img, barrier] =
+            GPUImage::upload(GPUImageInfo{}
+                                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                 .data(white)
+                                 .size(sizeof(white))
+                                 .height(1)
+                                 .width(1)
+                                 .format(VK_FORMAT_R8G8B8A8_UNORM)
+                                 .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                 .usage(VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 
+        default_texture = img;
+        default_texture_view = GPUImageView{img}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+        default_sampler = Sampler{}.create();
+
+        return barrier;
+    }
+
+    void destroy_default_texture() {
+        default_texture.destroy();
+        GPUImageView::destroy(default_texture_view);
+        Sampler::destroy(default_sampler);
     }
 
     VkDescriptorPool pool;
@@ -98,7 +121,7 @@ namespace engine::texture_pool {
     }
 
     std::pair<uint32_t, uint32_t> alloc(uint32_t count) {
-        return {0,0};
+        return {0, 0};
         // assert(false && "TODO retard");
     }
 

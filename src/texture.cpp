@@ -134,6 +134,7 @@ namespace engine {
         if (builder._img_data != nullptr) {
             transport::upload(&barrier, builder._img_data, builder._size, builder._width, builder._height,
                               builder._image_info.format, gpu_img.image);
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors disappear thanks to this
         } else {
             barrier.image = gpu_img.image;
             barrier.srcQueueFamilyIndex = graphics_queue_family;

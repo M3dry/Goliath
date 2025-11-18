@@ -9,7 +9,8 @@ namespace engine::texture_registry {
     void init();
     void destroy();
 
-    void load(uint8_t* file_data, uint32_t file_size, bool load_names);
+    void load(uint8_t* file_data, uint32_t file_size);
+    void save(const std::filesystem::path& save_file);
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler);
     // makes a copy of `data`, no ownership assumed

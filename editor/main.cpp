@@ -12,6 +12,7 @@
 #include "goliath/scene.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
+#include "goliath/texture_registry.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -47,11 +48,8 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMem
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         auto [depth_img, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
                                                                  .format(VK_FORMAT_D16_UNORM)
-                                                                 .extent(VkExtent3D{
-                                                                     .width = engine::swapchain_extent.width,
-                                                                     .height = engine::swapchain_extent.height,
-                                                                     .depth = 1,
-                                                                 })
+                                                                 .width(engine::swapchain_extent.width)
+                                                                 .height(engine::swapchain_extent.height)
                                                                  .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
                                                                  .new_layout(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
                                                                  .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
@@ -71,11 +69,8 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
         auto [target_img, barrier] =
             engine::GPUImage::upload(engine::GPUImageInfo{}
                                          .format(VK_FORMAT_R32G32B32A32_SFLOAT)
-                                         .extent(VkExtent3D{
-                                             .width = engine::swapchain_extent.width,
-                                             .height = engine::swapchain_extent.height,
-                                             .depth = 1,
-                                         })
+                                         .width(engine::swapchain_extent.width)
+                                         .height(engine::swapchain_extent.height)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                          .new_layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
@@ -361,6 +356,10 @@ int main(int argc, char** argv) {
 
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
+
+
+    auto test_gid = engine::texture_registry::add(argv[1], "test test", engine::Sampler{});
+    engine::texture_registry::acquire(&test_gid, 1);
 
     VkImageMemoryBarrier2* visbuffer_barriers =
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight);

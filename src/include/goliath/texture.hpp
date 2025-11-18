@@ -57,6 +57,7 @@ namespace engine {
             _image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
             _image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
             _image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+            _image_info.extent.depth = 1;
         };
 
         GPUImageInfo&& image_type(VkImageType type) {
@@ -94,11 +95,6 @@ namespace engine {
             return std::move(*this);
         }
 
-        GPUImageInfo&& extent(VkExtent3D extent_3d) {
-            _image_info.extent = extent_3d;
-            return std::move(*this);
-        }
-
         GPUImageInfo&& format(VkFormat fmt) {
             _image_info.format = fmt;
             return std::move(*this);
@@ -126,10 +122,18 @@ namespace engine {
 
         GPUImageInfo&& width(uint32_t width) {
             _width = width;
+            _image_info.extent.width = width;
             return std::move(*this);
         }
+
         GPUImageInfo&& height(uint32_t height) {
             _height = height;
+            _image_info.extent.height = height;
+            return std::move(*this);
+        }
+
+        GPUImageInfo&& depth(uint32_t depth) {
+            _image_info.extent.depth = depth;
             return std::move(*this);
         }
 

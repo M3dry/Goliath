@@ -1,7 +1,11 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
+#include "goliath/synchronization.hpp"
+#include "goliath/texture_registry.hpp"
+#include "goliath/transport.hpp"
 #include "texture_pool_.hpp"
+#include "texture_registry_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <volk.h>
@@ -280,6 +284,44 @@ namespace engine {
         imgui::init();
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
+        texture_registry::init();
+
+        {
+            transport::begin();
+            auto default_tex_barrier = texture_pool::init_default_texture();
+            transport::end();
+            default_tex_barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            default_tex_barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            auto cmd_buf = frames[0].cmd_buf;
+            vkResetCommandBuffer(cmd_buf, 0);
+
+            VkCommandBufferBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            VK_CHECK(vkBeginCommandBuffer(cmd_buf, &begin_info));
+
+            synchronization::begin_barriers();
+            synchronization::apply_barrier(default_tex_barrier);
+            synchronization::end_barriers();
+
+            VK_CHECK(vkEndCommandBuffer(cmd_buf));
+
+            VkCommandBufferSubmitInfo cmd_info{};
+            cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+            cmd_info.commandBuffer = cmd_buf;
+
+            VkSubmitInfo2 submit_info{};
+            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+            submit_info.commandBufferInfoCount = 1;
+            submit_info.pCommandBufferInfos = &cmd_info;
+            submit_info.waitSemaphoreInfoCount = 0;
+            submit_info.signalSemaphoreInfoCount = 0;
+
+            VK_CHECK(vkResetFences(device, 1, &frames[0].render_fence));
+            VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, frames[0].render_fence));
+        }
 
         glfwShowWindow(window);
     };
@@ -287,6 +329,8 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
+        texture_pool::destroy_default_texture();
+        texture_registry::destroy();
         descriptor::destroy_empty_set();
         imgui::destroy();
         texture_pool::destroy();
@@ -328,6 +372,8 @@ namespace engine {
     }
 
     bool prepare_frame() {
+        texture_registry::process_uploads();
+
         FrameData& frame = get_current_frame_data();
 
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));

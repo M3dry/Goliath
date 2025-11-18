@@ -63,11 +63,8 @@ namespace engine::visbuffer {
                     GPUImage::upload(GPUImageInfo{}
                                          .new_layout(VK_IMAGE_LAYOUT_GENERAL)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                         .extent(VkExtent3D{
-                                             .width = swapchain_extent.width,
-                                             .height = swapchain_extent.height,
-                                             .depth = 1,
-                                         })
+                                         .width(swapchain_extent.width)
+                                         .height(swapchain_extent.height)
                                          .format(VK_FORMAT_R32G32B32A32_UINT)
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
