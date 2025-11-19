@@ -372,8 +372,6 @@ namespace engine {
     }
 
     bool prepare_frame() {
-        texture_registry::process_uploads();
-
         FrameData& frame = get_current_frame_data();
 
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
@@ -407,6 +405,8 @@ namespace engine {
 
         transition_image(cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+        texture_registry::process_uploads();
     }
 
     bool next_frame() {

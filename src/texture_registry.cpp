@@ -1,5 +1,6 @@
 #include "goliath/texture_registry.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/synchronization.hpp"
 #include "goliath/texture_pool.hpp"
 
 #include <array>
@@ -9,7 +10,9 @@
 #include <queue>
 #include <thread>
 #include <vector>
+#include <vulkan/vulkan_core.h>
 
+#include "goliath/transport.hpp"
 #include "xxHash/xxhash.h"
 
 #include "stb_image.h"
@@ -40,8 +43,25 @@ namespace engine::texture_registry {
     std::array<uint32_t, gpu_queue_size> gpu_queue{};
     std::atomic<uint32_t> gpu_queue_write_ix{0};
     std::atomic<uint32_t> gpu_queue_processing_ix{0};
+    std::mutex gid_read{};
+
+    std::deque<std::pair<uint64_t, uint64_t>> finalize_queue{};
+
+    std::vector<bool> deleted{};
+
+    std::optional<uint32_t> find_empty_gid() {
+        for (uint32_t i = 0; i < deleted.size(); i++) {
+            if (deleted[i]) {
+                return i;
+            }
+        }
+
+        return std::nullopt;
+    }
 
     void load_texture_data(uint32_t gid) {
+        std::lock_guard lock{gid_read};
+
         const auto& path = paths[gid];
         auto& blob = blobs[gid];
 
@@ -96,7 +116,7 @@ namespace engine::texture_registry {
 
         ~queue_pool() {
             {
-                std::lock_guard lock(mutex);
+                std::lock_guard lock{ mutex };
                 stop = true;
             }
             cv.notify_all();
@@ -106,7 +126,7 @@ namespace engine::texture_registry {
 
         void enqueue(task* new_tasks, uint32_t count) {
             {
-                std::lock_guard lock(mutex);
+                std::lock_guard lock{ mutex };
                 for (std::size_t i = 0; i < count; i++) {
                     tasks.emplace(new_tasks[i]);
                 }
@@ -172,7 +192,6 @@ namespace engine::texture_registry {
     void process_uploads() {
         uint32_t end = gpu_queue_write_ix.load(std::memory_order_acquire);
         uint32_t start = gpu_queue_processing_ix.load(std::memory_order_acquire);
-        if (end == start) return;
 
         std::vector<uint32_t> gids{};
         gids.resize(end - start);
@@ -180,11 +199,54 @@ namespace engine::texture_registry {
 
         gpu_queue_processing_ix.store(end, std::memory_order_release);
 
-        for (const auto& gid : gids) {
-            // TODO: upload to GPU please
+        std::vector<VkImageMemoryBarrier2> barriers{};
+        barriers.resize(gids.size());
 
-            printf("freed: %s\n", names[gid].c_str());
-            free(blobs[gid].first);
+        uint64_t finish_timeline;
+        if (gids.size() != 0) {
+            synchronization::begin_barriers();
+            transport::begin();
+            for (const auto& gid : gids) {
+                if (ref_counts[gid] != 0 && !deleted[gid]) {
+                    auto metadata = metadatas[gid];
+                    auto [image, barrier] = GPUImage::upload(GPUImageInfo{}
+                                                                 .width(metadata.width)
+                                                                 .height(metadata.height)
+                                                                 .format(metadata.format)
+                                                                 .data(blobs[gid].first)
+                                                                 .size(blobs[gid].second)
+                                                                 .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                                                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+                    gpu_images[gid] = image;
+                    gpu_image_views[gid] = GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    barrier.dstStageMask =
+                        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    synchronization::apply_barrier(barrier);
+
+                    free(blobs[gid].first);
+                    blobs[gid].first = nullptr;
+                    blobs[gid].second = 0;
+                }
+            }
+            finish_timeline = transport::end();
+            synchronization::end_barriers();
+        }
+
+        while (finalize_queue.size() > 0 && transport::is_ready(finalize_queue.front().first)) {
+            auto gid = finalize_queue.front().second;
+
+            if (ref_counts[gid] != 0 && !deleted[gid]) {
+                texture_pool::update(gid, gpu_image_views[gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     initialized_samplers[samplers[gid]]);
+            }
+
+            finalize_queue.pop_front();
+        }
+
+        for (const auto& gid : gids) {
+            finalize_queue.emplace_back(finish_timeline, gid);
         }
     }
 
@@ -204,53 +266,122 @@ namespace engine::texture_registry {
     }
 
     void load(uint8_t* file_data, uint32_t file_size) {
-
+        
     }
 
     void save(const std::filesystem::path& save_file) {
-
+        
     }
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
 
-        names.emplace_back(std::move(name));
-        paths.emplace_back(std::move(path));
-        blobs.emplace_back(nullptr, 0);
-        metadatas.emplace_back();
-        ref_counts.emplace_back(0);
-        gpu_images.emplace_back();
-        gpu_image_views.emplace_back();
-        samplers.emplace_back(sampler_ix);
+        if (auto gid_ = find_empty_gid(); gid_) {
+            auto gid = *gid_;
 
-        return names.size() - 1;
+            names[gid] = std::move(name);
+            paths[gid] = std::move(path);
+            blobs[gid] = {nullptr, 0};
+            metadatas[gid] = Metadata{};
+            ref_counts[gid] = 0;
+            gpu_images[gid] = GPUImage{};
+            gpu_image_views[gid] = nullptr;
+            samplers[gid] = sampler_ix;
+
+            deleted[gid] = false;
+
+            return gid;
+        } else {
+            std::lock_guard lock{gid_read};
+
+            names.emplace_back(std::move(name));
+            paths.emplace_back(std::move(path));
+            blobs.emplace_back(nullptr, 0);
+            metadatas.emplace_back();
+            ref_counts.emplace_back(0);
+            gpu_images.emplace_back();
+            gpu_image_views.emplace_back();
+            samplers.emplace_back(sampler_ix);
+
+            deleted.emplace_back(false);
+
+            return names.size() - 1;
+        }
     }
 
     // makes a copy of `data`, no ownership assumed
-    uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name, const Sampler& sampler) {
+    uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name,
+                 const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
-
-        names.emplace_back(std::move(name));
-        paths.emplace_back();
 
         void* data_copy = malloc(data_size);
         std::memcpy(data_copy, data, data_size);
-        blobs.emplace_back((uint8_t*)data_copy, data_size);
 
-        metadatas.emplace_back(Metadata{
-            .width = width,
-            .height = height,
-            .format = format,
-        });
-        ref_counts.emplace_back(0);
-        gpu_images.emplace_back();
-        gpu_image_views.emplace_back();
-        samplers.emplace_back(sampler_ix);
+        if (auto gid_ = find_empty_gid(); gid_) {
+            auto gid = *gid_;
 
-        return names.size() - 1;
+            names[gid] = std::move(name);
+            paths.emplace_back();
+            blobs[gid] = {(uint8_t*)data_copy, data_size};
+
+            metadatas[gid] = Metadata{
+                .width = width,
+                .height = height,
+                .format = format,
+            };
+            ref_counts[gid] = 0;
+            gpu_images[gid] = GPUImage{};
+            gpu_image_views[gid] = nullptr;
+            samplers[gid] = sampler_ix;
+
+            deleted[gid] = false;
+
+            return gid;
+        } else {
+            std::lock_guard lock{gid_read};
+
+            names.emplace_back(std::move(name));
+            paths.emplace_back();
+            blobs.emplace_back((uint8_t*)data_copy, data_size);
+
+            metadatas.emplace_back(Metadata{
+                .width = width,
+                .height = height,
+                .format = format,
+            });
+            ref_counts.emplace_back(0);
+            gpu_images.emplace_back();
+            gpu_image_views.emplace_back();
+            samplers.emplace_back(sampler_ix);
+
+            deleted.emplace_back(false);
+
+            return names.size() - 1;
+        }
     }
 
-    void remove(uint32_t gid) {}
+    void remove(uint32_t gid) {
+        std::lock_guard lock{gid_read};
+
+        if (ref_counts[gid] != 0) {
+            gpu_images[gid].destroy();
+            GPUImageView::destroy(gpu_image_views[gid]);
+
+            ref_counts[gid] = 0;
+        }
+        release_sampler(samplers[gid]);
+
+        names[gid] = "";
+        paths[gid] = "";
+        free(blobs[gid].first);
+        blobs[gid] = {nullptr, 0};
+        metadatas[gid] = Metadata{};
+
+        deleted[gid] = true;
+
+        texture_pool::update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
+                             texture_pool::default_sampler);
+    }
 
     void acquire(uint32_t* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {

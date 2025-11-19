@@ -24,6 +24,7 @@
 #include <format>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <unistd.h>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -357,9 +358,14 @@ int main(int argc, char** argv) {
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
 
-
     auto test_gid = engine::texture_registry::add(argv[1], "test test", engine::Sampler{});
     engine::texture_registry::acquire(&test_gid, 1);
+    auto test_gid2 = engine::texture_registry::add(argv[1], "test test", engine::Sampler{});
+    engine::texture_registry::acquire(&test_gid2, 1);
+
+    engine::texture_registry::remove(test_gid);
+    auto test_gid3 = engine::texture_registry::add(argv[2], "test test", engine::Sampler{});
+    engine::texture_registry::acquire(&test_gid3, 1);
 
     VkImageMemoryBarrier2* visbuffer_barriers =
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight);
