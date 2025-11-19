@@ -238,6 +238,7 @@ namespace engine::texture_registry {
             auto gid = finalize_queue.front().second;
 
             if (ref_counts[gid] != 0 && !deleted[gid]) {
+                printf("adding to pool: %lu\n", gid);
                 texture_pool::update(gid, gpu_image_views[gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      initialized_samplers[samplers[gid]]);
             }
