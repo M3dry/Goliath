@@ -1,8 +1,6 @@
 #include "goliath/rendering.hpp"
 #include "engine_.hpp"
 #include "goliath/engine.hpp"
-#include "goliath/texture_pool.hpp"
-#include "texture_pool_.hpp"
 
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
@@ -42,7 +40,7 @@ engine::GraphicsPipelineBuilder::GraphicsPipelineBuilder() {
     _set_layout[0] = descriptor::empty_set;
     _set_layout[1] = descriptor::empty_set;
     _set_layout[2] = descriptor::empty_set;
-    _set_layout[3] = texture_pool::set_layout;
+    _set_layout[3] = descriptor::empty_set;
 }
 
 engine::GraphicsPipelineBuilder&& engine::GraphicsPipelineBuilder::clear_descriptor(uint32_t index) {
@@ -197,13 +195,12 @@ void engine::GraphicsPipeline::draw(const DrawParams& params) {
                            params.push_constant);
     }
 
-    for (uint32_t i = 0; i < 3; i++) {
+    for (uint32_t i = 0; i < params.descriptor_indexes.size(); i++) {
         if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
 
         descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  _pipeline_layout, i);
     }
-    texture_pool::bind(VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout);
 
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
 }
@@ -217,13 +214,12 @@ void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
                            params.push_constant);
     }
 
-    for (uint32_t i = 0; i < 3; i++) {
+    for (uint32_t i = 0; i < params.descriptor_indexes.size(); i++) {
         if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
 
         descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                  _pipeline_layout, i);
     }
-    texture_pool::bind(VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout);
 
     vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);
 }

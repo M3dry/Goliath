@@ -327,8 +327,8 @@ namespace engine {
     struct GraphicsPipeline {
         struct DrawParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
-                                                          descriptor::null_set};
+            std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set, descriptor::null_set};
             uint32_t vertex_count;
             uint32_t instance_count = 1;
             uint32_t first_vertex_id = 0;

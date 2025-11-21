@@ -280,7 +280,6 @@ namespace engine {
         transport_queue_family = vkb_device.get_queue_index(vkb::QueueType::transfer).value();
 
         transport::init();
-        texture_pool::init(max_texture_count);
         imgui::init();
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
@@ -333,7 +332,6 @@ namespace engine {
         texture_registry::destroy();
         descriptor::destroy_empty_set();
         imgui::destroy();
-        texture_pool::destroy();
         transport::destroy();
 
         delete[] frames;

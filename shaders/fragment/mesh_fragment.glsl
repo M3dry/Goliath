@@ -15,8 +15,6 @@ layout(push_constant, std430) uniform Push {
     mat4 m;
 };
 
-layout(set = 3, binding = 0) uniform sampler2D textures[];
-
 layout(location = 0) flat in uint mesh_data_offset;
 layout(location = 1) flat in uint primitive_id;
 layout(location = 2) in vec3 barycentric;

@@ -1,7 +1,7 @@
 #include "goliath/texture_registry.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/synchronization.hpp"
-#include "goliath/texture_pool.hpp"
+#include "goliath/transport.hpp"
 
 #include <array>
 #include <atomic>
@@ -12,7 +12,6 @@
 #include <vector>
 #include <vulkan/vulkan_core.h>
 
-#include "goliath/transport.hpp"
 #include "xxHash/xxhash.h"
 
 #include "stb_image.h"
@@ -23,6 +22,8 @@ namespace engine::texture_registry {
         uint32_t height;
         VkFormat format;
     };
+
+    TexturePool texture_pool;
 
     std::vector<std::string> names{};
     std::vector<std::filesystem::path> paths{};
@@ -242,7 +243,7 @@ namespace engine::texture_registry {
             auto task = finalize_queue.front().second;
 
             if (ref_counts[task.gid] != 0 && !deleted[task.gid] && generations[task.gid] == task.generation) {
-                texture_pool::update(task.gid, gpu_image_views[task.gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                texture_pool.update(task.gid, gpu_image_views[task.gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      initialized_samplers[samplers[task.gid]]);
             }
 
@@ -251,12 +252,14 @@ namespace engine::texture_registry {
 
         for (const auto& task : tasks) {
             if (ref_counts[task.gid] != 0 && !deleted[task.gid] && generations[task.gid] == task.generation) {
-                    finalize_queue.emplace_back(finish_timeline, task);
+                finalize_queue.emplace_back(finish_timeline, task);
             }
         }
     }
 
-    void init() {}
+    void init() {
+        texture_pool = TexturePool{1000};
+    }
 
     void destroy() {
         for (auto& sampler : initialized_samplers) {
@@ -269,6 +272,8 @@ namespace engine::texture_registry {
             gpu_images[i].destroy();
             GPUImageView::destroy(gpu_image_views[i]);
         }
+
+        texture_pool.destroy();
     }
 
     void load(uint8_t* file_data, uint32_t file_size) {}
@@ -296,6 +301,12 @@ namespace engine::texture_registry {
             return gid;
         } else {
             std::lock_guard lock{gid_read};
+
+            if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
+                texture_pool.destroy();
+                texture_pool = TexturePool{(uint32_t)(cap*1.5)};
+                rebuild_pool();
+            }
 
             names.emplace_back(std::move(name));
             paths.emplace_back(std::move(path));
@@ -345,6 +356,12 @@ namespace engine::texture_registry {
         } else {
             std::lock_guard lock{gid_read};
 
+            if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
+                texture_pool.destroy();
+                texture_pool = TexturePool{(uint32_t)(cap*1.5)};
+                rebuild_pool();
+            }
+
             names.emplace_back(std::move(name));
             paths.emplace_back();
             blobs.emplace_back((uint8_t*)data_copy, data_size);
@@ -383,11 +400,77 @@ namespace engine::texture_registry {
 
         deleted[gid] = true;
 
-        texture_pool::update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
+        texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                              texture_pool::default_sampler);
     }
 
-    void acquire(uint32_t* gids, uint32_t count) {
+    std::string& get_name(uint32_t gid) {
+        return names[gid];
+    }
+
+    const std::filesystem::path& get_path(uint32_t gid) {
+        return paths[gid];
+    }
+
+    std::span<const uint8_t> get_blob(uint32_t gid) {
+        return {blobs[gid].first, blobs[gid].second};
+    }
+
+    GPUImage get_image(uint32_t gid) {
+        return gpu_images[gid];
+    }
+
+    VkImageView get_image_view(uint32_t gid) {
+        return gpu_image_views[gid];
+    }
+
+    Sampler get_sampler(uint32_t gid) {
+        return sampler_prototypes[samplers[gid]];
+    }
+
+    void change_path(uint32_t gid, std::filesystem::path new_path) {
+        std::lock_guard lock{gid_read};
+
+        paths[gid] = std::move(new_path);
+        generations[gid]++;
+
+        free(blobs[gid].first);
+        blobs[gid].first = nullptr;
+        blobs[gid].second = 0;
+        gpu_images[gid].destroy();
+        GPUImageView::destroy(gpu_image_views[gid]);
+
+        task task{
+            .gid = gid,
+            .generation = generations[gid],
+        };
+        upload_queue.enqueue(&task, 1);
+    }
+
+    void change_data(uint32_t gid, uint8_t* data, uint32_t data_size) {
+        std::lock_guard lock{gid_read};
+
+        paths[gid] = "";
+        generations[gid]++;
+
+        free(blobs[gid].first);
+        gpu_images[gid].destroy();
+        GPUImageView::destroy(gpu_image_views[gid]);
+
+        void* blob = malloc(data_size);
+        std::memcpy(blob, data, data_size);
+
+        blobs[gid].first = (uint8_t*)blob;
+        blobs[gid].second = data_size;
+
+        task task{
+            .gid = gid,
+            .generation = generations[gid],
+        };
+        upload_queue.enqueue(&task, 1);
+    }
+
+    void acquire(const uint32_t* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
             if (++ref_counts[gid] != 1) continue;
@@ -398,20 +481,34 @@ namespace engine::texture_registry {
             };
             upload_queue.enqueue(&task, 1);
 
-            texture_pool::update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
+            texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                                  texture_pool::default_sampler);
         }
     }
 
-    void release(uint32_t* gids, uint32_t count) {
+    void release(const uint32_t* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
             if (--ref_counts[gid] != 0) return;
 
             gpu_images[gid].destroy();
             GPUImageView::destroy(gpu_image_views[gid]);
-            texture_pool::update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
+            texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                                  texture_pool::default_sampler);
         }
+    }
+
+    void rebuild_pool() {
+        for (uint32_t gid = 0; gid < names.size(); gid++) {
+            if (deleted[gid]) continue;
+            if (ref_counts[gid] == 0) continue;
+
+            texture_pool.update(gid, gpu_image_views[gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                 initialized_samplers[samplers[gid]]);
+        }
+    }
+
+    const TexturePool& get_texture_pool() {
+        return texture_pool;
     }
 }

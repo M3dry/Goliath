@@ -1,5 +1,4 @@
 #include "goliath/gpu_group.hpp"
-#include "goliath/texture_pool.hpp"
 #include "goliath/transport.hpp"
 
 #include <cstdio>
@@ -8,7 +7,6 @@
 
 void engine::GPUGroup::destroy() {
     data.destroy();
-    texture_pool::free(texture_block);
 }
 
 namespace engine::gpu_group {
@@ -25,18 +23,15 @@ namespace engine::gpu_group {
     };
     std::vector<UploadFunc> upload_ptrs{};
     uint32_t needed_data_size = 0;
-    uint32_t needed_texture_count = 0;
 
     void begin() {
         upload_ptrs.clear();
         needed_data_size = 0;
-        needed_texture_count = 0;
     }
 
-    uint32_t upload(uint32_t texture_count, uint32_t data_size, void(*upload_ptr)(uint8_t*, uint32_t, uint32_t, void*), void* ctx) {
+    uint32_t upload( uint32_t data_size, void(*upload_ptr)(uint8_t*, uint32_t, uint32_t, void*), void* ctx) {
         upload_ptrs.emplace_back(UploadFunc{upload_ptr, ctx, needed_data_size, data_size});
 
-        needed_texture_count += texture_count;
         needed_data_size += data_size;
 
         return needed_data_size - data_size;
@@ -47,7 +42,6 @@ namespace engine::gpu_group {
 
         auto group = GPUGroup{
             .data = Buffer::create(needed_data_size, VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | usage_flags, std::nullopt),
-            .texture_block = texture_pool::alloc(needed_texture_count),
         };
 
         uint8_t* data = (uint8_t*)malloc(needed_data_size);

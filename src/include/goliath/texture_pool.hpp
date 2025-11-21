@@ -2,7 +2,6 @@
 
 #include "goliath/texture.hpp"
 
-#include <utility>
 #include <volk.h>
 
 namespace engine::texture_pool {
@@ -12,10 +11,25 @@ namespace engine::texture_pool {
     extern VkImageView default_texture_view;
     static constexpr VkImageLayout default_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     extern VkSampler default_sampler;
+}
 
-    void update(uint32_t ix, VkImageView view, VkImageLayout layout, VkSampler sampler);
-    void bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout);
+namespace engine {
+    class TexturePool {
+      public:
+        VkDescriptorSetLayout set_layout;
 
-    std::pair<uint32_t, uint32_t> alloc(uint32_t count);
-    void free(std::pair<uint32_t, uint32_t> block);
+        TexturePool();
+        TexturePool(uint32_t capacity);
+
+        void destroy();
+
+        void update(uint32_t ix, VkImageView view, VkImageLayout layout, VkSampler sampler);
+        void bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) const;
+
+        uint32_t get_capacity() const;
+      private:
+        VkDescriptorPool pool;
+        VkDescriptorSet set;
+        uint32_t capacity;
+    };
 }

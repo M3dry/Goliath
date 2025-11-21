@@ -44,6 +44,7 @@ SET(ENGINE_SOURCES
     visbuffer.cpp
     compute.cpp
     texture_registry.cpp
+    material.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

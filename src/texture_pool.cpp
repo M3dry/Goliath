@@ -35,18 +35,15 @@ namespace engine::texture_pool {
         GPUImageView::destroy(default_texture_view);
         Sampler::destroy(default_sampler);
     }
+}
 
-    VkDescriptorPool pool;
-    VkDescriptorSetLayout set_layout;
-    VkDescriptorSet set;
-    uint32_t texture_count;
+namespace engine {
+    TexturePool::TexturePool() {}
 
-    void init(uint32_t tex_count) {
-        texture_count = tex_count;
-
+    TexturePool::TexturePool(uint32_t capacity) : capacity(capacity) {
         VkDescriptorPoolSize pool_size{};
         pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        pool_size.descriptorCount = texture_count;
+        pool_size.descriptorCount = capacity;
 
         VkDescriptorPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -60,7 +57,7 @@ namespace engine::texture_pool {
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
         binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = texture_count;
+        binding.descriptorCount = capacity;
         binding.stageFlags = VK_SHADER_STAGE_ALL;
 
         VkDescriptorBindingFlags binding_flags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
@@ -83,7 +80,7 @@ namespace engine::texture_pool {
         VkDescriptorSetVariableDescriptorCountAllocateInfo count_info{};
         count_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
         count_info.descriptorSetCount = 1;
-        count_info.pDescriptorCounts = &texture_count;
+        count_info.pDescriptorCounts = &capacity;
 
         VkDescriptorSetAllocateInfo set_info{};
         set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -94,12 +91,12 @@ namespace engine::texture_pool {
         vkAllocateDescriptorSets(device, &set_info, &set);
     }
 
-    void destroy() {
+    void TexturePool::destroy() {
         vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
         vkDestroyDescriptorPool(device, pool, nullptr);
     }
 
-    void update(uint32_t ix, VkImageView view, VkImageLayout layout, VkSampler sampler) {
+    void TexturePool::update(uint32_t ix, VkImageView view, VkImageLayout layout, VkSampler sampler) {
         VkDescriptorImageInfo image_info{};
         image_info.imageView = view;
         image_info.sampler = sampler;
@@ -116,17 +113,11 @@ namespace engine::texture_pool {
         vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
-    void bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) {
+    void TexturePool::bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) const {
         vkCmdBindDescriptorSets(get_cmd_buf(), bind_point, layout, 3, 1, &set, 0, nullptr);
     }
 
-    std::pair<uint32_t, uint32_t> alloc(uint32_t count) {
-        return {0, 0};
-        // assert(false && "TODO retard");
-    }
-
-    void free(std::pair<uint32_t, uint32_t> block) {
-        return;
-        // assert(false && "TODO retard");
+    uint32_t TexturePool::get_capacity() const {
+        return capacity;
     }
 }

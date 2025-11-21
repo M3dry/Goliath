@@ -2,7 +2,6 @@
 
 #include "goliath/buffer.hpp"
 #include "goliath/collisions.hpp"
-#include "goliath/engine.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/texture_pool.hpp"
 #include <cstdint>
@@ -149,10 +148,10 @@ namespace engine {
             InvalidFormat,
         };
 
-        static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error = nullptr,
-                             std::string* tinygltf_warning = nullptr);
-        static Err load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_err = nullptr,
-                            std::string* tinygltf_warning = nullptr);
+        static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
+                             std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
+        static Err load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir,
+                            std::string* tinygltf_err = nullptr, std::string* tinygltf_warning = nullptr);
         static bool load_optimized(Model* out, uint8_t* data);
 
         void destroy() {

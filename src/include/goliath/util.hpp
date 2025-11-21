@@ -18,6 +18,28 @@ namespace engine {
 }
 
 namespace engine::util {
+    struct padding64 {
+        uint64_t _;
+    };
+
+    struct padding32 {
+        uint32_t _;
+    };
+
+    struct padding16 {
+        uint16_t _;
+    };
+
+    struct padding8 {
+        uint8_t _;
+    };
+
+    template <typename T> struct is_padding : std::false_type {};
+    template <> struct is_padding<padding64> : std::true_type {};
+    template <> struct is_padding<padding32> : std::true_type {};
+    template <> struct is_padding<padding16> : std::true_type {};
+    template <> struct is_padding<padding8> : std::true_type {};
+
     uint8_t* read_file(const char* path, uint32_t* size);
     void save_file(const char* path, uint8_t* data, uint32_t size);
 

@@ -12,7 +12,6 @@
 #include "goliath/scene.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/texture_registry.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -82,38 +81,6 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
         images[i] = target_img;
         barriers[i] = barrier;
         image_views[i] = engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
-    }
-}
-
-void update_count_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
-    for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1),
-                                            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
-                                            std::nullopt);
-    }
-}
-
-void update_offset_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
-    for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(sizeof(uint32_t) * (max_mat_id + 1),
-                                            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
-                                            std::nullopt);
-    }
-}
-
-void update_shading_dispatch_buffers(engine::Buffer* buffers, uint32_t max_mat_id, uint32_t frames_in_flight) {
-    for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(
-            (sizeof(VkDispatchIndirectCommand) + 2 * sizeof(uint32_t)) * (max_mat_id + 1),
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT, std::nullopt);
-    }
-}
-
-void update_frag_id_buffers(engine::Buffer* buffers, uint32_t frames_in_flight) {
-    for (std::size_t i = 0; i < frames_in_flight; i++) {
-        buffers[i] = engine::Buffer::create(
-            sizeof(uint32_t) * engine::swapchain_extent.width * engine::swapchain_extent.height,
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 }
 
@@ -358,15 +325,6 @@ int main(int argc, char** argv) {
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
 
-    auto test_gid = engine::texture_registry::add(argv[1], "test test", engine::Sampler{});
-    engine::texture_registry::acquire(&test_gid, 1);
-    auto test_gid2 = engine::texture_registry::add(argv[1], "test test", engine::Sampler{});
-    engine::texture_registry::acquire(&test_gid2, 1);
-
-    engine::texture_registry::remove(test_gid);
-    auto test_gid3 = engine::texture_registry::add(argv[2], "test test", engine::Sampler{});
-    engine::texture_registry::acquire(&test_gid3, 1);
-
     VkImageMemoryBarrier2* visbuffer_barriers =
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight);
     engine::visbuffer::init(visbuffer_barriers);
@@ -472,19 +430,6 @@ int main(int argc, char** argv) {
         (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight);
 
     update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
-
-    uint32_t max_material_id = 0;
-    engine::Buffer* count_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * engine::frames_in_flight);
-    update_count_buffers(count_buffers, max_material_id, engine::frames_in_flight);
-
-    engine::Buffer* offsets_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * engine::frames_in_flight);
-    update_offset_buffers(offsets_buffers, max_material_id, engine::frames_in_flight);
-
-    engine::Buffer* shading_dispatch_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * engine::frames_in_flight);
-    update_shading_dispatch_buffers(shading_dispatch_buffers, max_material_id, engine::frames_in_flight);
-
-    engine::Buffer* frag_id_buffers = (engine::Buffer*)malloc(sizeof(engine::Buffer) * engine::frames_in_flight);
-    update_frag_id_buffers(frag_id_buffers, engine::frames_in_flight);
 
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
@@ -1143,8 +1088,6 @@ int main(int argc, char** argv) {
 
                 engine::GPUImageView::destroy(target_image_views[i]);
                 target_images[i].destroy();
-
-                frag_id_buffers[i].destroy();
             }
 
             update_depth(depth_images, depth_image_views, depth_barriers, engine::frames_in_flight);
@@ -1152,8 +1095,6 @@ int main(int argc, char** argv) {
 
             update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
             target_barriers_applied = false;
-
-            update_frag_id_buffers(frag_id_buffers, engine::frames_in_flight);
 
             model_pipeline.update_viewport_to_swapchain();
             model_pipeline.update_scissor_to_viewport();
@@ -1211,10 +1152,6 @@ int main(int argc, char** argv) {
         engine::GPUImageView::destroy(target_image_views[i]);
 
         target_images[i].destroy();
-        count_buffers[i].destroy();
-        offsets_buffers[i].destroy();
-        shading_dispatch_buffers[i].destroy();
-        frag_id_buffers[i].destroy();
     }
 
     free(target_images);
@@ -1223,11 +1160,6 @@ int main(int argc, char** argv) {
 
     free(depth_image_views);
     free(depth_images);
-
-    free(count_buffers);
-    free(offsets_buffers);
-    free(shading_dispatch_buffers);
-    free(frag_id_buffers);
 
     engine::visbuffer::destroy();
     engine::destroy();

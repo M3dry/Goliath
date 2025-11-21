@@ -587,7 +587,7 @@ namespace engine::model {
             offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
             mesh_sizes += size;
         }
-        auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);
+        auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             offsets[i].start += data_offset;
         }
@@ -637,7 +637,7 @@ namespace engine::model {
             offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
             mesh_sizes += size;
         }
-        auto data_offset = engine::gpu_group::upload(needed_textures, mesh_sizes, upload_func, (void*)ctx);
+        auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             offsets[i].start += data_offset;
         }
