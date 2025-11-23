@@ -14,7 +14,6 @@ namespace engine::texture_registry {
     void save(const std::filesystem::path& save_file);
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler);
-    // makes a copy of `data`, no ownership assumed
     uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name, const Sampler& sampler);
     void remove(uint32_t gid);
 

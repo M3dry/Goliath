@@ -196,10 +196,17 @@ void engine::GraphicsPipeline::draw(const DrawParams& params) {
     }
 
     for (uint32_t i = 0; i < params.descriptor_indexes.size(); i++) {
-        if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+        if (std::holds_alternative<uint64_t>(params.descriptor_indexes[i])) {
+            auto ix = std::get<uint64_t>(params.descriptor_indexes[i]);
+            if (ix == (uint64_t)-1) continue;
 
-        descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                 _pipeline_layout, i);
+            descriptor_pool.bind_set(std::get<uint64_t>(params.descriptor_indexes[i]), cmd_buf,
+                                     VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i);
+        } else {
+            auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0,
+                                    nullptr);
+        }
     }
 
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
@@ -215,10 +222,17 @@ void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
     }
 
     for (uint32_t i = 0; i < params.descriptor_indexes.size(); i++) {
-        if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+        if (std::holds_alternative<uint64_t>(params.descriptor_indexes[i])) {
+            auto ix = std::get<uint64_t>(params.descriptor_indexes[i]);
+            if (ix == (uint64_t)-1) continue;
 
-        descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                 _pipeline_layout, i);
+            descriptor_pool.bind_set(std::get<uint64_t>(params.descriptor_indexes[i]), cmd_buf,
+                                     VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i);
+        } else {
+            auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0,
+                                    nullptr);
+        }
     }
 
     vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);

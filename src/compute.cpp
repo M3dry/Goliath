@@ -3,6 +3,7 @@
 #include "goliath/engine.hpp"
 #include "include/goliath/compute.hpp"
 
+#include <variant>
 #include <volk.h>
 
 namespace engine {
@@ -61,10 +62,17 @@ namespace engine {
         }
 
         for (uint32_t i = 0; i < 3; i++) {
-            if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+            if (std::holds_alternative<uint64_t>(params.descriptor_indexes[i])) {
+                auto ix = std::get<uint64_t>(params.descriptor_indexes[i]);
+                if (ix == (uint64_t)-1) continue;
 
-            descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                     _pipeline_layout, i);
+                descriptor_pool.bind_set(std::get<uint64_t>(params.descriptor_indexes[i]), cmd_buf,
+                                         VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline_layout, i);
+            } else {
+                auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
+                vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline_layout, i, 1, &set, 0,
+                                        nullptr);
+            }
         }
 
         vkCmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
@@ -80,10 +88,17 @@ namespace engine {
         }
 
         for (uint32_t i = 0; i < 3; i++) {
-            if (params.descriptor_indexes[i] == (uint64_t)-1) continue;
+            if (std::holds_alternative<uint64_t>(params.descriptor_indexes[i])) {
+                auto ix = std::get<uint64_t>(params.descriptor_indexes[i]);
+                if (ix == (uint64_t)-1) continue;
 
-            descriptor_pool.bind_set(params.descriptor_indexes[i], cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                     _pipeline_layout, i);
+                descriptor_pool.bind_set(std::get<uint64_t>(params.descriptor_indexes[i]), cmd_buf,
+                                         VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline_layout, i);
+            } else {
+                auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
+                vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline_layout, i, 1, &set, 0,
+                                        nullptr);
+            }
         }
 
         vkCmdDispatchIndirect(cmd_buf, params.indirect_buffer, params.buffer_offset);

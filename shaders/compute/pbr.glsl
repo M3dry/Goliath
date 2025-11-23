@@ -7,9 +7,6 @@
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba32f) uniform image2D target;
-layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
-
 layout(buffer_reference, std430) readonly buffer DispatchCommand {
     uint val[5];
 };
@@ -24,6 +21,11 @@ layout(push_constant, std430) uniform Push {
     FragIDs frag_ids;
     uint mat_id;
 };
+
+layout (set = 3, binding = 0) uniform sampler2D textures[];
+
+layout(set = 0, binding = 0, rgba32f) uniform image2D target;
+layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
 
 void main() {
     uint gid = gl_GlobalInvocationID.x;

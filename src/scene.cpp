@@ -138,7 +138,8 @@ void engine::Scene::destroy() {
     free(name_data);
 }
 
-void instance_transforms_upload_func(uint8_t* out, uint32_t start, uint32_t size, void* ctx) {
+void instance_transforms_upload_func(uint8_t* out, uint32_t start, uint32_t size, uint32_t* texture_gids,
+                                     uint32_t texture_gid_count, void* ctx) {
     std::memcpy(out, ctx, size);
 }
 
@@ -150,7 +151,7 @@ void engine::GPUScene::upload(engine::GPUScene* out, const Scene* scene, VkBuffe
     for (std::size_t i = 0; i < scene->model_count; i++) {
         std::get<0>(gpu_models[i]) = model::upload_raw(&scene->models[i]);
         std::get<1>(gpu_models[i]) =
-            gpu_group::upload(scene->model_instances[i].count * sizeof(glm::mat4), instance_transforms_upload_func,
+            gpu_group::upload(0, scene->model_instances[i].count * sizeof(glm::mat4), instance_transforms_upload_func,
                               &scene->instance_transforms[scene->model_instances[i].start]);
         std::get<2>(gpu_models[i]) = scene->model_instances[i].count;
 

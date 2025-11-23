@@ -12,6 +12,7 @@
 #include "goliath/scene.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
+#include "goliath/texture_registry.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -393,6 +394,7 @@ int main(int argc, char** argv) {
     auto pbr_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
                                                     .shader(pbr_module)
                                                     .descriptor_layout(0, pbr_set_layout)
+                                                    .descriptor_layout(1, engine::texture_registry::get_texture_pool().set_layout)
                                                     .push_constant(PBRPC::size));
 
     uint32_t postprocessing_spv_size;
@@ -916,7 +918,7 @@ int main(int argc, char** argv) {
                     .push_constant = pbr_pc,
                     .descriptor_indexes = {
                         shading.vis_and_target_set,
-                        engine::descriptor::null_set,
+                        engine::texture_registry::get_texture_pool().set,
                         engine::descriptor::null_set,
                         engine::descriptor::null_set,
                     },

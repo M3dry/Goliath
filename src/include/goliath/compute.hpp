@@ -2,6 +2,7 @@
 
 #include "goliath/descriptor_pool.hpp"
 #include <array>
+#include <variant>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -33,9 +34,10 @@ namespace engine {
     };
 
     struct ComputePipeline {
+        using descriptor_set = std::variant<uint64_t, VkDescriptorSet>;
         struct DispatchParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+            std::array<descriptor_set, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
                                                           descriptor::null_set};
             uint32_t group_count_x;
             uint32_t group_count_y;
@@ -44,7 +46,7 @@ namespace engine {
 
         struct IndirectDispatchParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+            std::array<descriptor_set, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
                                                           descriptor::null_set};
             VkBuffer indirect_buffer;
             uint64_t buffer_offset;

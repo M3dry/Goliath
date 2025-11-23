@@ -3,7 +3,6 @@
 #include "goliath/buffer.hpp"
 #include "goliath/collisions.hpp"
 #include "goliath/rendering.hpp"
-#include "goliath/texture_pool.hpp"
 #include <cstdint>
 #include <cstring>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -43,17 +42,6 @@ namespace engine::model {
         bool get_indexed_tangetns() const {
             return (stride & INDEXED_TANGENTS_MASK) != 0;
         }
-    };
-
-    struct Material_PBR {
-        uint32_t albedo_map = texture_pool::null_ix;
-        uint32_t metallic_roughness_map = texture_pool::null_ix;
-        uint32_t normal_map = texture_pool::null_ix;
-        uint32_t occlusion_map = texture_pool::null_ix;
-        uint32_t emissive_map = texture_pool::null_ix;
-        glm::vec4 albedo{1.0f};
-        glm::vec3 metallic_roughness_normal_oclussion_factors;
-        glm::vec3 emissive_factor;
     };
 }
 

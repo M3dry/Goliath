@@ -10,9 +10,7 @@
 #include <optional>
 
 namespace engine::material {
-    struct attribute;
-
-    enum struct AttributeType {
+    enum struct attribute {
         Texture,
         Float,
         Uint,
@@ -33,41 +31,35 @@ namespace engine::material {
         Padding64,
     };
 
-    struct attribute {
-        AttributeType type;
+    constexpr std::optional<size_t> is_padding(const attribute& attr) {
+        return attr == attribute::Padding32 || attr == attribute::Padding64;
+    }
 
-        constexpr attribute(AttributeType type) : type(type) {};
-
-        constexpr std::optional<size_t> is_padding() const {
-            return type == AttributeType::Padding32 || type == AttributeType::Padding64;
+    constexpr size_t size(const attribute& attr) {
+        switch (attr) {
+            using enum attribute;
+            case Texture: return sizeof(uint32_t);
+            case Float: return sizeof(float);
+            case Uint: return sizeof(uint32_t);
+            case Int: return sizeof(int32_t);
+            case Vec2: return sizeof(glm::vec2);
+            case Vec3: return sizeof(glm::vec3);
+            case Vec4: return sizeof(glm::vec4);
+            case UVec2: return sizeof(glm::vec<2, uint32_t>);
+            case UVec3: return sizeof(glm::vec<3, uint32_t>);
+            case UVec4: return sizeof(glm::vec<4, uint32_t>);
+            case IVec2: return sizeof(glm::vec<2, int32_t>);
+            case IVec3: return sizeof(glm::vec<3, int32_t>);
+            case IVec4: return sizeof(glm::vec<4, int32_t>);
+            case Mat2x2: return sizeof(glm::mat2);
+            case Mat3x3: return sizeof(glm::mat3);
+            case Mat4x4: return sizeof(glm::mat4);
+            case Padding32: return sizeof(uint32_t);
+            case Padding64: return sizeof(uint64_t);
         }
 
-        constexpr size_t size() const {
-            switch (type) {
-                using enum AttributeType;
-                case Texture: return sizeof(uint32_t);
-                case Float: return sizeof(float);
-                case Uint: return sizeof(uint32_t);
-                case Int: return sizeof(int32_t);
-                case Vec2: return sizeof(glm::vec2);
-                case Vec3: return sizeof(glm::vec3);
-                case Vec4: return sizeof(glm::vec4);
-                case UVec2: return sizeof(glm::vec<2, uint32_t>);
-                case UVec3: return sizeof(glm::vec<3, uint32_t>);
-                case UVec4: return sizeof(glm::vec<4, uint32_t>);
-                case IVec2: return sizeof(glm::vec<2, int32_t>);
-                case IVec3: return sizeof(glm::vec<3, int32_t>);
-                case IVec4: return sizeof(glm::vec<4, int32_t>);
-                case Mat2x2: return sizeof(glm::mat2);
-                case Mat3x3: return sizeof(glm::mat3);
-                case Mat4x4: return sizeof(glm::mat4);
-                case Padding32: return sizeof(uint32_t);
-                case Padding64: return sizeof(uint64_t);
-            }
-
-            assert(false);
-        }
-    };
+        assert(false);
+    }
 }
 
 namespace engine {
@@ -75,17 +67,21 @@ namespace engine {
         uint32_t total_size = 0;
         std::vector<std::string> names;
         std::vector<material::attribute> attributes{};
-        std::vector<uint32_t> texture_gid_offsets{}; // used for clean up
+        std::vector<uint32_t> texture_gid_offsets{};
 
         template <typename Attrib> void emplace_back_attrib(std::string name, Attrib&& attr) {
             attributes.emplace_back(attr);
             names.emplace_back(name);
 
-            total_size += attributes.back().size();
+            if (attr == material::attribute::Texture) {
+                texture_gid_offsets.emplace_back(total_size);
+            }
+
+            total_size += material::size(attributes.back());
         }
 
         void pop_back_attrib() {
-            total_size -= attributes.back().size();
+            total_size -= material::size(attributes.back());
             attributes.pop_back();
             names.pop_back();
 
@@ -108,19 +104,14 @@ namespace engine {
 
             uint32_t current_offset = 0;
             for (const auto& attr : attributes) {
-                if (attr.type == material::AttributeType::Texture) {
+                if (attr == material::attribute::Texture) {
                     texture_gid_offsets.emplace_back(current_offset);
                 }
 
-                current_offset += attr.size();
+                current_offset += material::size(attr);
             }
 
             total_size = current_offset;
-        }
-
-        void destroy() {
-            for (auto& attr : attributes) {
-            }
         }
 
         void acquire_textures(uint8_t* material_data) {
@@ -143,23 +134,29 @@ namespace engine {
     };
 }
 
-namespace engine::material {
-    Material make_pbr_material() {
-        Material mat{};
+namespace engine::material::pbr {
+    extern Material schema;
 
-        mat.emplace_back_attrib("albedo map", material::AttributeType::Texture);
-        mat.emplace_back_attrib("metallic roughness map", material::AttributeType::Texture);
-        mat.emplace_back_attrib("occlusion map", material::AttributeType::Texture);
-        mat.emplace_back_attrib("emissive map", material::AttributeType::Texture);
-        mat.emplace_back_attrib("albedo", material::AttributeType::Vec4);
-        mat.emplace_back_attrib("mettalic factor", material::AttributeType::Float);
-        mat.emplace_back_attrib("roughness factor", material::AttributeType::Float);
-        mat.emplace_back_attrib("normal factor", material::AttributeType::Float);
-        mat.emplace_back_attrib("occlusion factor", material::AttributeType::Float);
-        mat.emplace_back_attrib("emissive factor", material::AttributeType::Vec3);
+    struct Data {
+        uint32_t albedo_map{0};
+        uint32_t metallic_roughness_map{0};
+        uint32_t normal_map{0};
+        uint32_t occlusion_map{0};
+        uint32_t emissive_map{0};
 
-        return mat;
-    }
+        uint8_t albedo_texcoord:2;
+        uint8_t metallic_roughness_texcoord:2;
+        uint8_t normal_texcoord:2;
+        uint8_t occlusion_texcoord:2;
+        uint8_t emissive_texcoord:2;
 
-    static Material pbr = make_pbr_material();
+        glm::vec4 albedo{1.0f};
+        float metallic_factor{0.0f};
+        float roughness_factor{0.0f};
+        float normal_factor{0.0f};
+        float occlusion_factor{0.0f};
+        glm::vec3 emissive_factor{0.0f};
+    };
+
+    void write_data_blob(const Data& data, void* out);
 }

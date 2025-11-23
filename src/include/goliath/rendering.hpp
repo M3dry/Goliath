@@ -7,6 +7,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 #include <volk.h>
 
@@ -325,9 +326,11 @@ namespace engine {
     };
 
     struct GraphicsPipeline {
+        using descriptor_set = std::variant<uint64_t, VkDescriptorSet>;
+
         struct DrawParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+            std::array<descriptor_set, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
                                                           descriptor::null_set, descriptor::null_set};
             uint32_t vertex_count;
             uint32_t instance_count = 1;
@@ -337,8 +340,8 @@ namespace engine {
 
         struct DrawIndirectParams {
             void* push_constant = nullptr;
-            std::array<uint64_t, 3> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
-                                                          descriptor::null_set};
+            std::array<descriptor_set, 4> descriptor_indexes = {descriptor::null_set, descriptor::null_set,
+                                                          descriptor::null_set, descriptor::null_set};
             VkBuffer draw_buffer;
             uint32_t start_offset = 0;
             uint32_t draw_count = 0;

@@ -17,6 +17,7 @@ namespace engine {
     class TexturePool {
       public:
         VkDescriptorSetLayout set_layout;
+        VkDescriptorSet set;
 
         TexturePool();
         TexturePool(uint32_t capacity);
@@ -29,7 +30,6 @@ namespace engine {
         uint32_t get_capacity() const;
       private:
         VkDescriptorPool pool;
-        VkDescriptorSet set;
         uint32_t capacity;
     };
 }

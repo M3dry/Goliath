@@ -1,7 +1,9 @@
 #include "goliath/model.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/gpu_group.hpp"
+#include "goliath/material.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/texture.hpp"
 
 #include <format>
 #include <utility>
@@ -14,7 +16,8 @@
 #include <tinygltf/tiny_gltf.h>
 
 struct Handled {
-    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> meshes;
+    std::vector<std::pair<uint32_t, std::vector<uint32_t>>> meshes{};
+    std::vector<std::pair<uint32_t, uint32_t>> textures{};
 };
 
 uint32_t get_type_size(int type) {
@@ -101,6 +104,140 @@ void* copy_buffer(uint32_t* size, uint32_t* element_size, const tinygltf::Model&
 
     *size = (uint32_t)accessor.count;
     return arr;
+}
+
+uint32_t parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
+    if (tex_id == -1) return 0;
+    for (const auto& [id, gid] : handled.textures) {
+        if (tex_id == id) return gid;
+    }
+
+    const auto& texture = model.textures[tex_id];
+    if (texture.source == -1) return 0;
+
+    const auto& image = model.images[texture.source];
+
+    bool resize = false;
+    VkFormat format;
+    if (srgb) {
+        format = VK_FORMAT_R8G8B8A8_SRGB;
+        assert(image.component == 4);
+        assert(image.bits == 8);
+    } else {
+        switch (image.bits) {
+            case 8:
+                switch (image.component) {
+                    case 1: format = VK_FORMAT_R8_UNORM; break;
+                    case 2: format = VK_FORMAT_R8G8_UNORM; break;
+                    case 3: resize = true;
+                    case 4: format = VK_FORMAT_R8G8B8A8_UNORM; break;
+                    default: assert(false && "Invalid `component` size of a source");
+                }
+                break;
+            case 16:
+                switch (image.component) {
+                    case 1: format = VK_FORMAT_R16_UNORM; break;
+                    case 2: format = VK_FORMAT_R16G16_UNORM; break;
+                    case 3: resize = true;
+                    case 4: format = VK_FORMAT_R16G16B16A16_UNORM; break;
+                    default: assert(false && "Invalid `component` size of a source");
+                }
+                break;
+            case 32: assert(false && "Unsupported source bit depth size: 32");
+            default: assert(false && "Invalid `bits` size of a source");
+        }
+    }
+
+    engine::Sampler sampler{};
+    if (texture.sampler != -1) {
+        const auto& gltf_sampler = model.samplers[texture.sampler];
+
+        switch (gltf_sampler.minFilter) {
+            case TINYGLTF_TEXTURE_FILTER_LINEAR: sampler.min_filter(engine::FilterMode::Linear); break;
+            case TINYGLTF_TEXTURE_FILTER_NEAREST: sampler.min_filter(engine::FilterMode::Nearest); break;
+            case TINYGLTF_TEXTURE_FILTER_LINEAR_MIPMAP_LINEAR:
+                sampler.min_filter(engine::FilterMode::Linear);
+                sampler.mipmap(engine::MipMapMode::Linear);
+                break;
+            case TINYGLTF_TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST:
+                sampler.min_filter(engine::FilterMode::Linear);
+                sampler.mipmap(engine::MipMapMode::Nearest);
+                break;
+            case TINYGLTF_TEXTURE_FILTER_NEAREST_MIPMAP_LINEAR:
+                sampler.min_filter(engine::FilterMode::Nearest);
+                sampler.mipmap(engine::MipMapMode::Linear);
+                break;
+            case TINYGLTF_TEXTURE_FILTER_NEAREST_MIPMAP_NEAREST:
+                sampler.min_filter(engine::FilterMode::Nearest);
+                sampler.mipmap(engine::MipMapMode::Nearest);
+                break;
+            default: break;
+        }
+
+        switch (gltf_sampler.wrapS) {
+            case TINYGLTF_TEXTURE_WRAP_REPEAT: sampler.address_u(engine::AddressMode::Repeat); break;
+            case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT: sampler.address_u(engine::AddressMode::MirroredRepeat); break;
+            case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE: sampler.address_u(engine::AddressMode::ClampToEdge); break;
+            default: break;
+        }
+
+        switch (gltf_sampler.wrapT) {
+            case TINYGLTF_TEXTURE_WRAP_REPEAT: sampler.address_v(engine::AddressMode::Repeat); break;
+            case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT: sampler.address_v(engine::AddressMode::MirroredRepeat); break;
+            case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE: sampler.address_v(engine::AddressMode::ClampToEdge); break;
+            default: break;
+        }
+    }
+
+    uint32_t image_size = resize ? 4 * image.bits / 8 * image.width * image.height : image.image.size();
+    void* image_data = malloc(image_size);
+    if (resize) {
+        auto orig_chunk = image.component * image.bits / 8;
+        auto new_chunk = 4 * image.bits / 8;
+        for (std::size_t i = 0; i < image.width * image.height; i++) {
+            std::memcpy((uint8_t*)image_data + i * new_chunk, image.image.data() + i * orig_chunk, orig_chunk);
+            std::memset((uint8_t*)image_data + i * new_chunk + orig_chunk, 0, new_chunk - orig_chunk);
+        }
+    } else {
+        std::memcpy(image_data, image.image.data(), image_size);
+    }
+
+    auto gid = engine::texture_registry::add((uint8_t*)image_data, image_size, image.width, image.height, format,
+                                         texture.name, sampler);
+    handled.textures.emplace_back(tex_id, gid);
+    return gid;
+}
+
+void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinygltf::Material& material,
+                    Handled& handled) {
+    out->material_id = 0;
+    out->material_data_size = engine::material::pbr::schema.total_size;
+    out->material_data = malloc(out->material_data_size);
+    out->material_texture_count = 5;
+
+    engine::material::pbr::Data pbr_data{
+        .albedo_map = parse_texture(model, material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
+        .metallic_roughness_map =
+            parse_texture(model, material.pbrMetallicRoughness.metallicRoughnessTexture.index, false, handled),
+        .normal_map = parse_texture(model, material.normalTexture.index, false, handled),
+        .occlusion_map = parse_texture(model, material.occlusionTexture.index, false, handled),
+        .emissive_map = parse_texture(model, material.emissiveTexture.index, true, handled),
+
+        .albedo_texcoord = (uint8_t)material.pbrMetallicRoughness.baseColorTexture.texCoord,
+        .metallic_roughness_texcoord = (uint8_t)material.pbrMetallicRoughness.metallicRoughnessTexture.texCoord,
+        .normal_texcoord = (uint8_t)material.normalTexture.texCoord,
+        .occlusion_texcoord = (uint8_t)material.occlusionTexture.texCoord,
+        .emissive_texcoord = (uint8_t)material.emissiveTexture.texCoord,
+
+        .albedo = glm::make_vec4(material.pbrMetallicRoughness.baseColorFactor.data()),
+        .metallic_factor = (float)material.pbrMetallicRoughness.metallicFactor,
+        .roughness_factor = (float)material.pbrMetallicRoughness.roughnessFactor,
+        .normal_factor = (float)material.normalTexture.scale,
+        .occlusion_factor = (float)material.occlusionTexture.strength,
+        .emissive_factor = glm::make_vec3(material.emissiveFactor.data()),
+    };
+
+    engine::material::pbr::write_data_blob(pbr_data, out->material_data);
 }
 
 engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& model,
@@ -200,8 +337,8 @@ engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& mod
     out->bounding_box = aabb;
     model_aabb.extend(aabb);
 
-    // TODO: PBR loading
-    out->material_id = 0;
+    assert(primitive.material >= 0 && "NOTE: if this asserts add default material creation");
+    parse_material(out, model, model.materials[primitive.material], handled);
 
     return engine::Model::Ok;
 }
@@ -482,8 +619,8 @@ namespace engine {
         return total_size;
     }
 
-    Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error,
-                                std::string* tinygltf_warning) {
+    Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
+                                std::string* tinygltf_error, std::string* tinygltf_warning) {
         tinygltf::Model model;
 
         if (!loader.LoadASCIIFromString(&model, tinygltf_error, tinygltf_warning, (const char*)data.data(),
@@ -496,12 +633,12 @@ namespace engine {
         return parse_res;
     }
 
-    Model::Err Model::load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error,
-                               std::string* tinygltf_warning) {
+    Model::Err Model::load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir,
+                               std::string* tinygltf_error, std::string* tinygltf_warning) {
         tinygltf::Model model;
 
-        if (!loader.LoadBinaryFromMemory(&model, tinygltf_error, tinygltf_warning, data.data(),
-                                         (uint32_t)data.size(), base_dir)) {
+        if (!loader.LoadBinaryFromMemory(&model, tinygltf_error, tinygltf_warning, data.data(), (uint32_t)data.size(),
+                                         base_dir)) {
             return TinyGLTFErr;
         }
 
@@ -540,11 +677,24 @@ namespace engine {
 }
 
 namespace engine::model {
-    void upload_func(uint8_t* data, uint32_t start, uint32_t size, void* ctx) {
+    void upload_func(uint8_t* data, uint32_t start, uint32_t size, uint32_t* texture_gids, uint32_t texture_gid_count,
+                     void* ctx) {
         const uint8_t* final_data = data + size;
         const Model* model;
         std::memcpy(&model, ctx, sizeof(void*));
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
+
+        uint32_t texture_count = 0;
+        for (std::size_t i = 0; i < model->mesh_count; i++) {
+            const auto& mesh = model->meshes[i];
+
+            if (mesh.material_id == 0 && mesh.material_data_size == material::pbr::schema.total_size) {
+                for (const auto& off : material::pbr::schema.texture_gid_offsets) {
+                    std::memcpy(texture_gids + texture_count, (uint8_t*)(mesh.material_data) + off, sizeof(uint32_t));
+                    texture_count++;
+                }
+            }
+        }
 
         for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
             auto mesh_ix = model->mesh_indexes[i];
@@ -553,7 +703,7 @@ namespace engine::model {
             GPUMeshData m{};
 
             m.mat_id = mesh.material_id;
-            m.offset= offsets[mesh_ix];
+            m.offset = offsets[mesh_ix];
             m.transform = model->mesh_transforms[mesh_ix];
             m.vertex_count = mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
             m.bounding_box = mesh.bounding_box;
@@ -580,14 +730,17 @@ namespace engine::model {
 
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
+        uint32_t texture_count = 0;
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
-            offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
+            offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
+            texture_count += model->meshes[i].material_texture_count;
         }
-        auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
+
+        auto data_offset = engine::gpu_group::upload(texture_count, mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             offsets[i].start += data_offset;
         }
@@ -630,14 +783,16 @@ namespace engine::model {
 
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
+        uint32_t texture_count = 0;
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
-            offsets[i].relative_start = mesh_sizes - i*sizeof(GPUMeshData);
+            offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
+            texture_count += model->meshes[i].material_texture_count;
         }
-        auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
+        auto data_offset = engine::gpu_group::upload(texture_count, mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             offsets[i].start += data_offset;
         }

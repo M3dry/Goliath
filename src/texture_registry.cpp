@@ -7,6 +7,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <glm/ext/vector_float4.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <queue>
 #include <thread>
 #include <vector>
@@ -259,6 +261,18 @@ namespace engine::texture_registry {
 
     void init() {
         texture_pool = TexturePool{1000};
+
+        void* data = malloc(4);
+        std::memset(data, 0xFF, 4);
+
+        auto default_tex = add((uint8_t*)data, 4*sizeof(uint8_t), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, "default texture", Sampler{});
+
+        ref_counts[default_tex]++;
+        task task{
+            .gid = default_tex,
+            .generation = generations[default_tex],
+        };
+        upload_queue.enqueue(&task, 1);
     }
 
     void destroy() {
@@ -267,10 +281,10 @@ namespace engine::texture_registry {
         }
 
         for (std::size_t i = 0; i < names.size(); i++) {
-            if (ref_counts[i] == 0) continue;
-
             gpu_images[i].destroy();
             GPUImageView::destroy(gpu_image_views[i]);
+
+            free(blobs[i].first);
         }
 
         texture_pool.destroy();
@@ -324,20 +338,16 @@ namespace engine::texture_registry {
         }
     }
 
-    // makes a copy of `data`, no ownership assumed
     uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name,
                  const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
-
-        void* data_copy = malloc(data_size);
-        std::memcpy(data_copy, data, data_size);
 
         if (auto gid_ = find_empty_gid(); gid_) {
             auto gid = *gid_;
 
             names[gid] = std::move(name);
             paths.emplace_back();
-            blobs[gid] = {(uint8_t*)data_copy, data_size};
+            blobs[gid] = {(uint8_t*)data, data_size};
 
             metadatas[gid] = Metadata{
                 .width = width,
@@ -364,7 +374,7 @@ namespace engine::texture_registry {
 
             names.emplace_back(std::move(name));
             paths.emplace_back();
-            blobs.emplace_back((uint8_t*)data_copy, data_size);
+            blobs.emplace_back((uint8_t*)data, data_size);
 
             metadatas.emplace_back(Metadata{
                 .width = width,
@@ -495,6 +505,9 @@ namespace engine::texture_registry {
             GPUImageView::destroy(gpu_image_views[gid]);
             texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                                  texture_pool::default_sampler);
+
+            gpu_images[gid] = GPUImage{};
+            gpu_image_views[gid] = nullptr;
         }
     }
 
