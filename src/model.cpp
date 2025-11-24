@@ -223,11 +223,11 @@ void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinyg
         .occlusion_map = parse_texture(model, material.occlusionTexture.index, false, handled),
         .emissive_map = parse_texture(model, material.emissiveTexture.index, true, handled),
 
-        .albedo_texcoord = (uint8_t)material.pbrMetallicRoughness.baseColorTexture.texCoord,
-        .metallic_roughness_texcoord = (uint8_t)material.pbrMetallicRoughness.metallicRoughnessTexture.texCoord,
-        .normal_texcoord = (uint8_t)material.normalTexture.texCoord,
-        .occlusion_texcoord = (uint8_t)material.occlusionTexture.texCoord,
-        .emissive_texcoord = (uint8_t)material.emissiveTexture.texCoord,
+        .albedo_texcoord = (uint32_t)material.pbrMetallicRoughness.baseColorTexture.texCoord,
+        .metallic_roughness_texcoord = (uint32_t)material.pbrMetallicRoughness.metallicRoughnessTexture.texCoord,
+        .normal_texcoord = (uint32_t)material.normalTexture.texCoord,
+        .occlusion_texcoord = (uint32_t)material.occlusionTexture.texCoord,
+        .emissive_texcoord = (uint32_t)material.emissiveTexture.texCoord,
 
         .albedo = glm::make_vec4(material.pbrMetallicRoughness.baseColorFactor.data()),
         .metallic_factor = (float)material.pbrMetallicRoughness.metallicFactor,

@@ -131,14 +131,12 @@ namespace engine::texture_registry {
                 w.join();
         }
 
-        void enqueue(task* new_tasks, uint32_t count) {
+        void enqueue(task new_task) {
             {
                 std::lock_guard lock{mutex};
-                for (std::size_t i = 0; i < count; i++) {
-                    tasks.emplace(new_tasks[i]);
-                }
+                tasks.emplace(new_task);
             }
-            cv.notify_all();
+            cv.notify_one();
         }
 
         std::vector<std::thread> workers;
@@ -202,7 +200,7 @@ namespace engine::texture_registry {
 
         std::vector<task> tasks{};
         tasks.resize(end - start);
-        std::memcpy(tasks.data(), gpu_queue.data(), sizeof(task) * (end - start));
+        std::memcpy(tasks.data(), gpu_queue.data() + start, sizeof(task) * (end - start));
 
         gpu_queue_processing_ix.store(end, std::memory_order_release);
 
@@ -272,7 +270,7 @@ namespace engine::texture_registry {
             .gid = default_tex,
             .generation = generations[default_tex],
         };
-        upload_queue.enqueue(&task, 1);
+        upload_queue.enqueue(task);
     }
 
     void destroy() {
@@ -281,10 +279,11 @@ namespace engine::texture_registry {
         }
 
         for (std::size_t i = 0; i < names.size(); i++) {
+            free(blobs[i].first);
+            if (ref_counts[i] == 0) continue;
+
             gpu_images[i].destroy();
             GPUImageView::destroy(gpu_image_views[i]);
-
-            free(blobs[i].first);
         }
 
         texture_pool.destroy();
@@ -454,7 +453,7 @@ namespace engine::texture_registry {
             .gid = gid,
             .generation = generations[gid],
         };
-        upload_queue.enqueue(&task, 1);
+        upload_queue.enqueue(task);
     }
 
     void change_data(uint32_t gid, uint8_t* data, uint32_t data_size) {
@@ -477,7 +476,7 @@ namespace engine::texture_registry {
             .gid = gid,
             .generation = generations[gid],
         };
-        upload_queue.enqueue(&task, 1);
+        upload_queue.enqueue(task);
     }
 
     void acquire(const uint32_t* gids, uint32_t count) {
@@ -489,7 +488,7 @@ namespace engine::texture_registry {
                 .gid = gid,
                 .generation = generations[gid],
             };
-            upload_queue.enqueue(&task, 1);
+            upload_queue.enqueue(task);
 
             texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                                  texture_pool::default_sampler);
@@ -499,7 +498,7 @@ namespace engine::texture_registry {
     void release(const uint32_t* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (--ref_counts[gid] != 0) return;
+            if (--ref_counts[gid] != 0) continue;
 
             gpu_images[gid].destroy();
             GPUImageView::destroy(gpu_image_views[gid]);

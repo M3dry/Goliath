@@ -9,6 +9,13 @@ namespace engine::material::pbr {
         mat.emplace_back_attrib("normal map", material::attribute::Texture);
         mat.emplace_back_attrib("occlusion map", material::attribute::Texture);
         mat.emplace_back_attrib("emissive map", material::attribute::Texture);
+
+        mat.emplace_back_attrib("albedo texcoord", material::attribute::Uint);
+        mat.emplace_back_attrib("metallic roughness texcoord", material::attribute::Uint);
+        mat.emplace_back_attrib("normal texcoord", material::attribute::Uint);
+        mat.emplace_back_attrib("occlusion texcoord", material::attribute::Uint);
+        mat.emplace_back_attrib("emissive texcoord", material::attribute::Uint);
+
         mat.emplace_back_attrib("albedo", material::attribute::Vec4);
         mat.emplace_back_attrib("mettalic factor", material::attribute::Float);
         mat.emplace_back_attrib("roughness factor", material::attribute::Float);
@@ -37,6 +44,21 @@ namespace engine::material::pbr {
         blob += sizeof(uint32_t);
 
         std::memcpy(blob, &data.emissive_map, sizeof(uint32_t));
+        blob += sizeof(uint32_t);
+
+        std::memcpy(blob, &data.albedo_texcoord, sizeof(uint32_t));
+        blob += sizeof(uint32_t);
+
+        std::memcpy(blob, &data.metallic_roughness_texcoord, sizeof(uint32_t));
+        blob += sizeof(uint32_t);
+
+        std::memcpy(blob, &data.normal_texcoord, sizeof(uint32_t));
+        blob += sizeof(uint32_t);
+
+        std::memcpy(blob, &data.occlusion_texcoord, sizeof(uint32_t));
+        blob += sizeof(uint32_t);
+
+        std::memcpy(blob, &data.emissive_texcoord, sizeof(uint32_t));
         blob += sizeof(uint32_t);
 
         std::memcpy(blob, &data.albedo, sizeof(glm::vec4));

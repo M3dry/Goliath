@@ -144,11 +144,11 @@ namespace engine::material::pbr {
         uint32_t occlusion_map{0};
         uint32_t emissive_map{0};
 
-        uint8_t albedo_texcoord:2;
-        uint8_t metallic_roughness_texcoord:2;
-        uint8_t normal_texcoord:2;
-        uint8_t occlusion_texcoord:2;
-        uint8_t emissive_texcoord:2;
+        uint32_t albedo_texcoord;
+        uint32_t metallic_roughness_texcoord;
+        uint32_t normal_texcoord;
+        uint32_t occlusion_texcoord;
+        uint32_t emissive_texcoord;
 
         glm::vec4 albedo{1.0f};
         float metallic_factor{0.0f};

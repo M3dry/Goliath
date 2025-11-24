@@ -38,7 +38,7 @@ namespace engine::gpu_group {
     uint32_t upload(uint32_t texture_gid_count, uint32_t data_size,
                     void (*upload_ptr)(uint8_t*, uint32_t, uint32_t, uint32_t*, uint32_t, void*), void* ctx) {
         upload_ptrs.emplace_back(UploadFunc{upload_ptr, ctx, needed_data_size, data_size, texture_gid_count});
-        acquired_texture_count = texture_gid_count;
+        acquired_texture_count += texture_gid_count;
 
         needed_data_size += data_size;
 
