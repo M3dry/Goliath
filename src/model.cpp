@@ -236,6 +236,7 @@ void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinyg
         .occlusion_factor = (float)material.occlusionTexture.strength,
         .emissive_factor = glm::make_vec3(material.emissiveFactor.data()),
     };
+    printf("albedo map: %d\n", pbr_data.albedo_map);
 
     engine::material::pbr::write_data_blob(pbr_data, out->material_data);
 }

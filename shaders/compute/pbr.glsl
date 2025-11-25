@@ -4,6 +4,7 @@
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -48,34 +49,35 @@ struct PBR {
     vec3 emissive_factor;
 };
 
-PBR load_material(VertexData verts, uint offset) {
+PBR load_material(const VertexData verts, const Offsets offs) {
     PBR ret;
 
-    ret.albedo_map = verts.data[offset];
-    ret.metallic_roughness_map = verts.data[offset + 1];
-    ret.normal_map = verts.data[offset + 2];
-    ret.occlusion_map = verts.data[offset + 3];
-    ret.emissive_map = verts.data[offset + 4];
+    uint off = offs.relative_start/4 + offs.material_offset/4;
+    ret.albedo_map = verts.data[off];
+    ret.metallic_roughness_map = verts.data[off + 1];
+    ret.normal_map = verts.data[off + 2];
+    ret.occlusion_map = verts.data[off + 3];
+    ret.emissive_map = verts.data[off + 4];
 
-    ret.albedo_texcoord = verts.data[offset + 5];
-    ret.metallic_roughness_texcoord = verts.data[offset + 6];
-    ret.normal_texcoord = verts.data[offset + 7];
-    ret.occlusion_texcoord = verts.data[offset + 8];
-    ret.emissive_texcoord = verts.data[offset + 9];
+    ret.albedo_texcoord = verts.data[off + 5];
+    ret.metallic_roughness_texcoord = verts.data[off + 6];
+    ret.normal_texcoord = verts.data[off + 7];
+    ret.occlusion_texcoord = verts.data[off + 8];
+    ret.emissive_texcoord = verts.data[off + 9];
 
-    ret.albedo.x = uintBitsToFloat(verts.data[offset + 10]);
-    ret.albedo.y = uintBitsToFloat(verts.data[offset + 11]);
-    ret.albedo.z = uintBitsToFloat(verts.data[offset + 12]);
-    ret.albedo.w = uintBitsToFloat(verts.data[offset + 13]);
+    ret.albedo.x = uintBitsToFloat(verts.data[off + 10]);
+    ret.albedo.y = uintBitsToFloat(verts.data[off + 11]);
+    ret.albedo.z = uintBitsToFloat(verts.data[off + 12]);
+    ret.albedo.w = uintBitsToFloat(verts.data[off + 13]);
 
-    ret.metallic_factor = uintBitsToFloat(verts.data[offset + 14]);
-    ret.roughness_factor = uintBitsToFloat(verts.data[offset + 15]);
-    ret.normal_factor = uintBitsToFloat(verts.data[offset + 16]);
-    ret.occlusion_factor = uintBitsToFloat(verts.data[offset + 17]);
+    ret.metallic_factor = uintBitsToFloat(verts.data[off + 14]);
+    ret.roughness_factor = uintBitsToFloat(verts.data[off + 15]);
+    ret.normal_factor = uintBitsToFloat(verts.data[off + 16]);
+    ret.occlusion_factor = uintBitsToFloat(verts.data[off + 17]);
 
-    ret.emissive_factor.x = uintBitsToFloat(verts.data[offset + 18]);
-    ret.emissive_factor.y = uintBitsToFloat(verts.data[offset + 19]);
-    ret.emissive_factor.z = uintBitsToFloat(verts.data[offset + 20]);
+    ret.emissive_factor.x = uintBitsToFloat(verts.data[off + 18]);
+    ret.emissive_factor.y = uintBitsToFloat(verts.data[off + 19]);
+    ret.emissive_factor.z = uintBitsToFloat(verts.data[off + 20]);
 
     return ret;
 }
@@ -98,12 +100,12 @@ void main() {
     vec3 bary = vec3(unpackHalf2x16(bary_ui), 0.0);
     bary.z = 1.0 - bary.x - bary.y;
 
-    PBR pbr = load_material(verts, mesh_data.offsets.material_offset);
+    PBR pbr = load_material(verts, mesh_data.offsets);
 
     Vertex v1 = load_vertex(verts, mesh_data.offsets, primitive_id * 3, true);
     Vertex v2 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 1, true);
     Vertex v3 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 2, true);
     Vertex interpolated = interpolate_vertex(v1, v2, v3, bary);
 
-    imageStore(target, ivec2(frag), texture(textures[1], interpolated.texcoord0));
+    imageStore(target, ivec2(frag), texture(textures[pbr.albedo_map], interpolated.texcoord0));
 }

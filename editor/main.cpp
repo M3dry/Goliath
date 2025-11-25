@@ -900,7 +900,7 @@ int main(int argc, char** argv) {
             engine::synchronization::end_barriers();
 
             auto shading = engine::visbuffer::shade(target_image_views[engine::get_current_frame()]);
-            for (uint16_t mat_id = 1; mat_id <= shading.material_id_count; mat_id++) {
+            for (uint16_t mat_id = 1; mat_id < shading.material_id_count; mat_id++) {
                 uint8_t pbr_pc[PBRPC::size]{};
                 PBRPC::write(pbr_pc,
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},

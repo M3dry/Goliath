@@ -363,7 +363,7 @@ namespace engine::visbuffer {
         Offsets::write(offsets_pc,
                        glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
                        stages_addr + current_material_count_offset, stages_addr + current_offsets_offset,
-                       stages_addr + current_shading_dispatch_offset, max_material_id + 1, 1 + max_material_id / 256);
+                       stages_addr + current_shading_dispatch_offset, max_material_id, 1 + max_material_id / 256);
 
         offsets_pipeline.bind();
         offsets_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
