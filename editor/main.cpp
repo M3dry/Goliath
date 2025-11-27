@@ -73,9 +73,9 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
                                          .width(engine::swapchain_extent.width)
                                          .height(engine::swapchain_extent.height)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                         .new_layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                         .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
+                                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -87,8 +87,21 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
+using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
+using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t,
+                                       engine::util::padding64, glm::mat4>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
+
+struct PBRShadingSet {
+    glm::vec3 cam_pos;
+    float _1;
+    glm::vec3 light_pos;
+    float _2;
+    glm::vec3 light_intensity;
+    float _3;
+    glm::mat4 view_proj_matrix;
+};
 
 struct Model {
     enum DataType {
@@ -327,7 +340,7 @@ int main(int argc, char** argv) {
     NFD_Init();
 
     VkImageMemoryBarrier2* visbuffer_barriers =
-        (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight);
+        (VkImageMemoryBarrier2*)malloc(sizeof(VkImageMemoryBarrier2) * engine::frames_in_flight * 2);
     engine::visbuffer::init(visbuffer_barriers);
     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
         visbuffer_barriers[i].srcAccessMask = 0;
@@ -351,7 +364,6 @@ int main(int argc, char** argv) {
                                                        .vertex(model_vertex_module)
                                                        .fragment(mesh_fragment_module)
                                                        .push_constant_size(ModelPC::size)
-                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
                                                        .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
@@ -368,7 +380,6 @@ int main(int argc, char** argv) {
                                                        .vertex(scene_vertex_module)
                                                        .fragment(mesh_fragment_module)
                                                        .push_constant_size(ScenePC::size)
-                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT)
                                                        .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
                                                        .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
@@ -376,26 +387,56 @@ int main(int argc, char** argv) {
                               .depth_compare_op(engine::CompareOp::Less)
                               .cull_mode(engine::CullMode::NoCull);
 
+    uint32_t culling_spv_size;
+    auto culling_spv_data = engine::util::read_file("culling.spv", &culling_spv_size);
+    auto culling_module = engine::create_shader({culling_spv_data, culling_spv_size});
+    free(culling_spv_data);
+
+    auto culling_pipeline =
+        engine::ComputePipeline(engine::ComputePipelineBuilder{}.shader(culling_module).push_constant(CullingPC::size));
+
+    uint32_t visbuffer_raster_vertex_spv_size;
+    auto visbuffer_raster_vertex_spv_data =
+        engine::util::read_file("visbuffer_raster_vertex.spv", &visbuffer_raster_vertex_spv_size);
+    auto visbuffer_raster_vertex_module =
+        engine::create_shader({visbuffer_raster_vertex_spv_data, visbuffer_raster_vertex_spv_size});
+    free(visbuffer_raster_vertex_spv_data);
+
+    uint32_t visbuffer_raster_fragment_spv_size;
+    auto visbuffer_raster_fragment_spv_data =
+        engine::util::read_file("visbuffer_raster_fragment.spv", &visbuffer_raster_fragment_spv_size);
+    auto visbuffer_raster_fragment_module =
+        engine::create_shader({visbuffer_raster_fragment_spv_data, visbuffer_raster_fragment_spv_size});
+    free(visbuffer_raster_fragment_spv_data);
+
+    auto visbuffer_raster_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
+                                                                  .vertex(visbuffer_raster_vertex_module)
+                                                                  .fragment(visbuffer_raster_fragment_module)
+                                                                  .push_constant_size(VisbufferRasterPC::size)
+                                                                  .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
+                                                                  .depth_format(VK_FORMAT_D16_UNORM))
+                                         .depth_test(true)
+                                         .depth_write(true)
+                                         .depth_compare_op(engine::CompareOp::Less)
+                                         .cull_mode(engine::CullMode::NoCull);
+
     uint32_t pbr_spv_size;
     auto pbr_spv_data = engine::util::read_file("pbr.spv", &pbr_spv_size);
     auto pbr_module = engine::create_shader({pbr_spv_data, pbr_spv_size});
     free(pbr_spv_data);
 
-    auto pbr_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
-                                                    .count = 1,
-                                                    .type = engine::descriptor::Binding::StorageImage,
-                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                },
-                                                engine::descriptor::Binding{
-                                                    .count = 1,
-                                                    .type = engine::descriptor::Binding::StorageImage,
-                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                }>::create();
-    auto pbr_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
-                                                    .shader(pbr_module)
-                                                    .descriptor_layout(0, pbr_set_layout)
-                                                    .descriptor_layout(1, engine::texture_registry::get_texture_pool().set_layout)
-                                                    .push_constant(PBRPC::size));
+    auto pbr_shading_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+        .count = 1,
+        .type = engine::descriptor::Binding::UBO,
+        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+    }>::create();
+    auto pbr_pipeline =
+        engine::ComputePipeline(engine::ComputePipelineBuilder{}
+                                    .shader(pbr_module)
+                                    .descriptor_layout(0, engine::visbuffer::shading_set_layout)
+                                    .descriptor_layout(1, pbr_shading_set_layout)
+                                    .descriptor_layout(2, engine::texture_registry::get_texture_pool().set_layout)
+                                    .push_constant(PBRPC::size));
 
     uint32_t postprocessing_spv_size;
     auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
@@ -433,6 +474,29 @@ int main(int argc, char** argv) {
 
     update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
 
+    constexpr uint32_t max_draw_size = 4096;
+    engine::Buffer draw_id_buffers[engine::frames_in_flight];
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        draw_id_buffers[i] = engine::Buffer::create(
+            sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+    }
+
+    engine::Buffer indirect_draw_buffers[engine::frames_in_flight];
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        indirect_draw_buffers[i] = engine::Buffer::create(
+            (sizeof(VkDrawIndirectCommand) + sizeof(uint32_t)) * max_draw_size,
+            VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+    }
+
+    constexpr uint32_t max_instance_buffer_size = 4096;
+    engine::Buffer instance_buffers[engine::frames_in_flight];
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        instance_buffers[i] = engine::Buffer::create(
+            max_instance_buffer_size * sizeof(glm::mat4),
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+    }
+
     VkBufferMemoryBarrier2 model_barrier{};
     VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
     bool model_barrier_applied = true;
@@ -456,6 +520,9 @@ int main(int argc, char** argv) {
     engine::imgui::enable(false);
 
     float sensitivity = 1.0f;
+
+    glm::vec3 light_intensity{1.0f};
+    glm::vec3 light_position{5.0f};
 
     double accum = 0;
     double last_time = glfwGetTime();
@@ -672,7 +739,8 @@ int main(int argc, char** argv) {
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
                     if (ImGui::Button("Unload")) {
-                        models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight].emplace_back(model);
+                        models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight].emplace_back(
+                            model);
 
                         if (open) ImGui::TreePop();
                         ImGui::PopID();
@@ -775,6 +843,10 @@ int main(int argc, char** argv) {
                     cam.update_matrices();
                 }
                 ImGui::Text("lock cam: %b", lock_cam);
+
+                ImGui::SeparatorText("Lighting");
+                ImGui::DragFloat3("intensity", glm::value_ptr(light_intensity), 0.1f);
+                ImGui::DragFloat3("position##sybau", glm::value_ptr(light_position), 0.1f);
             }
 
             ImGui::End();
@@ -819,15 +891,90 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
+            VkClearColorValue clear_color{};
+            clear_color.float32[0] = 0.0f;
+            clear_color.float32[1] = 0.0f;
+            clear_color.float32[2] = 0.3f;
+            clear_color.float32[3] = 1.0f;
+
+            VkImageSubresourceRange clear_range{};
+            clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            clear_range.baseMipLevel = 0;
+            clear_range.layerCount = 1;
+            clear_range.baseArrayLayer = 0;
+            clear_range.levelCount = 1;
+
+            vkCmdClearColorImage(engine::get_cmd_buf(), target_images[engine::get_current_frame()].image,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &clear_range);
+
             engine::visbuffer::prepare_for_draw();
+
+            auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
+            auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
+
+            VkBufferMemoryBarrier2 draw_id_barrier{};
+            draw_id_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            draw_id_barrier.pNext = nullptr;
+            draw_id_barrier.buffer = draw_id_buffer;
+            draw_id_barrier.offset = 0;
+            draw_id_barrier.size = draw_id_buffer.size();
+            draw_id_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw_id_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            draw_id_barrier.srcAccessMask = 0;
+            draw_id_barrier.srcStageMask = 0;
+            draw_id_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+            draw_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            VkBufferMemoryBarrier2 indirect_draw_barrier{};
+            indirect_draw_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            indirect_draw_barrier.pNext = nullptr;
+            indirect_draw_barrier.buffer = indirect_draw_buffer;
+            indirect_draw_barrier.offset = 0;
+            indirect_draw_barrier.size = indirect_draw_buffer.size();
+            indirect_draw_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            indirect_draw_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            indirect_draw_barrier.srcAccessMask = 0;
+            indirect_draw_barrier.srcStageMask = 0;
+            indirect_draw_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            indirect_draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            culling_pipeline.bind();
+            for (auto& model : models) {
+                if (!engine::transport::is_ready(model.timeline)) continue;
+
+                for (const auto& transform : model.instance_transforms) {
+                    uint8_t culling_pc[CullingPC::size]{};
+                    CullingPC::write(culling_pc, model.gpu_group.data.address(), draw_id_buffer.address(),
+                                     model.indirect_draw_buffer.address(), indirect_draw_buffer.address(),
+                                     model.gpu_data.mesh_count, max_draw_size, transform);
+
+                    culling_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                        .push_constant = culling_pc,
+                        .group_count_x = 1,
+                        .group_count_y = 1,
+                        .group_count_z = 1,
+                    });
+                }
+            }
+
+            draw_id_barrier.srcAccessMask = draw_id_barrier.dstAccessMask;
+            draw_id_barrier.srcStageMask = draw_id_barrier.dstStageMask;
+            draw_id_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            draw_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+
+            indirect_draw_barrier.srcAccessMask = indirect_draw_barrier.dstAccessMask;
+            indirect_draw_barrier.srcStageMask = indirect_draw_barrier.dstStageMask;
+            indirect_draw_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            indirect_draw_barrier.dstStageMask =
+                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(draw_id_barrier);
+            engine::synchronization::apply_barrier(indirect_draw_barrier);
+            engine::synchronization::end_barriers();
+
             engine::rendering::begin(
                 engine::RenderPass{}
-                    .add_color_attachment(engine::RenderingAttachement{}
-                                              .set_image(target_image_views[engine::get_current_frame()],
-                                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                                              .set_clear_color(glm::vec4{0.0f, 0.0f, 0.3f, 1.0f})
-                                              .set_load_op(engine::LoadOp::Clear)
-                                              .set_store_op(engine::StoreOp::Store))
                     .add_color_attachment(engine::visbuffer::attach())
                     .depth_attachment(engine::RenderingAttachement{}
                                           .set_image(depth_image_views[engine::get_current_frame()],
@@ -835,24 +982,18 @@ int main(int argc, char** argv) {
                                           .set_clear_depth(1.0f)
                                           .set_load_op(engine::LoadOp::Clear)
                                           .set_store_op(engine::StoreOp::Store)));
-            model_pipeline.bind();
-            uint8_t model_push_constant[ModelPC::size]{};
 
-            for (auto& model : models) {
-                if (!engine::transport::is_ready(model.timeline)) continue;
+            uint8_t visbuffer_raster_pc[VisbufferRasterPC::size];
+            VisbufferRasterPC::write(visbuffer_raster_pc, indirect_draw_buffer.address(), draw_id_buffer.address(), cam.view_projection());
 
-                for (const auto& transform : model.instance_transforms) {
-                    ModelPC::write(model_push_constant, model.gpu_group.data.address(),
-                                   model.indirect_draw_buffer.address(), cam.view_projection(), transform);
-
-                    model_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
-                        .push_constant = model_push_constant,
-                        .draw_buffer = model.indirect_draw_buffer.data(),
-                        .draw_count = model.gpu_data.mesh_count,
-                        .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
-                    });
-                }
-            }
+            visbuffer_raster_pipeline.bind();
+            visbuffer_raster_pipeline.draw_indirect_count(engine::GraphicsPipeline::DrawIndirectCountParams{
+                .push_constant = visbuffer_raster_pc,
+                .draw_buffer = indirect_draw_buffer.data(),
+                .count_buffer = draw_id_buffer.data(),
+                .max_draw_count = max_draw_size,
+                .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
+            });
 
             uint8_t scene_push_constant[ScenePC::size];
             scene_pipeline.bind();
@@ -878,7 +1019,7 @@ int main(int argc, char** argv) {
             VkImageMemoryBarrier2 target_barrier{};
             target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             target_barrier.pNext = nullptr;
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
             target_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             target_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -890,8 +1031,8 @@ int main(int argc, char** argv) {
                 .baseArrayLayer = 0,
                 .layerCount = 1,
             };
-            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            target_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
@@ -900,28 +1041,35 @@ int main(int argc, char** argv) {
             engine::synchronization::end_barriers();
 
             auto shading = engine::visbuffer::shade(target_image_views[engine::get_current_frame()]);
-            for (uint16_t mat_id = 1; mat_id < shading.material_id_count; mat_id++) {
+            for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                 uint8_t pbr_pc[PBRPC::size]{};
                 PBRPC::write(pbr_pc,
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},
                              engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
                              engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset, mat_id);
 
-                auto pbr_set = engine::descriptor::new_set(pbr_set_layout);
-                engine::descriptor::begin_update(pbr_set);
-                engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
-                                                         target_image_views[engine::get_current_frame()]);
-                engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
+                PBRShadingSet shading_set_data{
+                    .cam_pos = cam.position,
+                    .light_pos = light_position,
+                    .light_intensity = light_intensity,
+                    .view_proj_matrix = cam.view_projection(),
+                };
+
+                auto pbr_shading_set = engine::descriptor::new_set(pbr_shading_set_layout);
+                engine::descriptor::begin_update(pbr_shading_set);
+                engine::descriptor::update_ubo(0, {(uint8_t*)&shading_set_data, sizeof(PBRShadingSet)});
+                engine::descriptor::end_update();
 
                 pbr_pipeline.bind();
                 pbr_pipeline.dispatch_indirect(engine::ComputePipeline::IndirectDispatchParams{
                     .push_constant = pbr_pc,
-                    .descriptor_indexes = {
-                        shading.vis_and_target_set,
-                        engine::texture_registry::get_texture_pool().set,
-                        engine::descriptor::null_set,
-                        engine::descriptor::null_set,
-                    },
+                    .descriptor_indexes =
+                        {
+                            shading.vis_and_target_set,
+                            pbr_shading_set,
+                            engine::texture_registry::get_texture_pool().set,
+                            engine::descriptor::null_set,
+                        },
                     .indirect_buffer = engine::visbuffer::stages,
                     .buffer_offset = shading.indirect_buffer_offset,
                 });
@@ -971,7 +1119,7 @@ int main(int argc, char** argv) {
             target_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
             target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_NONE;
+            target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
             VkImageMemoryBarrier2 swapchain_barrier{};
@@ -991,7 +1139,7 @@ int main(int argc, char** argv) {
             };
             swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
             swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-            swapchain_barrier.dstAccessMask = VK_ACCESS_2_NONE;
+            swapchain_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
             engine::synchronization::begin_barriers();
@@ -1046,7 +1194,7 @@ int main(int argc, char** argv) {
 
             swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            swapchain_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             swapchain_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
             swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -1064,13 +1212,30 @@ int main(int argc, char** argv) {
             engine::rendering::end();
 
             target_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            target_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            target_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            draw_id_barrier.srcAccessMask = draw_id_barrier.dstAccessMask;
+            draw_id_barrier.srcStageMask = draw_id_barrier.dstStageMask;
+            draw_id_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            draw_id_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            indirect_draw_barrier.srcAccessMask = indirect_draw_barrier.dstAccessMask;
+            indirect_draw_barrier.srcStageMask = indirect_draw_barrier.dstStageMask;
+            indirect_draw_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            indirect_draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(draw_id_barrier);
+            engine::synchronization::apply_barrier(indirect_draw_barrier);
+            engine::synchronization::end_barriers();
 
             engine::visbuffer::clear_buffers();
+            vkCmdFillBuffer(engine::get_cmd_buf(), draw_id_buffer, 0, draw_id_buffer.size(), 0);
+            vkCmdFillBuffer(engine::get_cmd_buf(), indirect_draw_buffer, 0, indirect_draw_buffer.size(), 0);
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
@@ -1131,6 +1296,13 @@ int main(int argc, char** argv) {
         scene.destroy();
     }
 
+    culling_pipeline.destroy();
+    engine::destroy_shader(culling_module);
+
+    visbuffer_raster_pipeline.destroy();
+    engine::destroy_shader(visbuffer_raster_fragment_module);
+    engine::destroy_shader(visbuffer_raster_vertex_module);
+
     model_pipeline.destroy();
     engine::destroy_shader(model_vertex_module);
 
@@ -1139,7 +1311,7 @@ int main(int argc, char** argv) {
 
     engine::destroy_shader(mesh_fragment_module);
 
-    engine::destroy_descriptor_set_layout(pbr_set_layout);
+    engine::destroy_descriptor_set_layout(pbr_shading_set_layout);
     pbr_pipeline.destroy();
     engine::destroy_shader(pbr_module);
 
@@ -1154,6 +1326,10 @@ int main(int argc, char** argv) {
         engine::GPUImageView::destroy(target_image_views[i]);
 
         target_images[i].destroy();
+
+        draw_id_buffers[i].destroy();
+        indirect_draw_buffers[i].destroy();
+        instance_buffers[i].destroy();
     }
 
     free(target_images);

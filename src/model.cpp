@@ -1,4 +1,5 @@
 #include "goliath/model.hpp"
+#include "MikkTSpace/mikktspace.h"
 #include "goliath/buffer.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/material.hpp"
@@ -203,7 +204,7 @@ uint32_t parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Hand
     }
 
     auto gid = engine::texture_registry::add((uint8_t*)image_data, image_size, image.width, image.height, format,
-                                         texture.name, sampler);
+                                             texture.name, sampler);
     handled.textures.emplace_back(tex_id, gid);
     return gid;
 }
@@ -236,7 +237,6 @@ void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinyg
         .occlusion_factor = (float)material.occlusionTexture.strength,
         .emissive_factor = glm::make_vec3(material.emissiveFactor.data()),
     };
-    printf("albedo map: %d\n", pbr_data.albedo_map);
 
     engine::material::pbr::write_data_blob(pbr_data, out->material_data);
 }

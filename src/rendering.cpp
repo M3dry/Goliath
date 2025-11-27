@@ -204,8 +204,7 @@ void engine::GraphicsPipeline::draw(const DrawParams& params) {
                                      VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i);
         } else {
             auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
-            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0,
-                                    nullptr);
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0, nullptr);
         }
     }
 
@@ -230,12 +229,37 @@ void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
                                      VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i);
         } else {
             auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
-            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0,
-                                    nullptr);
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0, nullptr);
         }
     }
 
     vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);
+}
+
+void engine::GraphicsPipeline::draw_indirect_count(const DrawIndirectCountParams& params) {
+    auto cmd_buf = get_cmd_buf();
+    auto& descriptor_pool = get_frame_descriptor_pool();
+
+    if (_push_constant_size != 0) {
+        vkCmdPushConstants(cmd_buf, _pipeline_layout, VK_SHADER_STAGE_ALL_GRAPHICS, 0, _push_constant_size,
+                           params.push_constant);
+    }
+
+    for (uint32_t i = 0; i < params.descriptor_indexes.size(); i++) {
+        if (std::holds_alternative<uint64_t>(params.descriptor_indexes[i])) {
+            auto ix = std::get<uint64_t>(params.descriptor_indexes[i]);
+            if (ix == (uint64_t)-1) continue;
+
+            descriptor_pool.bind_set(std::get<uint64_t>(params.descriptor_indexes[i]), cmd_buf,
+                                     VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i);
+        } else {
+            auto set = std::get<VkDescriptorSet>(params.descriptor_indexes[i]);
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline_layout, i, 1, &set, 0, nullptr);
+        }
+    }
+
+    vkCmdDrawIndirectCount(cmd_buf, params.draw_buffer, params.draw_offset, params.count_buffer, params.count_offset,
+                           params.max_draw_count, params.stride);
 }
 
 void engine::GraphicsPipeline::destroy() {

@@ -13,17 +13,17 @@
 #include <vulkan/vulkan_core.h>
 
 uint8_t material_count_spv[] = {
-    #embed "material_count.spv"
+#embed "material_count.spv"
 };
 std::size_t material_count_spv_size = sizeof(material_count_spv);
 
 uint8_t offsets_spv[] = {
-    #embed "offsets.spv"
+#embed "offsets.spv"
 };
 std::size_t offsets_spv_size = sizeof(offsets_spv);
 
 uint8_t fragment_id_spv[] = {
-    #embed "fragment_id.spv"
+#embed "fragment_id.spv"
 };
 std::size_t fragment_id_spv_size = sizeof(fragment_id_spv);
 
@@ -54,12 +54,12 @@ namespace engine::visbuffer {
 
     VkDescriptorSetLayout shading_set_layout;
 
-    uint32_t max_material_id = 1;
+    uint32_t max_material_id = 0;
 
     void _resize(VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
         if (swapchain_changed) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
-                auto [img, barrier] =
+                auto [img1, barrier1] =
                     GPUImage::upload(GPUImageInfo{}
                                          .new_layout(VK_IMAGE_LAYOUT_GENERAL)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
@@ -69,9 +69,9 @@ namespace engine::visbuffer {
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
 
-                vis_buffers[i] = img;
-                vis_buffer_views[i] = GPUImageView{img}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
-                img_barriers[i] = barrier;
+                vis_buffers[i] = img1;
+                vis_buffer_views[i] = GPUImageView{img1}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+                img_barriers[i] = barrier1;
             }
         }
 
@@ -113,6 +113,7 @@ namespace engine::visbuffer {
     void init(VkImageMemoryBarrier2* img_barriers) {
         vis_buffers = (GPUImage*)malloc(sizeof(GPUImage) * frames_in_flight);
         vis_buffer_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
+
         _resize(img_barriers, true, true);
 
         storage_image_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
@@ -299,12 +300,13 @@ namespace engine::visbuffer {
         material_count_pipeline.bind();
         material_count_pipeline.dispatch(ComputePipeline::DispatchParams{
             .push_constant = mat_count_pc,
-            .descriptor_indexes = {
-                material_count_set,
-                engine::descriptor::null_set,
-                engine::descriptor::null_set,
-                engine::descriptor::null_set,
-            },
+            .descriptor_indexes =
+                {
+                    material_count_set,
+                    engine::descriptor::null_set,
+                    engine::descriptor::null_set,
+                    engine::descriptor::null_set,
+                },
             .group_count_x = (uint32_t)std::ceil(swapchain_extent.width / 16.0f),
             .group_count_y = (uint32_t)std::ceil(swapchain_extent.width / 16.0f),
             .group_count_z = 1,
@@ -363,7 +365,7 @@ namespace engine::visbuffer {
         Offsets::write(offsets_pc,
                        glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
                        stages_addr + current_material_count_offset, stages_addr + current_offsets_offset,
-                       stages_addr + current_shading_dispatch_offset, max_material_id, 1 + max_material_id / 256);
+                       stages_addr + current_shading_dispatch_offset, max_material_id + 1, 1 + max_material_id / 256);
 
         offsets_pipeline.bind();
         offsets_pipeline.dispatch(engine::ComputePipeline::DispatchParams{

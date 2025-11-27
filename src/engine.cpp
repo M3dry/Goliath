@@ -214,6 +214,7 @@ namespace engine {
         features12.descriptorBindingStorageImageUpdateAfterBind = true;
         features12.descriptorBindingUniformBufferUpdateAfterBind = true;
         features12.runtimeDescriptorArray = true;
+        features12.drawIndirectCount = true;
         features12.timelineSemaphore = true;
         VkPhysicalDeviceVulkan11Features features11{};
         features11.shaderDrawParameters = true;
