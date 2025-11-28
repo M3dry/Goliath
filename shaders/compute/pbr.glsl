@@ -1,6 +1,7 @@
 #version 460
 
 #include "library/mesh_data.glsl"
+#include "library/culled_data.glsl"
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
@@ -20,6 +21,7 @@ layout(push_constant, std430) uniform Push {
     uvec2 screen;
     DispatchCommand dispatch;
     FragIDs frag_ids;
+    DrawIDs draw_ids;
     uint mat_id;
 };
 
@@ -35,19 +37,20 @@ layout(set = 2, binding = 0) uniform sampler2D textures[];
 
 const float PI = 3.14159265359;
 
-vec3 get_normal(float normal_factor, uint normal_tex, uvec2 normal_uv, vec3 normal, vec3 tangent, float tangent_w) {
-    vec3 N = normalize(normal);
-    vec3 T = normalize(tangent - N * dot(N, tangent));
-    vec3 B = cross(N, T) * tangent_w;
-
-    mat3 TBN = mat3(T, B, N);
-
-    vec3 n_ts = texture(textures[normal_tex], normal_uv).xyz * 2.0 - 1.0;
-    n_ts.xy *= normal_factor;
-
-    n_ts.z = sqrt(max(1.0 - dot(n_ts.xy, n_ts.xy), 0.0));
-
-    return normalize(TBN * n_ts);
+vec3 get_normal(float normal_factor, uint normal_tex, vec2 normal_uv, vec3 normal, vec3 tangent, float tangent_w) {
+    return normal;
+    // vec3 N = normalize(normal);
+    // vec3 T = normalize(tangent - N * dot(N, tangent));
+    // vec3 B = cross(N, T) * tangent_w;
+    //
+    // mat3 TBN = mat3(T, B, N);
+    //
+    // vec3 n_ts = texture(textures[normal_tex], normal_uv).xyz * 2.0 - 1.0;
+    // n_ts.xy *= normal_factor;
+    //
+    // n_ts.z = sqrt(max(1.0 - dot(n_ts.xy, n_ts.xy), 0.0));
+    //
+    // return normalize(TBN * n_ts);
 }
 
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
@@ -129,7 +132,7 @@ struct PBR {
 PBR load_material(const VertexData verts, const Offsets offs) {
     PBR ret;
 
-    uint off = offs.relative_start/4 + offs.material_offset/4;
+    uint off = offs.start/4 + offs.material_offset/4;
     ret.albedo_map = verts.data[off];
     ret.metallic_roughness_map = verts.data[off + 1];
     ret.normal_map = verts.data[off + 2];
@@ -168,36 +171,37 @@ void main() {
     if (frag.x >= screen.x || frag.y >= screen.y)  return;
 
     uvec4 vis = imageLoad(visbuffer, ivec2(frag));
-    if (vis.x == 0 && vis.y == 0) return;
+    if (vis.x == 0) return;
 
-    VertexData verts = VertexData(vis.xy);
-    MeshData mesh_data = read_mesh_data(verts, 0);
+    DrawID draw_id = draw_ids.id[vis.x - 1];
+    VertexData verts = draw_id.group;
+    MeshData mesh_data = read_mesh_data(verts, draw_id.start_offset/4);
     uint primitive_id = vis.z;
     uint bary_ui = vis.w;
     vec3 bary = vec3(unpackHalf2x16(bary_ui), 0.0);
     bary.z = 1.0 - bary.x - bary.y;
 
+    mat4 model_transform = draw_id.model_transform * mesh_data.transform;
+    mat3 normal_matrix = transpose(inverse(mat3(model_transform)));
+
     PBR pbr = load_material(verts, mesh_data.offsets);
 
-    Vertex v1 = load_vertex(verts, mesh_data.offsets, primitive_id * 3, true);
-    Vertex v2 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 1, true);
-    Vertex v3 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 2, true);
-
-    // v1.tangent = vec4(v1.tangent.xyz, 1.0);
-    // v2.tangent = vec4(v2.tangent.xyz, 1.0);
-    // v3.tangent = vec4(v3.tangent.xyz, 1.0);
-    // float tangent_w = v1.tangent.w;
+    Vertex v1 = load_vertex(verts, mesh_data.offsets, primitive_id * 3, false);
+    Vertex v2 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 1, false);
+    Vertex v3 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 2, false);
 
     Vertex interpolated = interpolate_vertex(v1, v2, v3, bary);
+    interpolated.normal = normalize(normal_matrix * interpolated.normal);
+    interpolated.tangent.xyz = mat3(model_transform) * interpolated.tangent.xyz;
+    float tangent_w = v1.tangent.w;
+    vec3 world_pos = (model_transform * vec4(interpolated.pos, 1.0)).xyz;
 
     vec3 albedo = (pbr.albedo * texture(textures[pbr.albedo_map], interpolated.texcoord0)).rgb;
     float metallic = pbr.metallic_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0).b;
     float roughness = pbr.roughness_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0).g;
-    vec3 normal = interpolated.normal; // get_normal(pbr.normal_factor, pbr.normal_map, interpolated.texcoord0, interpolated.normal, interpolated.tangent, tangent_w);
+    vec3 normal = get_normal(pbr.normal_factor, pbr.normal_map, interpolated.texcoord0, interpolated.normal, interpolated.tangent.xyz, tangent_w);
     float occlusion = pbr.occlusion_factor * texture(textures[pbr.occlusion_map], interpolated.texcoord0).r;
     vec3 emissive = pbr.emissive_factor * texture(textures[pbr.emissive_map], interpolated.texcoord0).rgb;
-
-    vec3 world_pos = interpolated.pos; // TODO
 
     vec3 view = normalize(cam_pos - world_pos);
     vec3 F0 = vec3(0.04);

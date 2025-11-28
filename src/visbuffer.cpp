@@ -43,13 +43,13 @@ namespace engine::visbuffer {
 
     VkDescriptorSetLayout storage_image_set_layout;
 
-    using MaterialCount = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t>;
+    using MaterialCount = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
     ComputePipeline material_count_pipeline;
 
     using Offsets = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t>;
     ComputePipeline offsets_pipeline;
 
-    using FragmentID = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
+    using FragmentID = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
     ComputePipeline fragment_id_pipeline;
 
     VkDescriptorSetLayout shading_set_layout;
@@ -65,7 +65,7 @@ namespace engine::visbuffer {
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                          .width(swapchain_extent.width)
                                          .height(swapchain_extent.height)
-                                         .format(VK_FORMAT_R32G32B32A32_UINT)
+                                         .format(format)
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
 
@@ -261,7 +261,7 @@ namespace engine::visbuffer {
         synchronization::end_barriers();
     }
 
-    void count_materials() {
+    void count_materials(uint64_t draw_id_addr) {
         auto current_material_count_offset = material_count_buffer_offsets[get_current_frame()];
 
         VkImageMemoryBarrier2 visbuffer_barrier = transition_to_general();
@@ -295,7 +295,7 @@ namespace engine::visbuffer {
         uint8_t mat_count_pc[MaterialCount::size]{};
         MaterialCount::write(mat_count_pc,
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-                             stages.address() + current_material_count_offset);
+                             stages.address() + current_material_count_offset, draw_id_addr);
 
         material_count_pipeline.bind();
         material_count_pipeline.dispatch(ComputePipeline::DispatchParams{
@@ -376,7 +376,7 @@ namespace engine::visbuffer {
         });
     }
 
-    void write_fragment_ids() {
+    void write_fragment_ids(uint64_t draw_id_addr) {
         auto current_offsets_offset = offsets_buffer_offsets[get_current_frame()];
         VkBufferMemoryBarrier2 offsets_barrier{};
         offsets_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -410,9 +410,10 @@ namespace engine::visbuffer {
 
         uint8_t fragment_id_pc[FragmentID::size]{};
         auto stages_addr = stages.address();
-        FragmentID::write(
-            fragment_id_pc, glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-            stages_addr + current_offsets_offset, stages_addr + current_fragment_id_offset, max_material_id);
+        FragmentID::write(fragment_id_pc,
+                          glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                          stages_addr + current_offsets_offset, stages_addr + current_fragment_id_offset, draw_id_addr,
+                          max_material_id);
 
         auto frag_id_set = engine::descriptor::new_set(storage_image_set_layout);
         engine::descriptor::begin_update(frag_id_set);

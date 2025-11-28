@@ -162,6 +162,7 @@ namespace engine::model {
     struct DrawCommand {
         VkDrawIndirectCommand cmd;
         uint32_t start_offset;
+        uint32_t _transform_offset{(uint32_t)-1};
     };
 
     struct GPUMeshData {

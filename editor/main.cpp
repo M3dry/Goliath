@@ -88,9 +88,8 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
-using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t,
-                                       engine::util::padding64, glm::mat4>;
-using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint32_t>;
+using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, glm::mat4>;
+using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
 
 struct PBRShadingSet {
@@ -350,26 +349,10 @@ int main(int argc, char** argv) {
     }
     bool visbuffer_barriers_applied = false;
 
-    uint32_t model_vertex_spv_size;
-    auto model_vertex_spv_data = engine::util::read_file("model_vertex.spv", &model_vertex_spv_size);
-    auto model_vertex_module = engine::create_shader({model_vertex_spv_data, model_vertex_spv_size});
-    free(model_vertex_spv_data);
-
     uint32_t mesh_fragment_spv_size;
     auto mesh_fragment_spv_data = engine::util::read_file("mesh_fragment.spv", &mesh_fragment_spv_size);
     auto mesh_fragment_module = engine::create_shader({mesh_fragment_spv_data, mesh_fragment_spv_size});
     free(mesh_fragment_spv_data);
-
-    auto model_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
-                                                       .vertex(model_vertex_module)
-                                                       .fragment(mesh_fragment_module)
-                                                       .push_constant_size(ModelPC::size)
-                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
-                                                       .depth_format(VK_FORMAT_D16_UNORM))
-                              .depth_test(true)
-                              .depth_write(true)
-                              .depth_compare_op(engine::CompareOp::Less)
-                              .cull_mode(engine::CullMode::NoCull);
 
     uint32_t scene_vertex_spv_size;
     auto scene_vertex_spv_data = engine::util::read_file("scene_vertex.spv", &scene_vertex_spv_size);
@@ -380,7 +363,7 @@ int main(int argc, char** argv) {
                                                        .vertex(scene_vertex_module)
                                                        .fragment(mesh_fragment_module)
                                                        .push_constant_size(ScenePC::size)
-                                                       .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
+                                                       .add_color_attachment(engine::visbuffer::format)
                                                        .depth_format(VK_FORMAT_D16_UNORM))
                               .depth_test(true)
                               .depth_write(true)
@@ -413,7 +396,7 @@ int main(int argc, char** argv) {
                                                                   .vertex(visbuffer_raster_vertex_module)
                                                                   .fragment(visbuffer_raster_fragment_module)
                                                                   .push_constant_size(VisbufferRasterPC::size)
-                                                                  .add_color_attachment(VK_FORMAT_R32G32B32A32_UINT)
+                                                                  .add_color_attachment(engine::visbuffer::format)
                                                                   .depth_format(VK_FORMAT_D16_UNORM))
                                          .depth_test(true)
                                          .depth_write(true)
@@ -477,9 +460,11 @@ int main(int argc, char** argv) {
     constexpr uint32_t max_draw_size = 4096;
     engine::Buffer draw_id_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        draw_id_buffers[i] = engine::Buffer::create(
-            sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+        draw_id_buffers[i] =
+            engine::Buffer::create(sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
+                                   VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
+                                       VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
+                                   std::nullopt);
     }
 
     engine::Buffer indirect_draw_buffers[engine::frames_in_flight];
@@ -489,12 +474,14 @@ int main(int argc, char** argv) {
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
-    constexpr uint32_t max_instance_buffer_size = 4096;
-    engine::Buffer instance_buffers[engine::frames_in_flight];
+    constexpr uint32_t max_instanced_dispatch_buffer_size = 4096;
+    engine::Buffer instanced_indirect_dispatch_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        instance_buffers[i] = engine::Buffer::create(
-            max_instance_buffer_size * sizeof(glm::mat4),
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+        instanced_indirect_dispatch_buffers[i] =
+            engine::Buffer::create(max_instanced_dispatch_buffer_size * 10,
+                                   VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
+                                       VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
+                                   std::nullopt);
     }
 
     VkBufferMemoryBarrier2 model_barrier{};
@@ -911,6 +898,7 @@ int main(int argc, char** argv) {
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
+            auto& instanced_indirect_dispatch_buffer = instanced_indirect_dispatch_buffers[engine::get_current_frame()];
 
             VkBufferMemoryBarrier2 draw_id_barrier{};
             draw_id_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -938,6 +926,19 @@ int main(int argc, char** argv) {
             indirect_draw_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             indirect_draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
+            VkBufferMemoryBarrier2 instanced_indirect_dispatch_barrier{};
+            instanced_indirect_dispatch_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            instanced_indirect_dispatch_barrier.pNext = nullptr;
+            instanced_indirect_dispatch_barrier.buffer = instanced_indirect_dispatch_buffer;
+            instanced_indirect_dispatch_barrier.offset = 0;
+            instanced_indirect_dispatch_barrier.size = instanced_indirect_dispatch_buffer.size();
+            instanced_indirect_dispatch_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            instanced_indirect_dispatch_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            instanced_indirect_dispatch_barrier.srcAccessMask = 0;
+            instanced_indirect_dispatch_barrier.srcStageMask = 0;
+            instanced_indirect_dispatch_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            instanced_indirect_dispatch_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
             culling_pipeline.bind();
             for (auto& model : models) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
@@ -946,11 +947,12 @@ int main(int argc, char** argv) {
                     uint8_t culling_pc[CullingPC::size]{};
                     CullingPC::write(culling_pc, model.gpu_group.data.address(), draw_id_buffer.address(),
                                      model.indirect_draw_buffer.address(), indirect_draw_buffer.address(),
-                                     model.gpu_data.mesh_count, max_draw_size, transform);
+                                     instanced_indirect_dispatch_buffer.address(), model.gpu_data.mesh_count, max_draw_size,
+                                     transform);
 
                     culling_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
                         .push_constant = culling_pc,
-                        .group_count_x = 1,
+                        .group_count_x = (uint32_t)std::ceil(model.gpu_data.mesh_count / 32.0f),
                         .group_count_y = 1,
                         .group_count_z = 1,
                     });
@@ -968,9 +970,16 @@ int main(int argc, char** argv) {
             indirect_draw_barrier.dstStageMask =
                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
 
+            // instanced_indirect_dispatch_barrier.srcAccessMask = instanced_indirect_dispatch_barrier.dstAccessMask;
+            // instanced_indirect_dispatch_barrier.srcStageMask = instanced_indirect_dispatch_barrier.dstStageMask;
+            // instanced_indirect_dispatch_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            // instanced_indirect_dispatch_barrier.dstStageMask =
+            //     VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(draw_id_barrier);
             engine::synchronization::apply_barrier(indirect_draw_barrier);
+            // engine::synchronization::apply_barrier(indirect_draw_barrier);
             engine::synchronization::end_barriers();
 
             engine::rendering::begin(
@@ -984,7 +993,8 @@ int main(int argc, char** argv) {
                                           .set_store_op(engine::StoreOp::Store)));
 
             uint8_t visbuffer_raster_pc[VisbufferRasterPC::size];
-            VisbufferRasterPC::write(visbuffer_raster_pc, indirect_draw_buffer.address(), draw_id_buffer.address(), cam.view_projection());
+            VisbufferRasterPC::write(visbuffer_raster_pc, indirect_draw_buffer.address(), draw_id_buffer.address(),
+                                     cam.view_projection());
 
             visbuffer_raster_pipeline.bind();
             visbuffer_raster_pipeline.draw_indirect_count(engine::GraphicsPipeline::DrawIndirectCountParams{
@@ -995,26 +1005,26 @@ int main(int argc, char** argv) {
                 .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
             });
 
-            uint8_t scene_push_constant[ScenePC::size];
-            scene_pipeline.bind();
-            for (auto& scene : scenes) {
-                if (!engine::transport::is_ready(scene.timeline)) continue;
-
-                ScenePC::write(scene_push_constant, scene.gpu_group.data.address(),
-                               scene.gpu_data.draw_indirect.address(), cam.view_projection(), scene.transform);
-
-                scene_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
-                    .push_constant = scene_push_constant,
-                    .draw_buffer = scene.gpu_data.draw_indirect.data(),
-                    .draw_count = scene.gpu_data.draw_count,
-                    .stride = sizeof(engine::GPUScene::DrawCommand),
-                });
-            }
+            // uint8_t scene_push_constant[ScenePC::size];
+            // scene_pipeline.bind();
+            // for (auto& scene : scenes) {
+            //     if (!engine::transport::is_ready(scene.timeline)) continue;
+            //
+            //     ScenePC::write(scene_push_constant, scene.gpu_group.data.address(),
+            //                    scene.gpu_data.draw_indirect.address(), cam.view_projection(), scene.transform);
+            //
+            //     scene_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
+            //         .push_constant = scene_push_constant,
+            //         .draw_buffer = scene.gpu_data.draw_indirect.data(),
+            //         .draw_count = scene.gpu_data.draw_count,
+            //         .stride = sizeof(engine::GPUScene::DrawCommand),
+            //     });
+            // }
             engine::rendering::end();
 
-            engine::visbuffer::count_materials();
+            engine::visbuffer::count_materials(draw_id_buffer.address());
             engine::visbuffer::get_offsets();
-            engine::visbuffer::write_fragment_ids();
+            engine::visbuffer::write_fragment_ids(draw_id_buffer.address());
 
             VkImageMemoryBarrier2 target_barrier{};
             target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -1046,7 +1056,8 @@ int main(int argc, char** argv) {
                 PBRPC::write(pbr_pc,
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},
                              engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
-                             engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset, mat_id);
+                             engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
+                             draw_id_buffer.address(), mat_id);
 
                 PBRShadingSet shading_set_data{
                     .cam_pos = cam.position,
@@ -1263,8 +1274,8 @@ int main(int argc, char** argv) {
             update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
             target_barriers_applied = false;
 
-            model_pipeline.update_viewport_to_swapchain();
-            model_pipeline.update_scissor_to_viewport();
+            visbuffer_raster_pipeline.update_viewport_to_swapchain();
+            visbuffer_raster_pipeline.update_scissor_to_viewport();
             scene_pipeline.update_viewport_to_swapchain();
             scene_pipeline.update_scissor_to_viewport();
 
@@ -1303,9 +1314,6 @@ int main(int argc, char** argv) {
     engine::destroy_shader(visbuffer_raster_fragment_module);
     engine::destroy_shader(visbuffer_raster_vertex_module);
 
-    model_pipeline.destroy();
-    engine::destroy_shader(model_vertex_module);
-
     scene_pipeline.destroy();
     engine::destroy_shader(scene_vertex_module);
 
@@ -1329,7 +1337,7 @@ int main(int argc, char** argv) {
 
         draw_id_buffers[i].destroy();
         indirect_draw_buffers[i].destroy();
-        instance_buffers[i].destroy();
+        instanced_indirect_dispatch_buffers[i].destroy();
     }
 
     free(target_images);

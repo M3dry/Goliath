@@ -14,6 +14,7 @@ layout(buffer_reference, std430) readonly buffer CulledDrawCmds {
 struct DrawID {
     VertexData group;
     uint start_offset;
+    uint material_id;
     mat4 model_transform;
 };
 

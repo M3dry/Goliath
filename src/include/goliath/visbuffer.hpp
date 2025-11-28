@@ -6,6 +6,7 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::visbuffer {
+    static constexpr VkFormat format = VK_FORMAT_R32G32B32A32_UINT;
     extern VkDescriptorSetLayout shading_set_layout;
 
     extern Buffer stages;
@@ -34,9 +35,9 @@ namespace engine::visbuffer {
     RenderingAttachement attach();
 
     void prepare_for_draw();
-    void count_materials();
+    void count_materials(uint64_t draw_id_addr);
     void get_offsets();
-    void write_fragment_ids();
+    void write_fragment_ids(uint64_t draw_id_addr);
 
     struct Shading {
         uint64_t indirect_buffer_offset;

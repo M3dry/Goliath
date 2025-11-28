@@ -14,25 +14,22 @@ layout(push_constant, std430) uniform Push {
     mat4 vp;
 };
 
-layout(location = 0) flat out uint mesh_data_offset;
-layout(location = 1) flat out uvec2 verts;
-layout(location = 2) flat out uint primitive_id;
-layout(location = 3) out vec3 barycentric;
+layout(location = 0) flat out uint draw_id;
+layout(location = 1) flat out uint primitive_id;
+layout(location = 2) out vec3 barycentric;
 
-DrawID get_draw_id() {
-    return draw_ids.id[draws.cmd[gl_DrawID].data[4]];
+uint get_draw_id() {
+    return draws.cmd[gl_DrawID].data[4];
 }
 
 void main() {
-    DrawID draw_id = get_draw_id();
-    verts = uvec2(draw_id.group);
+    draw_id = get_draw_id();
+    DrawID draw_val = draw_ids.id[draw_id];
+    MeshData mesh_data = read_mesh_data(draw_val.group, draw_val.start_offset/4);
+    Vertex vert = load_vertex(draw_val.group, mesh_data.offsets, gl_VertexIndex, false);
 
-    MeshData mesh_data = read_mesh_data(draw_id.group, draw_id.start_offset/4);
-    Vertex vert = load_vertex(draw_id.group, mesh_data.offsets, gl_VertexIndex, false);
+    gl_Position = vp * draw_val.model_transform * mesh_data.transform * vec4(vert.pos, 1.0);
 
-    gl_Position = vp * draw_id.model_transform * mesh_data.transform * vec4(vert.pos, 1.0);
-
-    mesh_data_offset = draw_id.start_offset;
     primitive_id = gl_VertexIndex / 3;
     barycentric = vec3(0.0);
     barycentric[gl_VertexIndex % 3] = 1;

@@ -1,6 +1,7 @@
 #version 460
 
 #include "library/mesh_data.glsl"
+#include "library/culled_data.glsl"
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
@@ -16,6 +17,7 @@ layout(buffer_reference, std430) buffer MatCounters {
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
     MatCounters mat_counters;
+    DrawIDs draw_ids;
 };
 
 void main() {
@@ -23,11 +25,7 @@ void main() {
     if (gid.x >= screen.x || gid.y >= screen.y) return;
 
     uvec4 vis = imageLoad(visbuffer, ivec2(gid));
-    if (vis.x == 0 && vis.y == 0) return;
+    if (vis.x == 0) return;
 
-    VertexData verts = VertexData(vis.xy);
-    MeshData mesh_data = read_mesh_data(verts, 0);
-
-    mesh_data.material_id;
-    atomicAdd(mat_counters.counter[mesh_data.material_id], 1);
+    atomicAdd(mat_counters.counter[draw_ids.id[vis.x - 1].material_id], 1);
 }
