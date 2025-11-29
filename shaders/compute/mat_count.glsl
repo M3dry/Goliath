@@ -27,5 +27,5 @@ void main() {
     uvec4 vis = imageLoad(visbuffer, ivec2(gid));
     if (vis.x == 0) return;
 
-    atomicAdd(mat_counters.counter[draw_ids.id[vis.x - 1].material_id], 1);
+    atomicAdd(mat_counters.counter[read_draw_id(draw_ids, vis.x - 1).material_id], 1);
 }

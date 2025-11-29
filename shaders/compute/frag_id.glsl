@@ -33,7 +33,7 @@ void main() {
     uvec4 vis = imageLoad(visbuffer, ivec2(gid));
     if (vis.x == 0) return;
 
-    uint mat_id = draw_ids.id[vis.x - 1].material_id;
+    uint mat_id = read_draw_id(draw_ids, vis.x - 1).material_id;
     if (mat_id > max_material_id) return;
 
     uint write_index = atomicAdd(mat_offsets.offset[mat_id], 1);

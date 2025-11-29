@@ -173,7 +173,7 @@ void main() {
     uvec4 vis = imageLoad(visbuffer, ivec2(frag));
     if (vis.x == 0) return;
 
-    DrawID draw_id = draw_ids.id[vis.x - 1];
+    DrawID draw_id = read_draw_id(draw_ids, vis.x - 1);
     VertexData verts = draw_id.group;
     MeshData mesh_data = read_mesh_data(verts, draw_id.start_offset/4);
     uint primitive_id = vis.z;
@@ -181,7 +181,7 @@ void main() {
     vec3 bary = vec3(unpackHalf2x16(bary_ui), 0.0);
     bary.z = 1.0 - bary.x - bary.y;
 
-    mat4 model_transform = draw_id.model_transform * mesh_data.transform;
+    mat4 model_transform = read_draw_id_transform(draw_id) * mesh_data.transform;
     mat3 normal_matrix = transpose(inverse(mat3(model_transform)));
 
     PBR pbr = load_material(verts, mesh_data.offsets);

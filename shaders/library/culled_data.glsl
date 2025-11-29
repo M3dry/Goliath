@@ -2,6 +2,7 @@
 #define _CULLED_DATA_
 
 #extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 struct CulledDrawCmd {
     uint vertex_count;
@@ -39,13 +40,55 @@ struct DrawID {
     VertexData group;
     uint start_offset;
     uint material_id;
-    mat4 model_transform;
+    uvec2 transform_ptr;
+    uint transform_offset;
 };
 
 layout(buffer_reference, std430) buffer DrawIDs {
     uint current_size;
-    DrawID id[];
+    uint data[];
 };
+
+DrawID read_draw_id(DrawIDs draw_ids, uint ix) {
+    uint start = ix * 7;
+    DrawID id;
+
+    id.group = VertexData(uvec2(draw_ids.data[start], draw_ids.data[start + 1]));
+    id.start_offset = draw_ids.data[start + 2];
+    id.material_id = draw_ids.data[start + 3];
+    id.transform_ptr.x = draw_ids.data[start + 4];
+    id.transform_ptr.y = draw_ids.data[start + 5];
+    id.transform_offset = draw_ids.data[start + 6];
+
+    return id;
+}
+
+layout(buffer_reference, std430) readonly buffer _Transform {
+    uint data[];
+};
+
+mat4 read_draw_id_transform(DrawID id) {
+    mat4 m;
+    _Transform data = _Transform(id.transform_ptr);
+
+    for (uint i = 0; i < 16; i++) {
+        m[i/4][i%4] = uintBitsToFloat(data.data[id.transform_offset/4 + i]);
+    }
+
+    return m;
+}
+
+void write_draw_id(DrawIDs draw_ids, uint ix, DrawID id) {
+    uint start = ix * 7;
+
+    draw_ids.data[start] = uvec2(id.group).x;
+    draw_ids.data[start + 1] = uvec2(id.group).y;
+    draw_ids.data[start + 2] = id.start_offset;
+    draw_ids.data[start + 3] = id.material_id;
+    draw_ids.data[start + 4] = id.transform_ptr.x;
+    draw_ids.data[start + 5] = id.transform_ptr.y;
+    draw_ids.data[start + 6] = id.transform_offset;
+}
 
 struct CullTaskData {
     uvec2 verts;
