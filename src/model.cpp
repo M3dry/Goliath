@@ -1,5 +1,4 @@
 #include "goliath/model.hpp"
-#include "MikkTSpace/mikktspace.h"
 #include "goliath/buffer.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/material.hpp"
@@ -691,7 +690,7 @@ namespace engine::model {
 
             if (mesh.material_id == 0 && mesh.material_data_size == material::pbr::schema.total_size) {
                 for (const auto& off : material::pbr::schema.texture_gid_offsets) {
-                    std::memcpy(texture_gids + texture_count, (uint8_t*)(mesh.material_data) + off, sizeof(uint32_t));
+                    std::memcpy(&texture_gids[texture_count], (uint8_t*)(mesh.material_data) + off, sizeof(uint32_t));
                     texture_count++;
                 }
             }

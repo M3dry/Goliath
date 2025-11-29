@@ -4,12 +4,36 @@
 #extension GL_EXT_buffer_reference : require
 
 struct CulledDrawCmd {
-    uint data[5];
+    uint vertex_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
 };
 
 layout(buffer_reference, std430) readonly buffer CulledDrawCmds {
-    CulledDrawCmd cmd[];
+    uint data[];
 };
+
+CulledDrawCmd read_culled_draw_cmd(CulledDrawCmds cmds, uint ix) {
+    uint start = ix * 4;
+    CulledDrawCmd cmd;
+
+    cmd.vertex_count = cmds.data[start];
+    cmd.instance_count = cmds.data[start + 1];
+    cmd.first_vertex = cmds.data[start + 2];
+    cmd.first_vertex = cmds.data[start + 3];
+
+    return cmd;
+}
+
+void write_culled_draw_cmd(CulledDrawCmds cmds, uint ix, CulledDrawCmd cmd) {
+    uint start = ix * 4;
+
+    cmds.data[start] = cmd.vertex_count;
+    cmds.data[start + 1] = cmd.instance_count;
+    cmds.data[start + 2] = cmd.first_vertex;
+    cmds.data[start + 3] = cmd.first_vertex;
+}
 
 struct DrawID {
     VertexData group;
@@ -22,5 +46,72 @@ layout(buffer_reference, std430) buffer DrawIDs {
     uint current_size;
     DrawID id[];
 };
+
+struct CullTaskData {
+    uvec2 verts;
+    uvec2 transforms;
+    uint verts_start_offset;
+};
+
+layout(buffer_reference, std430) buffer CullTaskDatas {
+    uint data_count;
+    uint data[];
+};
+
+CullTaskData read_cull_task_data(CullTaskDatas data, uint ix) {
+    uint start = ix * 5;
+    CullTaskData task_data;
+
+    task_data.verts.x = data.data[start];
+    task_data.verts.y = data.data[start + 1];
+    task_data.transforms.x = data.data[start + 2];
+    task_data.transforms.y = data.data[start + 3];
+    task_data.verts_start_offset = data.data[start + 4];
+
+    return task_data;
+}
+
+void write_cull_task_data(CullTaskDatas data, uint ix, CullTaskData task_data) {
+    uint start = ix * 5;
+
+    data.data[start] = task_data.verts.x;
+    data.data[start + 1] = task_data.verts.y;
+    data.data[start + 2] = task_data.transforms.x;
+    data.data[start + 3] = task_data.transforms.y;
+    data.data[start + 4] = task_data.verts_start_offset;
+}
+
+struct CullTask {
+    uint data_id;
+    uint transform_offset;
+    uint vertex_count;
+    uint first_vertex;
+};
+
+layout(buffer_reference, std430) buffer CullTasks {
+    uint task_count;
+    uint data[];
+};
+
+CullTask read_cull_task(CullTasks tasks, uint ix) {
+    uint start = ix * 4;
+    CullTask task;
+
+    task.data_id = tasks.data[start];
+    task.transform_offset = tasks.data[start + 1];
+    task.vertex_count = tasks.data[start + 2];
+    task.first_vertex = tasks.data[start + 3];
+
+    return task;
+}
+
+void write_cull_task(CullTasks tasks, uint ix, CullTask task) {
+    uint start = ix * 4;
+
+    tasks.data[start] = task.data_id;
+    tasks.data[start + 1] = task.transform_offset;
+    tasks.data[start + 2] = task.vertex_count;
+    tasks.data[start + 3] = task.first_vertex;
+}
 
 #endif

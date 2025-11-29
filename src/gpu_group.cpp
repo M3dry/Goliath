@@ -59,7 +59,7 @@ namespace engine::gpu_group {
         uint8_t* start_of_data = data;
         uint32_t* texture_gids = group.acquired_texture_gids;
         for (const auto& upload_func : upload_ptrs) {
-            auto res = upload_func(data, group.acquired_texture_gids);
+            auto res = upload_func(data, texture_gids);
             data = res.first;
             texture_gids = res.second;
         }

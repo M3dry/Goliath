@@ -87,8 +87,10 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 
 using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
-using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
-using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, glm::mat4>;
+using VisbufferRasterPC = engine::PushConstant<uint64_t, engine::util::padding64, glm::mat4>;
+using FlattenDrawPC =
+    engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, uint32_t>;
+using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint32_t>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
 
@@ -354,21 +356,13 @@ int main(int argc, char** argv) {
     auto mesh_fragment_module = engine::create_shader({mesh_fragment_spv_data, mesh_fragment_spv_size});
     free(mesh_fragment_spv_data);
 
-    uint32_t scene_vertex_spv_size;
-    auto scene_vertex_spv_data = engine::util::read_file("scene_vertex.spv", &scene_vertex_spv_size);
-    auto scene_vertex_module = engine::create_shader({scene_vertex_spv_data, scene_vertex_spv_size});
-    free(scene_vertex_spv_data);
+    uint32_t flatten_draw_spv_size;
+    auto flatten_draw_spv_data = engine::util::read_file("flatten_draw.spv", &flatten_draw_spv_size);
+    auto flatten_draw_module = engine::create_shader({flatten_draw_spv_data, flatten_draw_spv_size});
+    free(flatten_draw_spv_data);
 
-    auto scene_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
-                                                       .vertex(scene_vertex_module)
-                                                       .fragment(mesh_fragment_module)
-                                                       .push_constant_size(ScenePC::size)
-                                                       .add_color_attachment(engine::visbuffer::format)
-                                                       .depth_format(VK_FORMAT_D16_UNORM))
-                              .depth_test(true)
-                              .depth_write(true)
-                              .depth_compare_op(engine::CompareOp::Less)
-                              .cull_mode(engine::CullMode::NoCull);
+    auto flatten_draw_pipeline = engine::ComputePipeline(
+        engine::ComputePipelineBuilder{}.shader(flatten_draw_module).push_constant(FlattenDrawPC::size));
 
     uint32_t culling_spv_size;
     auto culling_spv_data = engine::util::read_file("culling.spv", &culling_spv_size);
@@ -470,18 +464,39 @@ int main(int argc, char** argv) {
     engine::Buffer indirect_draw_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
         indirect_draw_buffers[i] = engine::Buffer::create(
-            (sizeof(VkDrawIndirectCommand) + sizeof(uint32_t)) * max_draw_size,
+            sizeof(VkDrawIndirectCommand) * max_draw_size,
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
-    constexpr uint32_t max_instanced_dispatch_buffer_size = 4096;
-    engine::Buffer instanced_indirect_dispatch_buffers[engine::frames_in_flight];
+    constexpr uint32_t max_culling_queue_size = 8192;
+    engine::Buffer culling_data_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        instanced_indirect_dispatch_buffers[i] =
-            engine::Buffer::create(max_instanced_dispatch_buffer_size * 10,
+        culling_data_buffers[i] =
+            engine::Buffer::create(4 + max_culling_queue_size * (8 + 8 + 4),
                                    VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
                                        VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
                                    std::nullopt);
+    }
+
+    engine::Buffer culling_queue_buffers[engine::frames_in_flight];
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        culling_queue_buffers[i] =
+            engine::Buffer::create(4 + max_culling_queue_size * (4 + 4),
+                                   VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
+                                       VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
+                                   std::nullopt);
+    }
+
+    constexpr uint32_t max_transform_size = 1024;
+    uint32_t transform_buffer_sizes[2]{};
+    engine::Buffer transform_buffers[engine::frames_in_flight];
+    glm::mat4* transforms[2] = {
+        (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
+        (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
+    };
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        transform_buffers[i] =
+            engine::Buffer::create(sizeof(glm::mat4) * 1024, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
     VkBufferMemoryBarrier2 model_barrier{};
@@ -712,6 +727,7 @@ int main(int argc, char** argv) {
             ImGui::EndMainMenuBar();
 
             if (ImGui::Begin("Models")) {
+                uint32_t transforms_ix = 0;
                 std::erase_if(models, [&](auto& model) {
                     ImGui::PushID(model.gpu_group.data.address());
 
@@ -878,6 +894,34 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
+            uint32_t transforms_offset = 0;
+            for (const auto& model : models) {
+                std::memcpy(transforms[engine::get_current_frame()] + transforms_offset, model.instance_transforms.data(), model.instance_transforms.size() * sizeof(glm::mat4));
+                transforms_offset += model.instance_transforms.size();
+            }
+
+            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
+            VkBufferMemoryBarrier2 transform_barrier{};
+            transform_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            transform_barrier.pNext = nullptr;
+            transform_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            transform_barrier.dstStageMask =
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+
+            engine::transport::begin();
+            engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()], sizeof(glm::mat4), transform_buffer.data(), 0);
+            auto timeline_wait = engine::transport::end();
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(transform_barrier);
+            engine::synchronization::end_barriers();
+            transform_barrier.offset = 0;
+            transform_barrier.size = transform_buffer.size();
+            transform_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            transform_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+            while (!engine::transport::is_ready(timeline_wait)) {}
+
             VkClearColorValue clear_color{};
             clear_color.float32[0] = 0.0f;
             clear_color.float32[1] = 0.0f;
@@ -894,11 +938,92 @@ int main(int argc, char** argv) {
             vkCmdClearColorImage(engine::get_cmd_buf(), target_images[engine::get_current_frame()].image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &clear_range);
 
-            engine::visbuffer::prepare_for_draw();
+            auto& culling_data_buffer = culling_data_buffers[engine::get_current_frame()];
+            auto& culling_queue_buffer = culling_queue_buffers[engine::get_current_frame()];
+
+            VkBufferMemoryBarrier2 culling_data_barrier{};
+            culling_data_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            culling_data_barrier.pNext = nullptr;
+            culling_data_barrier.buffer = culling_data_buffer;
+            culling_data_barrier.offset = 0;
+            culling_data_barrier.size = culling_data_buffer.size();
+            culling_data_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            culling_data_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            culling_data_barrier.srcAccessMask = 0;
+            culling_data_barrier.srcStageMask = 0;
+            culling_data_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            culling_data_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            VkBufferMemoryBarrier2 culling_queue_barrier{};
+            culling_queue_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+            culling_queue_barrier.pNext = nullptr;
+            culling_queue_barrier.buffer = culling_queue_buffer;
+            culling_queue_barrier.offset = 0;
+            culling_queue_barrier.size = culling_queue_buffer.size();
+            culling_queue_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            culling_queue_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            culling_queue_barrier.srcAccessMask = 0;
+            culling_queue_barrier.srcStageMask = 0;
+            culling_queue_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            culling_queue_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            uint8_t flatten_draw_pc[FlattenDrawPC::size]{};
+            flatten_draw_pipeline.bind();
+            uint transform_ix = 0;
+            for (auto& model : models) {
+                if (!engine::transport::is_ready(model.timeline)) continue;
+
+                for (const auto& _ : model.instance_transforms) {
+                    FlattenDrawPC::write(flatten_draw_pc, model.gpu_group.data.address(),
+                                         model.indirect_draw_buffer.address(), culling_data_buffer.address(),
+                                         culling_queue_buffer.address(), transform_buffer.address(), transform_ix * sizeof(glm::mat4),
+                                         model.gpu_data.mesh_count, max_culling_queue_size);
+
+                    flatten_draw_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                        .push_constant = flatten_draw_pc,
+                        .group_count_x = (uint32_t)std::ceil(model.gpu_data.mesh_count / 64.0f),
+                        .group_count_y = 1,
+                        .group_count_z = 1,
+                    });
+
+                    transform_ix++;
+                }
+            }
+
+            for (auto& scene : scenes) {
+                if (!engine::transport::is_ready(scene.timeline)) continue;
+
+                uint8_t flatten_draw_pc[FlattenDrawPC::size];
+                FlattenDrawPC::write(flatten_draw_pc, scene.gpu_group.data.address(),
+                                     scene.gpu_data.draw_indirect.address(), culling_data_buffer.address(),
+                                     culling_queue_buffer.address(), scene.gpu_group.data.address(), 0,
+                                     scene.gpu_data.draw_count, max_culling_queue_size);
+
+                flatten_draw_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                    .push_constant = flatten_draw_pc,
+                    .group_count_x = (uint32_t)std::ceil(scene.gpu_data.draw_count / 64.0f),
+                    .group_count_y = 1,
+                    .group_count_z = 1,
+                });
+            }
+
+            culling_data_barrier.srcAccessMask = culling_data_barrier.dstAccessMask;
+            culling_data_barrier.srcStageMask = culling_data_barrier.dstStageMask;
+            culling_data_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            culling_data_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            culling_queue_barrier.srcAccessMask = culling_queue_barrier.dstAccessMask;
+            culling_queue_barrier.srcStageMask = culling_queue_barrier.dstStageMask;
+            culling_queue_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            culling_queue_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(culling_data_barrier);
+            engine::synchronization::apply_barrier(culling_queue_barrier);
+            engine::synchronization::end_barriers();
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
-            auto& instanced_indirect_dispatch_buffer = instanced_indirect_dispatch_buffers[engine::get_current_frame()];
 
             VkBufferMemoryBarrier2 draw_id_barrier{};
             draw_id_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -926,38 +1051,17 @@ int main(int argc, char** argv) {
             indirect_draw_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             indirect_draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
-            VkBufferMemoryBarrier2 instanced_indirect_dispatch_barrier{};
-            instanced_indirect_dispatch_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            instanced_indirect_dispatch_barrier.pNext = nullptr;
-            instanced_indirect_dispatch_barrier.buffer = instanced_indirect_dispatch_buffer;
-            instanced_indirect_dispatch_barrier.offset = 0;
-            instanced_indirect_dispatch_barrier.size = instanced_indirect_dispatch_buffer.size();
-            instanced_indirect_dispatch_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            instanced_indirect_dispatch_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            instanced_indirect_dispatch_barrier.srcAccessMask = 0;
-            instanced_indirect_dispatch_barrier.srcStageMask = 0;
-            instanced_indirect_dispatch_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-            instanced_indirect_dispatch_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            uint8_t culling_pc[CullingPC::size]{};
+            CullingPC::write(culling_pc, culling_data_buffer.address(), culling_queue_buffer.address(),
+                             indirect_draw_buffer.address(), draw_id_buffer.address(), max_draw_size);
 
             culling_pipeline.bind();
-            for (auto& model : models) {
-                if (!engine::transport::is_ready(model.timeline)) continue;
-
-                for (const auto& transform : model.instance_transforms) {
-                    uint8_t culling_pc[CullingPC::size]{};
-                    CullingPC::write(culling_pc, model.gpu_group.data.address(), draw_id_buffer.address(),
-                                     model.indirect_draw_buffer.address(), indirect_draw_buffer.address(),
-                                     instanced_indirect_dispatch_buffer.address(), model.gpu_data.mesh_count, max_draw_size,
-                                     transform);
-
-                    culling_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
-                        .push_constant = culling_pc,
-                        .group_count_x = (uint32_t)std::ceil(model.gpu_data.mesh_count / 32.0f),
-                        .group_count_y = 1,
-                        .group_count_z = 1,
-                    });
-                }
-            }
+            culling_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                .push_constant = culling_pc,
+                .group_count_x = (uint32_t)std::ceil(max_culling_queue_size / 32.0f),
+                .group_count_y = 1,
+                .group_count_z = 1,
+            });
 
             draw_id_barrier.srcAccessMask = draw_id_barrier.dstAccessMask;
             draw_id_barrier.srcStageMask = draw_id_barrier.dstStageMask;
@@ -970,17 +1074,12 @@ int main(int argc, char** argv) {
             indirect_draw_barrier.dstStageMask =
                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
 
-            // instanced_indirect_dispatch_barrier.srcAccessMask = instanced_indirect_dispatch_barrier.dstAccessMask;
-            // instanced_indirect_dispatch_barrier.srcStageMask = instanced_indirect_dispatch_barrier.dstStageMask;
-            // instanced_indirect_dispatch_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-            // instanced_indirect_dispatch_barrier.dstStageMask =
-            //     VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(draw_id_barrier);
             engine::synchronization::apply_barrier(indirect_draw_barrier);
-            // engine::synchronization::apply_barrier(indirect_draw_barrier);
             engine::synchronization::end_barriers();
+
+            engine::visbuffer::prepare_for_draw();
 
             engine::rendering::begin(
                 engine::RenderPass{}
@@ -993,7 +1092,7 @@ int main(int argc, char** argv) {
                                           .set_store_op(engine::StoreOp::Store)));
 
             uint8_t visbuffer_raster_pc[VisbufferRasterPC::size];
-            VisbufferRasterPC::write(visbuffer_raster_pc, indirect_draw_buffer.address(), draw_id_buffer.address(),
+            VisbufferRasterPC::write(visbuffer_raster_pc, draw_id_buffer.address(),
                                      cam.view_projection());
 
             visbuffer_raster_pipeline.bind();
@@ -1002,24 +1101,8 @@ int main(int argc, char** argv) {
                 .draw_buffer = indirect_draw_buffer.data(),
                 .count_buffer = draw_id_buffer.data(),
                 .max_draw_count = max_draw_size,
-                .stride = sizeof(VkDrawIndirectCommand) + sizeof(uint32_t),
+                .stride = sizeof(VkDrawIndirectCommand),
             });
-
-            // uint8_t scene_push_constant[ScenePC::size];
-            // scene_pipeline.bind();
-            // for (auto& scene : scenes) {
-            //     if (!engine::transport::is_ready(scene.timeline)) continue;
-            //
-            //     ScenePC::write(scene_push_constant, scene.gpu_group.data.address(),
-            //                    scene.gpu_data.draw_indirect.address(), cam.view_projection(), scene.transform);
-            //
-            //     scene_pipeline.draw_indirect(engine::GraphicsPipeline::DrawIndirectParams{
-            //         .push_constant = scene_push_constant,
-            //         .draw_buffer = scene.gpu_data.draw_indirect.data(),
-            //         .draw_count = scene.gpu_data.draw_count,
-            //         .stride = sizeof(engine::GPUScene::DrawCommand),
-            //     });
-            // }
             engine::rendering::end();
 
             engine::visbuffer::count_materials(draw_id_buffer.address());
@@ -1229,6 +1312,21 @@ int main(int argc, char** argv) {
             target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
+            transform_barrier.srcAccessMask = transform_barrier.dstAccessMask;
+            transform_barrier.srcStageMask = transform_barrier.dstStageMask;
+            transform_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            transform_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            culling_data_barrier.srcAccessMask = culling_data_barrier.dstAccessMask;
+            culling_data_barrier.srcStageMask = culling_data_barrier.dstStageMask;
+            culling_data_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            culling_data_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            culling_queue_barrier.srcAccessMask = culling_queue_barrier.dstAccessMask;
+            culling_queue_barrier.srcStageMask = culling_queue_barrier.dstStageMask;
+            culling_queue_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            culling_queue_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
             draw_id_barrier.srcAccessMask = draw_id_barrier.dstAccessMask;
             draw_id_barrier.srcStageMask = draw_id_barrier.dstStageMask;
             draw_id_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -1240,11 +1338,17 @@ int main(int argc, char** argv) {
             indirect_draw_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
             engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(transform_barrier);
+            engine::synchronization::apply_barrier(culling_data_barrier);
+            engine::synchronization::apply_barrier(culling_queue_barrier);
             engine::synchronization::apply_barrier(draw_id_barrier);
             engine::synchronization::apply_barrier(indirect_draw_barrier);
             engine::synchronization::end_barriers();
 
             engine::visbuffer::clear_buffers();
+            vkCmdFillBuffer(engine::get_cmd_buf(), transform_buffer, 0, transform_buffer.size(), 0);
+            vkCmdFillBuffer(engine::get_cmd_buf(), culling_data_buffer, 0, culling_data_buffer.size(), 0);
+            vkCmdFillBuffer(engine::get_cmd_buf(), culling_queue_buffer, 0, culling_queue_buffer.size(), 0);
             vkCmdFillBuffer(engine::get_cmd_buf(), draw_id_buffer, 0, draw_id_buffer.size(), 0);
             vkCmdFillBuffer(engine::get_cmd_buf(), indirect_draw_buffer, 0, indirect_draw_buffer.size(), 0);
 
@@ -1276,8 +1380,6 @@ int main(int argc, char** argv) {
 
             visbuffer_raster_pipeline.update_viewport_to_swapchain();
             visbuffer_raster_pipeline.update_scissor_to_viewport();
-            scene_pipeline.update_viewport_to_swapchain();
-            scene_pipeline.update_scissor_to_viewport();
 
             engine::visbuffer::resize(visbuffer_barriers, true, false);
             for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -1307,15 +1409,15 @@ int main(int argc, char** argv) {
         scene.destroy();
     }
 
+    flatten_draw_pipeline.destroy();
+    engine::destroy_shader(flatten_draw_module);
+
     culling_pipeline.destroy();
     engine::destroy_shader(culling_module);
 
     visbuffer_raster_pipeline.destroy();
     engine::destroy_shader(visbuffer_raster_fragment_module);
     engine::destroy_shader(visbuffer_raster_vertex_module);
-
-    scene_pipeline.destroy();
-    engine::destroy_shader(scene_vertex_module);
 
     engine::destroy_shader(mesh_fragment_module);
 
@@ -1337,7 +1439,10 @@ int main(int argc, char** argv) {
 
         draw_id_buffers[i].destroy();
         indirect_draw_buffers[i].destroy();
-        instanced_indirect_dispatch_buffers[i].destroy();
+        culling_data_buffers[i].destroy();
+        culling_queue_buffers[i].destroy();
+        transform_buffers[i].destroy();
+        free(transforms[i]);
     }
 
     free(target_images);

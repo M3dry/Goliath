@@ -8,7 +8,6 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 
 layout(push_constant, std430) uniform Push {
-    CulledDrawCmds draws;
     DrawIDs draw_ids;
 
     mat4 vp;
@@ -18,12 +17,8 @@ layout(location = 0) flat out uint draw_id;
 layout(location = 1) flat out uint primitive_id;
 layout(location = 2) out vec3 barycentric;
 
-uint get_draw_id() {
-    return draws.cmd[gl_DrawID].data[4];
-}
-
 void main() {
-    draw_id = get_draw_id();
+    draw_id = gl_DrawID;
     DrawID draw_val = draw_ids.id[draw_id];
     MeshData mesh_data = read_mesh_data(draw_val.group, draw_val.start_offset/4);
     Vertex vert = load_vertex(draw_val.group, mesh_data.offsets, gl_VertexIndex, false);
