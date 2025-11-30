@@ -92,7 +92,7 @@ using FlattenDrawPC =
     engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, uint32_t>;
 using CullingPC = engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint32_t>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
-using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
+using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct PBRShadingSet {
     glm::vec3 cam_pos;
@@ -1191,9 +1191,7 @@ int main(int argc, char** argv) {
             uint8_t postprocessing_push_constant[PostprocessingPC::size]{};
             PostprocessingPC::write(
                 postprocessing_push_constant,
-                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-                models.size() > 0 ? models[0].gpu_group.data.address() : -1,
-                models.size() > 0 ? models[0].gpu_group.data.address() + sizeof(engine::model::GPUMeshData) : -1);
+                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height});
 
             postprocessing_pipeline.bind();
             postprocessing_pipeline.dispatch(engine::ComputePipeline::DispatchParams{

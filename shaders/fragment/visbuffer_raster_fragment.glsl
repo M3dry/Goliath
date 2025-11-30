@@ -1,5 +1,6 @@
 #version 460
 
+#include "library/visbuffer_data.glsl"
 #include "library/vertex_data.glsl"
 #include "library/culled_data.glsl"
 
@@ -14,11 +15,9 @@ layout(push_constant, std430) uniform Push {
 
 layout(location = 0) flat in uint draw_id;
 layout(location = 1) flat in uint primitive_id;
-layout(location = 2) in vec3 barycentric;
 
-layout(location = 0) out uvec4 vis_buffer;
+layout(location = 0) out uint vis_buffer;
 
 void main() {
-    uint bary_ui = packHalf2x16(vec2(barycentric.x, barycentric.y));
-    vis_buffer = uvec4(draw_id + 1, 0, primitive_id, bary_ui);
+    vis_buffer = write_vis_fragment(VisFragment(draw_id + 1, primitive_id));
 }

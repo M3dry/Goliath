@@ -1,5 +1,6 @@
 #version 460
 
+#include "library/visbuffer_data.glsl"
 #include "library/mesh_data.glsl"
 #include "library/culled_data.glsl"
 
@@ -24,16 +25,16 @@ layout(push_constant, std430) uniform Push {
     uint max_material_id;
 };
 
-layout(set = 0, binding = 0, rgba32ui) readonly uniform uimage2D visbuffer;
+layout(set = 0, binding = 0, r32ui) readonly uniform uimage2D visbuffer;
 
 void main() {
     uvec2 gid = gl_GlobalInvocationID.xy;
     if (gid.x >= screen.x || gid.y >= screen.y) return;
 
-    uvec4 vis = imageLoad(visbuffer, ivec2(gid));
-    if (vis.x == 0) return;
+    VisFragment vis = read_vis_fragment(imageLoad(visbuffer, ivec2(gid)).x);
+    if (vis.draw_id == 0) return;
 
-    uint mat_id = read_draw_id(draw_ids, vis.x - 1).material_id;
+    uint mat_id = read_draw_id(draw_ids, vis.draw_id - 1).material_id;
     if (mat_id > max_material_id) return;
 
     uint write_index = atomicAdd(mat_offsets.offset[mat_id], 1);

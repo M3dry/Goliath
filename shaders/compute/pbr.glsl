@@ -1,5 +1,6 @@
 #version 460
 
+#include "library/visbuffer_data.glsl"
 #include "library/mesh_data.glsl"
 #include "library/culled_data.glsl"
 #include "library/shading_data.glsl"
@@ -27,7 +28,7 @@ layout(push_constant, std430) uniform Push {
 };
 
 layout(set = 0, binding = 0, rgba32f) uniform image2D target;
-layout(set = 0, binding = 1, rgba32ui) readonly uniform uimage2D visbuffer;
+layout(set = 0, binding = 1, r32ui) readonly uniform uimage2D visbuffer;
 layout(set = 1, binding = 0) uniform ShadingData {
     vec3 cam_pos;
     vec3 light_pos;
@@ -182,13 +183,13 @@ void main() {
     uvec2 frag = uvec2(frag_id / screen.x, frag_id % screen.x);
     if (frag.x >= screen.x || frag.y >= screen.y)  return;
 
-    uvec4 vis = imageLoad(visbuffer, ivec2(frag));
-    if (vis.x == 0) return;
+    VisFragment vis = read_vis_fragment(imageLoad(visbuffer, ivec2(frag)).x);
+    if (vis.draw_id == 0) return;
 
-    DrawID draw_id = read_draw_id(draw_ids, vis.x - 1);
+    DrawID draw_id = read_draw_id(draw_ids, vis.draw_id - 1);
     VertexData verts = draw_id.group;
     MeshData mesh_data = read_mesh_data(verts, draw_id.start_offset/4);
-    uint primitive_id = vis.z;
+    uint primitive_id = vis.primitive_id;
 
     mat4 model_transform = read_draw_id_transform(draw_id) * mesh_data.transform;
     mat3 normal_transform = mat3(model_transform); // assumes model_transform is uniform
@@ -204,13 +205,13 @@ void main() {
 
     vec3 world_pos = (view_proj_matrix * vec4(interpolated.pos.value, 1.0)).xyz;
 
-    vec3 albedo = (pbr.albedo * texture(textures[pbr.albedo_map], interpolated.texcoord0.value)).rgb;
-    float metallic = pbr.metallic_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value).b;
-    float roughness = pbr.roughness_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value).g;
-    vec3 normal_map_value = pbr.normal_factor * texture(textures[pbr.normal_map], interpolated.texcoord0.value).rgb;
+    vec3 albedo = (pbr.albedo * textureGrad(textures[pbr.albedo_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy)).rgb;
+    float metallic = pbr.metallic_factor * textureGrad(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).b;
+    float roughness = pbr.roughness_factor * textureGrad(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).g;
+    vec3 normal_map_value = pbr.normal_factor * textureGrad(textures[pbr.normal_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
     normal_map_value = normal_map_value * 2.0 - 1.0;
-    float occlusion = pbr.occlusion_factor * texture(textures[pbr.occlusion_map], interpolated.texcoord0.value).r;
-    vec3 emissive = pbr.emissive_factor * texture(textures[pbr.emissive_map], interpolated.texcoord0.value).rgb;
+    float occlusion = pbr.occlusion_factor * textureGrad(textures[pbr.occlusion_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).r;
+    vec3 emissive = pbr.emissive_factor * textureGrad(textures[pbr.emissive_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
 
     mat3 TBN = reconstruct_TBN(interpolated.normal.value, interpolated.pos, interpolated.texcoord0);
     vec3 normal = normalize(TBN * normal_map_value);

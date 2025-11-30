@@ -6,7 +6,7 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::visbuffer {
-    static constexpr VkFormat format = VK_FORMAT_R32G32B32A32_UINT;
+    static constexpr VkFormat format = VK_FORMAT_R32_UINT;
     extern VkDescriptorSetLayout shading_set_layout;
 
     extern Buffer stages;
