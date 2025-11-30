@@ -2,6 +2,7 @@
 
 #include "library/mesh_data.glsl"
 #include "library/culled_data.glsl"
+#include "library/shading_data.glsl"
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
@@ -37,20 +38,31 @@ layout(set = 2, binding = 0) uniform sampler2D textures[];
 
 const float PI = 3.14159265359;
 
-vec3 get_normal(float normal_factor, uint normal_tex, vec2 normal_uv, vec3 normal, vec3 tangent, float tangent_w) {
-    return normal;
-    // vec3 N = normalize(normal);
-    // vec3 T = normalize(tangent - N * dot(N, tangent));
-    // vec3 B = cross(N, T) * tangent_w;
-    //
-    // mat3 TBN = mat3(T, B, N);
-    //
-    // vec3 n_ts = texture(textures[normal_tex], normal_uv).xyz * 2.0 - 1.0;
-    // n_ts.xy *= normal_factor;
-    //
-    // n_ts.z = sqrt(max(1.0 - dot(n_ts.xy, n_ts.xy), 0.0));
-    //
-    // return normalize(TBN * n_ts);
+mat3 reconstruct_TBN(vec3 N, Interpolated3 pos, Interpolated2 uv) {
+    
+    // 1. Get the gradients
+    vec3 dp1 = pos.ddx;
+    vec3 dp2 = pos.ddy;
+    vec2 duv1 = uv.ddx;
+    vec2 duv2 = uv.ddy;
+
+    // 2. Solve the linear system
+    // The determinant of the UV matrix
+    // (This is effectively the signed area of the UV triangle in screen space)
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    
+    // We construct T and B simultaneously to handle non-orthogonality
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    // 3. Construct the inverse determinant
+    // If the determinant is zero (degenerate UVs), this handles it gracefully-ish
+    float invmax = inversesqrt(max(dot(T,T), dot(B,B)));
+    
+    // 4. Normalize and Gram-Schmidt Orthogonalize
+    // This ensures T is perpendicular to N, even if the mesh is warped
+    return mat3(T * invmax, B * invmax, N);
 }
 
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
@@ -177,12 +189,9 @@ void main() {
     VertexData verts = draw_id.group;
     MeshData mesh_data = read_mesh_data(verts, draw_id.start_offset/4);
     uint primitive_id = vis.z;
-    uint bary_ui = vis.w;
-    vec3 bary = vec3(unpackHalf2x16(bary_ui), 0.0);
-    bary.z = 1.0 - bary.x - bary.y;
 
     mat4 model_transform = read_draw_id_transform(draw_id) * mesh_data.transform;
-    mat3 normal_matrix = transpose(inverse(mat3(model_transform)));
+    mat3 normal_transform = mat3(model_transform); // assumes model_transform is uniform
 
     PBR pbr = load_material(verts, mesh_data.offsets);
 
@@ -190,18 +199,21 @@ void main() {
     Vertex v2 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 1, false);
     Vertex v3 = load_vertex(verts, mesh_data.offsets, primitive_id * 3 + 2, false);
 
-    Vertex interpolated = interpolate_vertex(v1, v2, v3, bary);
-    interpolated.normal = normalize(normal_matrix * interpolated.normal);
-    interpolated.tangent.xyz = mat3(model_transform) * interpolated.tangent.xyz;
-    float tangent_w = v1.tangent.w;
-    vec3 world_pos = (model_transform * vec4(interpolated.pos, 1.0)).xyz;
+    InterpolatedVertex interpolated = interpolate_vertex(screen, frag, model_transform, view_proj_matrix, v1, v2, v3);
+    interpolated.normal.value = normalize(normal_transform * interpolated.normal.value);
 
-    vec3 albedo = (pbr.albedo * texture(textures[pbr.albedo_map], interpolated.texcoord0)).rgb;
-    float metallic = pbr.metallic_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0).b;
-    float roughness = pbr.roughness_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0).g;
-    vec3 normal = get_normal(pbr.normal_factor, pbr.normal_map, interpolated.texcoord0, interpolated.normal, interpolated.tangent.xyz, tangent_w);
-    float occlusion = pbr.occlusion_factor * texture(textures[pbr.occlusion_map], interpolated.texcoord0).r;
-    vec3 emissive = pbr.emissive_factor * texture(textures[pbr.emissive_map], interpolated.texcoord0).rgb;
+    vec3 world_pos = (view_proj_matrix * vec4(interpolated.pos.value, 1.0)).xyz;
+
+    vec3 albedo = (pbr.albedo * texture(textures[pbr.albedo_map], interpolated.texcoord0.value)).rgb;
+    float metallic = pbr.metallic_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value).b;
+    float roughness = pbr.roughness_factor * texture(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value).g;
+    vec3 normal_map_value = pbr.normal_factor * texture(textures[pbr.normal_map], interpolated.texcoord0.value).rgb;
+    normal_map_value = normal_map_value * 2.0 - 1.0;
+    float occlusion = pbr.occlusion_factor * texture(textures[pbr.occlusion_map], interpolated.texcoord0.value).r;
+    vec3 emissive = pbr.emissive_factor * texture(textures[pbr.emissive_map], interpolated.texcoord0.value).rgb;
+
+    mat3 TBN = reconstruct_TBN(interpolated.normal.value, interpolated.pos, interpolated.texcoord0);
+    vec3 normal = normalize(TBN * normal_map_value);
 
     vec3 view = normalize(cam_pos - world_pos);
     vec3 F0 = vec3(0.04);

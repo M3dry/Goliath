@@ -120,18 +120,4 @@ Vertex load_vertex(const VertexData verts, const Offsets offs, const uint index,
     return vert;
 }
 
-Vertex interpolate_vertex(const Vertex v1, const Vertex v2, const Vertex v3, const vec3 barycentric) {
-    Vertex ret;
-
-    ret.pos = barycentric.x*v1.pos + barycentric.y*v2.pos + barycentric.z*v3.pos;
-    ret.normal = barycentric.x*v1.normal + barycentric.y*v2.normal + barycentric.z*v3.normal;
-    ret.tangent = barycentric.x*v1.tangent + barycentric.y*v2.tangent + barycentric.z*v3.tangent;
-    ret.texcoord0 = barycentric.x*v1.texcoord0 + barycentric.y*v2.texcoord0 + barycentric.z*v3.texcoord0;
-    ret.texcoord1 = barycentric.x*v1.texcoord1 + barycentric.y*v2.texcoord1 + barycentric.z*v3.texcoord1;
-    ret.texcoord2 = barycentric.x*v2.texcoord2 + barycentric.y*v2.texcoord2 + barycentric.z*v3.texcoord2;
-    ret.texcoord3 = barycentric.x*v3.texcoord3 + barycentric.y*v3.texcoord3 + barycentric.z*v3.texcoord3;
-
-    return ret;
-}
-
 #endif

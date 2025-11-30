@@ -117,6 +117,14 @@ struct Model {
         glm::vec3 translate{0.0f};
         glm::vec3 rotate{0.0f};
         glm::vec3 scale{1.0f};
+
+        void update_transform(glm::mat4* transform) const {
+            *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
+                        glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
+                                                rotate.y, glm::vec3{1, 0, 0}),
+                                    rotate.z, glm::vec3{0, 0, 1}) *
+                        glm::scale(glm::identity<glm::mat4>(), scale);
+        }
     };
     uint64_t last_instance_id = 0;
 
@@ -131,7 +139,6 @@ struct Model {
     engine::GPUGroup gpu_group;
 
     std::vector<Instance> instances{};
-    std::vector<glm::mat4> instance_transforms{};
 
     engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size,
                             VkBufferMemoryBarrier2* barrier) {
@@ -263,9 +270,11 @@ uint8_t* serialize_scene(const Model* models, uint32_t models_size, uint32_t* ou
         std::memcpy(out + offset, &instance_count, sizeof(uint32_t));
         offset += sizeof(uint32_t);
 
-        std::memcpy(out + offset, model.instance_transforms.data(),
-                    model.instance_transforms.size() * sizeof(glm::mat4));
-        offset += model.instance_transforms.size() * sizeof(glm::mat4);
+        for (const auto& instance : model.instances) {
+            glm::mat4 transform{};
+            instance.update_transform((glm::mat4*)(out + offset));
+            offset += sizeof(glm::mat4);
+        }
 
         if (model.embed_optimized) {
             std::memset(out + offset, 0, sizeof(uint8_t));
@@ -763,14 +772,12 @@ int main(int argc, char** argv) {
                             model.instances.back().name = std::format("Instance #{}", model.last_instance_id++);
                         }
 
-                        model.instance_transforms.clear();
-                        model.instance_transforms.resize(model.instances.size());
                         std::size_t i = 0;
                         std::size_t instance_counter = 0;
                         std::erase_if(model.instances, [&](auto& instance) {
                             ImGui::PushID(i);
                             auto remove =
-                                imgui_model_instance(model.instances[i], model.instance_transforms[instance_counter]);
+                                imgui_model_instance(model.instances[i], *(glm::mat4*)(transforms[engine::get_current_frame()] + instance_counter));
                             ImGui::PopID();
 
                             if (!remove) instance_counter++;
@@ -894,12 +901,6 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
-            uint32_t transforms_offset = 0;
-            for (const auto& model : models) {
-                std::memcpy(transforms[engine::get_current_frame()] + transforms_offset, model.instance_transforms.data(), model.instance_transforms.size() * sizeof(glm::mat4));
-                transforms_offset += model.instance_transforms.size();
-            }
-
             auto& transform_buffer = transform_buffers[engine::get_current_frame()];
             VkBufferMemoryBarrier2 transform_barrier{};
             transform_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -973,7 +974,7 @@ int main(int argc, char** argv) {
             for (auto& model : models) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
 
-                for (const auto& _ : model.instance_transforms) {
+                for (const auto& _ : model.instances) {
                     FlattenDrawPC::write(flatten_draw_pc, model.gpu_group.data.address(),
                                          model.indirect_draw_buffer.address(), culling_data_buffer.address(),
                                          culling_queue_buffer.address(), transform_buffer.address(), transform_ix * sizeof(glm::mat4),
@@ -1137,7 +1138,7 @@ int main(int argc, char** argv) {
             for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                 uint8_t pbr_pc[PBRPC::size]{};
                 PBRPC::write(pbr_pc,
-                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.width},
+                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
                              engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
                              engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
                              draw_id_buffer.address(), mat_id);
