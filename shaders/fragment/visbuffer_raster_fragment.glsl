@@ -15,6 +15,9 @@ layout(push_constant, std430) uniform Push {
 
 layout(location = 0) flat in uint draw_id;
 layout(location = 1) flat in uint primitive_id;
+layout(location = 2) flat in uvec2 transform_ptr;
+layout(location = 3) flat in uint transform_offset;
+layout(location = 4) flat in mat4 transform;
 
 layout(location = 0) out uint vis_buffer;
 

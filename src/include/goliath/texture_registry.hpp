@@ -11,7 +11,7 @@ namespace engine::texture_registry {
     void destroy();
 
     void load(uint8_t* file_data, uint32_t file_size);
-    void save(const std::filesystem::path& save_file);
+    uint8_t* save(uint32_t* size);
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler);
     uint32_t add(uint8_t* data, uint32_t data_size, uint32_t width, uint32_t height, VkFormat format, std::string name, const Sampler& sampler);

@@ -9,6 +9,7 @@ struct CulledDrawCmd {
     uint instance_count;
     uint first_vertex;
     uint first_instance;
+    uint draw_id;
 };
 
 layout(buffer_reference, std430) readonly buffer CulledDrawCmds {
@@ -16,24 +17,26 @@ layout(buffer_reference, std430) readonly buffer CulledDrawCmds {
 };
 
 CulledDrawCmd read_culled_draw_cmd(CulledDrawCmds cmds, uint ix) {
-    uint start = ix * 4;
+    uint start = ix * 5;
     CulledDrawCmd cmd;
 
     cmd.vertex_count = cmds.data[start];
     cmd.instance_count = cmds.data[start + 1];
     cmd.first_vertex = cmds.data[start + 2];
     cmd.first_vertex = cmds.data[start + 3];
+    cmd.draw_id = cmds.data[start + 4];
 
     return cmd;
 }
 
 void write_culled_draw_cmd(CulledDrawCmds cmds, uint ix, CulledDrawCmd cmd) {
-    uint start = ix * 4;
+    uint start = ix * 5;
 
     cmds.data[start] = cmd.vertex_count;
     cmds.data[start + 1] = cmd.instance_count;
     cmds.data[start + 2] = cmd.first_vertex;
     cmds.data[start + 3] = cmd.first_vertex;
+    cmds.data[start + 4] = cmd.draw_id;
 }
 
 struct DrawID {

@@ -31,5 +31,5 @@ void main() {
     uint mat_id = read_mesh_data(verts, task_data.verts_start_offset / 4).material_id;
     write_draw_id(draw_ids, slot, DrawID(verts, task_data.verts_start_offset, mat_id, task_data.transforms, task.transform_offset));
 
-    write_culled_draw_cmd(indirect_draws, slot, CulledDrawCmd(task.vertex_count, 1, task.first_vertex, 0));
+    write_culled_draw_cmd(indirect_draws, slot, CulledDrawCmd(task.vertex_count, 1, task.first_vertex, 0, slot));
 }

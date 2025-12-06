@@ -1,5 +1,6 @@
 #include "goliath/model.hpp"
 #include "goliath/buffer.hpp"
+#include "goliath/collisions.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/material.hpp"
 #include "goliath/rendering.hpp"
@@ -117,7 +118,7 @@ uint32_t parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Hand
 
     const auto& image = model.images[texture.source];
 
-    bool resize = false;
+bool resize = false;
     VkFormat format;
     if (srgb) {
         format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -455,63 +456,152 @@ engine::Model::Err parse_model(engine::Model* out, const tinygltf::Model& model)
 namespace engine {
     tinygltf::TinyGLTF loader{};
 
-    std::size_t Mesh::load_optimized(Mesh* out, uint8_t* data) {
-        std::size_t offset = 0;
+    uint32_t Mesh::get_optimized_size() const {
+        uint32_t total_size = sizeof(material_id) + sizeof(uint32_t) + material_data_size + sizeof(engine::Topology) +
+                              sizeof(uint32_t) + sizeof(uint32_t) + sizeof(bool) + sizeof(collisions::AABB)
+                              + (2 + texcoords.size())*sizeof(bool);
 
-        std::memcpy(&out->material_id, data, sizeof(material_id));
-        offset += sizeof(material_id);
-
-        std::memcpy(&out->material_data_size, data + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        out->material_data = malloc(out->material_data_size);
-        std::memcpy(out->material_data, data + offset, out->material_data_size);
-        offset += out->material_data_size;
-
-        std::memcpy(&out->vertex_topology, data + offset, sizeof(engine::Topology));
-        offset += sizeof(engine::Topology);
-
-        std::memcpy(&out->index_count, data + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        std::memcpy(&out->vertex_count, data + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        std::memcpy(&out->indexed_tangents, data + offset, sizeof(bool));
-        offset += sizeof(bool);
-
-        if (out->index_count != (uint32_t)-1) {
-            out->indices = (uint32_t*)malloc(sizeof(uint32_t) * out->index_count);
-            std::memcpy(out->indices, data + offset, sizeof(uint32_t) * out->index_count);
-            offset += sizeof(uint32_t) * out->index_count;
+        if (indices != nullptr) total_size += index_count*sizeof(uint32_t);
+        if (positions != nullptr) total_size += vertex_count*sizeof(glm::vec3);
+        if (normals != nullptr) total_size += vertex_count*sizeof(glm::vec3);
+        if (tangents != nullptr) total_size += (indexed_tangents ? index_count : vertex_count)*sizeof(glm::vec4);
+        for (std::size_t i = 0; i < texcoords.size(); i++) {
+            if (texcoords[i] != nullptr) total_size += vertex_count*sizeof(glm::vec2);
         }
 
-        out->positions = (glm::vec3*)malloc(sizeof(glm::vec3) * out->vertex_count);
-        std::memcpy(out->positions, data + offset, sizeof(glm::vec3) * out->vertex_count);
-        offset += sizeof(glm::vec3) * out->vertex_count;
+        return total_size;
+    }
 
-        out->normals = (glm::vec3*)malloc(sizeof(glm::vec3) * out->vertex_count);
-        std::memcpy(out->normals, data + offset, sizeof(glm::vec3) * out->vertex_count);
-        offset += sizeof(glm::vec3) * out->vertex_count;
+    void Mesh::save_optimized(uint8_t* data) const {
+        uint32_t off = 0;
 
-        uint32_t tangent_size = 0;
-        if (out->indexed_tangents) tangent_size = sizeof(glm::vec4) * out->vertex_count;
-        else tangent_size = sizeof(glm::vec4) * out->index_count;
+        std::memcpy(data + off, &material_id, sizeof(material_id));
+        off += sizeof(material_id);
 
-        out->tangents = (glm::vec4*)malloc(tangent_size);
-        std::memcpy(out->tangents, data + offset, tangent_size);
-        offset += tangent_size;
+        std::memcpy(data + off, &material_data_size, sizeof(uint32_t));
+        off += sizeof(uint32_t);
 
-        for (std::size_t i = 0; i < out->texcoords.size(); i++) {
-            out->texcoords[i] = (glm::vec2*)malloc(sizeof(glm::vec2) * out->vertex_count);
-            std::memcpy(out->texcoords[i], data + offset, sizeof(glm::vec2) * out->vertex_count);
-            offset += sizeof(glm::vec2) * out->vertex_count;
+        std::memcpy(data + off, &material_data, material_data_size);
+        off += material_data_size;
+
+        std::memcpy(data + off, &vertex_topology, sizeof(Topology));
+        off += sizeof(Topology);
+
+        std::memcpy(data + off, &index_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(data + off, &vertex_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(data + off, &indexed_tangents, sizeof(bool));
+        off += sizeof(bool);
+
+        std::memcpy(data + off, &bounding_box, sizeof(collisions::AABB));
+        off += sizeof(collisions::AABB);
+
+        std::memcpy(data + off, indices, index_count*sizeof(uint32_t));
+        off += index_count*sizeof(uint32_t);
+
+        std::memcpy(data + off, positions, vertex_count*sizeof(glm::vec3));
+        off += vertex_count*sizeof(glm::vec3);
+
+        std::memset(data + off, normals != nullptr, sizeof(bool));
+        off += sizeof(bool);
+
+        std::memset(data + off, tangents != nullptr, sizeof(bool));
+        off += sizeof(bool);
+
+        for (const auto& texcoord : texcoords) {
+            std::memset(data + off, texcoord != nullptr, sizeof(bool));
+            off += sizeof(bool);
         }
 
-        std::memcpy(&out->bounding_box, data + offset, sizeof(collisions::AABB));
-        offset += sizeof(collisions::AABB);
+        if (normals != nullptr) {
+            std::memcpy(data + off, normals, vertex_count*sizeof(glm::vec3));
+            off += vertex_count*sizeof(glm::vec3);
+        }
 
-        return offset;
+        if (tangents != nullptr) {
+            auto size = (indexed_tangents ? index_count : vertex_count)*sizeof(glm::vec4);
+            std::memcpy(data + off, tangents, size);
+            off += size;
+        }
+
+        for (const auto& texcoord : texcoords) {
+            if (texcoord != nullptr) {
+                std::memcpy(data + off, texcoord, vertex_count*sizeof(glm::vec2));
+                off += vertex_count*sizeof(glm::vec2);
+            }
+        }
+    }
+
+    void Mesh::load_optimized(Mesh* out, uint8_t* data) {
+        uint32_t off = 0;
+
+        std::memcpy(&out->material_id, data + off, sizeof(material_id));
+        off += sizeof(material_id);
+
+        std::memcpy(&out->material_data_size, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(&out->material_data, data + off, out->material_data_size);
+        off += out->material_data_size;
+
+        std::memcpy(&out->vertex_topology, data + off, sizeof(Topology));
+        off += sizeof(Topology);
+
+        std::memcpy(&out->index_count, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(&out->vertex_count, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(&out->indexed_tangents, data + off, sizeof(bool));
+        off += sizeof(bool);
+
+        std::memcpy(&out->bounding_box, data + off, sizeof(collisions::AABB));
+        off += sizeof(collisions::AABB);
+
+        std::memcpy(out->indices, data + off, out->index_count*sizeof(uint32_t));
+        off += out->index_count*sizeof(uint32_t);
+
+        std::memcpy(out->positions, data + off, out->vertex_count*sizeof(glm::vec3));
+        off += out->vertex_count*sizeof(glm::vec3);
+
+        bool has_normals;
+        std::memcpy(&has_normals, data + off, sizeof(bool));
+        off += sizeof(bool);
+
+        bool has_tangents;
+        std::memcpy(&has_tangents, data + off, sizeof(bool));
+        off += sizeof(bool);
+
+        std::array<bool, 4> has_texcoord{};
+        for (auto& has_texcoord : has_texcoord) {
+            std::memcpy(&has_texcoord, data + off, sizeof(bool));
+            off += sizeof(bool);
+        }
+
+        if (has_normals) {
+            out->normals = (glm::vec3*)malloc(out->vertex_count*sizeof(glm::vec3));
+            std::memcpy(out->normals, data + off, out->vertex_count*sizeof(glm::vec3));
+            off += out->vertex_count*sizeof(glm::vec3);
+        }
+
+        if (has_tangents) {
+            auto size = (out->indexed_tangents ? out->index_count : out->vertex_count)*sizeof(glm::vec4);
+            out->tangents = (glm::vec4*)malloc(size);
+            std::memcpy(out->tangents, data + off, size);
+            off += size;
+        }
+
+        for (size_t i = 0; i < has_texcoord.size(); i++) {
+            if (!has_texcoord[i]) continue;
+
+            out->texcoords[i] = (glm::vec2*)malloc(out->vertex_count*sizeof(glm::vec2));
+            std::memcpy(out->texcoords[i], data + off, out->vertex_count*sizeof(glm::vec2));
+            off += out->vertex_count*sizeof(glm::vec2);
+        }
     }
 
     model::GPUOffset Mesh::calc_offset(uint32_t start_offset, uint32_t* total_size) const {
@@ -619,6 +709,47 @@ namespace engine {
         return total_size;
     }
 
+    uint32_t Model::get_optimized_size() const {
+        uint32_t total_size = sizeof(collisions::AABB) + sizeof(uint32_t) + mesh_indices_count*(sizeof(uint32_t) + sizeof(glm::mat4)) + sizeof(uint32_t) + mesh_count*sizeof(uint32_t);
+
+        for (size_t mesh_ix = 0; mesh_ix < mesh_count; mesh_ix++) {
+            total_size += meshes[mesh_ix].get_optimized_size();
+        }
+
+        return total_size;
+    }
+
+    void Model::save_optimized(uint8_t* data) const {
+        uint32_t header_size = sizeof(collisions::AABB) + sizeof(uint32_t) + mesh_indices_count*(sizeof(uint32_t) + sizeof(glm::mat4)) + sizeof(uint32_t) + mesh_count*sizeof(uint32_t);
+        uint32_t off = 0;
+
+        std::memcpy(data + off, &bounding_box, sizeof(collisions::AABB));
+        off += sizeof(collisions::AABB);
+
+        std::memcpy(data + off, &mesh_indices_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(data + off, &mesh_indexes, sizeof(uint32_t)*mesh_indices_count);
+        off += sizeof(uint32_t)*mesh_indices_count;
+
+        std::memcpy(data + off, &mesh_transforms, sizeof(glm::mat4)*mesh_indices_count);
+        off += sizeof(glm::mat4)*mesh_indices_count;
+
+        std::memcpy(data + off, &mesh_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        uint32_t mesh_offset = header_size;
+        for (size_t mesh_ix = 0; mesh_ix < mesh_count; mesh_ix++) {
+            const auto& mesh = meshes[mesh_ix];
+            mesh_offset += mesh.get_optimized_size();
+
+            mesh.save_optimized(data + mesh_offset);
+
+            std::memcpy(data + off, &mesh_offset, sizeof(uint32_t));
+            off += sizeof(uint32_t);
+        }
+    }
+
     Model::Err Model::load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
                                 std::string* tinygltf_error, std::string* tinygltf_warning) {
         tinygltf::Model model;
@@ -647,32 +778,33 @@ namespace engine {
         return parse_res;
     }
 
-    bool Model::load_optimized(Model* out, uint8_t* data) {
-        uint32_t offset = 0;
+    void Model::load_optimized(Model* out, uint8_t* data) {
+        uint32_t off = 0;
 
-        std::memcpy(&out->bounding_box, data, sizeof(collisions::AABB));
-        offset += sizeof(collisions::AABB);
+        std::memcpy(&out->bounding_box, data + off, sizeof(collisions::AABB));
+        off += sizeof(collisions::AABB);
 
-        std::memcpy(&out->mesh_count, data + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
+        std::memcpy(&out->mesh_indices_count, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
 
-        out->meshes = (Mesh*)malloc(out->mesh_count * sizeof(Mesh));
-        for (std::size_t i = 0; i < out->mesh_count; i++) {
-            offset += Mesh::load_optimized(&out->meshes[i], data + offset);
+        out->mesh_indexes = (uint32_t*)malloc(sizeof(uint32_t)*out->mesh_indices_count);
+        std::memcpy(&out->mesh_indexes, data + off, sizeof(uint32_t)*out->mesh_indices_count);
+        off += sizeof(uint32_t)*out->mesh_indices_count;
+
+        out->mesh_transforms = (glm::mat4*)malloc(sizeof(glm::mat4)*out->mesh_indices_count);
+        std::memcpy(&out->mesh_transforms, data + off, sizeof(glm::mat4)*out->mesh_indices_count);
+        off += sizeof(glm::mat4)*out->mesh_indices_count;
+
+        std::memcpy(&out->mesh_count, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        for (size_t mesh_ix = 0; mesh_ix < out->mesh_count; mesh_ix++) {
+            uint32_t offset;
+            std::memcpy(&offset, data + off, sizeof(uint32_t));
+            off += sizeof(uint32_t);
+
+            Mesh::load_optimized(&out->meshes[mesh_ix], data + offset);
         }
-
-        std::memcpy(&out->mesh_indices_count, data + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        out->mesh_indexes = (uint32_t*)malloc(out->mesh_indices_count * sizeof(uint32_t));
-        std::memcpy(out->mesh_indexes, data + offset, out->mesh_indices_count * sizeof(uint32_t));
-        offset += out->mesh_indices_count * sizeof(uint32_t);
-
-        out->mesh_transforms = (glm::mat4*)malloc(out->mesh_indices_count * sizeof(glm::mat4));
-        std::memcpy(out->mesh_transforms, data + offset, out->mesh_indices_count * sizeof(glm::mat4));
-        offset += out->mesh_indices_count + sizeof(glm::mat4);
-
-        return true;
     }
 }
 

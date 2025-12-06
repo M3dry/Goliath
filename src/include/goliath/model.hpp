@@ -68,10 +68,12 @@ namespace engine {
 
         collisions::AABB bounding_box;
 
-        static std::size_t load_optimized(Mesh* out, uint8_t* data);
+        uint32_t get_optimized_size() const;
+        void save_optimized(uint8_t* data) const;
+        static void load_optimized(Mesh* out, uint8_t* data);
 
         model::GPUOffset calc_offset(uint32_t start_offset, uint32_t* total_size) const;
-        // returns data size it written to `buf`
+        // returns data size it wrote to `buf`
         uint32_t upload_data(uint8_t* buf) const;
 
         void clone(Mesh* out) {
@@ -136,11 +138,15 @@ namespace engine {
             InvalidFormat,
         };
 
+        uint32_t get_optimized_size() const;
+        // [`data` + `off`, `data` + `get_optimized_size()`) must be a valid range
+        void save_optimized(uint8_t* data) const;
+
         static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
                              std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
         static Err load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir,
                             std::string* tinygltf_err = nullptr, std::string* tinygltf_warning = nullptr);
-        static bool load_optimized(Model* out, uint8_t* data);
+        static void load_optimized(Model* out, uint8_t* data);
 
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {

@@ -19,6 +19,13 @@
 #include "stb_image.h"
 
 namespace engine::texture_registry {
+    uint32_t get_texture_store_size(uint32_t gid);
+    void serialize_texture(uint8_t* out, uint32_t gid);
+    void deserialize_texture(const VkSamplerCreateInfo* samplers, uint8_t* data, uint32_t offset);
+
+    void serialize_sampler(uint8_t* out, const Sampler& prototype);
+    Sampler deserialize_sampler(uint8_t* in);
+
     struct Metadata {
         uint32_t width;
         uint32_t height;
@@ -244,7 +251,7 @@ namespace engine::texture_registry {
 
             if (ref_counts[task.gid] != 0 && !deleted[task.gid] && generations[task.gid] == task.generation) {
                 texture_pool.update(task.gid, gpu_image_views[task.gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     initialized_samplers[samplers[task.gid]]);
+                                    initialized_samplers[samplers[task.gid]]);
             }
 
             finalize_queue.pop_front();
@@ -263,7 +270,8 @@ namespace engine::texture_registry {
         void* data = malloc(4);
         std::memset(data, 0xFF, 4);
 
-        auto default_tex = add((uint8_t*)data, 4*sizeof(uint8_t), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, "default texture", Sampler{});
+        auto default_tex =
+            add((uint8_t*)data, 4 * sizeof(uint8_t), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, "default texture", Sampler{});
 
         ref_counts[default_tex]++;
         task task{
@@ -289,9 +297,168 @@ namespace engine::texture_registry {
         texture_pool.destroy();
     }
 
-    void load(uint8_t* file_data, uint32_t file_size) {}
+    void load(uint8_t* file_data, uint32_t file_size) {
+        uint32_t off = 0;
 
-    void save(const std::filesystem::path& save_file) {}
+        uint32_t texture_count;
+        std::memcpy(&texture_count, file_data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        uint32_t sampler_count;
+        std::memcpy(&sampler_count, file_data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        for (uint32_t gid = 0; gid < texture_count; gid++) {
+            uint32_t texture_offset;
+            std::memcpy(&texture_offset, file_data + off, sizeof(uint32_t));
+            off += sizeof(uint32_t);
+
+            deserialize_texture((VkSamplerCreateInfo*)(file_data + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t)*texture_count), file_data, texture_offset);
+        }
+    }
+
+    uint8_t* save(uint32_t* size) {
+        uint32_t texture_count = names.size();
+        uint32_t sampler_count = sampler_prototypes.size();
+
+        uint32_t header_size = sizeof(uint32_t) + texture_count * sizeof(uint32_t) + sizeof(uint32_t) +
+                               sampler_count * sizeof(VkSamplerCreateInfo);
+        uint32_t total_size = header_size;
+
+        for (uint32_t gid = 0; gid < texture_count; gid++) {
+            total_size += get_texture_store_size(gid);
+        }
+
+        uint8_t* out = (uint8_t*)malloc(total_size);
+        uint32_t off = 0;
+
+        std::memcpy(out + off, &texture_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(out + off, &sampler_count, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        uint32_t texture_offset = header_size;
+        for (uint32_t gid = 0; gid < texture_count; gid++) {
+            std::memcpy(out + off, &texture_offset, sizeof(uint32_t));
+
+            serialize_texture(out + texture_offset, gid);
+
+            off += sizeof(uint32_t);
+            texture_offset += get_texture_store_size(gid);
+        }
+
+        for (uint32_t sampler_gid = 0; sampler_gid < sampler_count; sampler_gid++) {
+            const auto& sampler = sampler_prototypes[sampler_gid];
+
+            serialize_sampler(out + off, sampler);
+            off += sizeof(VkSamplerCreateInfo);
+        }
+
+        return out;
+    }
+
+    uint32_t get_texture_store_size(uint32_t gid) {
+        uint32_t total = sizeof(uint32_t) + names[gid].size() + sizeof(uint32_t) + paths[gid].string().size() +
+                         sizeof(uint32_t) + sizeof(uint32_t);
+
+        if (auto blob_size = blobs[gid].second; blob_size != 0) {
+            total += blob_size + sizeof(Metadata);
+        }
+
+        return total;
+    }
+
+    void serialize_texture(uint8_t* out, uint32_t gid) {
+        uint32_t off = 0;
+
+        auto sampler_gid = samplers[gid];
+        std::memcpy(out + off, &sampler_gid, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        const auto& name = names[gid];
+        uint32_t name_size = name.size();
+        std::memcpy(out + off, &name_size, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(out + off, name.data(), name_size);
+        off += name_size;
+
+        const auto& path_str = paths[gid].string();
+        uint32_t path_size = path_str.size();
+        std::memcpy(out + off, &path_size, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(out + off, path_str.data(), path_size);
+        off += path_size;
+
+        const auto& blob = blobs[gid];
+
+        std::memcpy(out + off, &blob.second, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        if (blob.second == 0) return;
+
+        const auto& metadata = metadatas[gid];
+        std::memcpy(out + off, &metadata, sizeof(Metadata));
+        off += sizeof(Metadata);
+
+        std::memcpy(out + off, blob.first, blob.second);
+        off += blob.second;
+    }
+
+    void deserialize_texture(const VkSamplerCreateInfo* samplers, uint8_t* data, uint32_t off) {
+        uint32_t sampler_gid;
+        std::memcpy(&sampler_gid, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        Sampler sampler{};
+        sampler._info = samplers[sampler_gid];
+
+        uint32_t name_size;
+        std::memcpy(&name_size, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        const uint8_t* name_data = data + off;
+        off += name_size;
+
+        uint32_t path_size;
+        std::memcpy(&path_size, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        const uint8_t* path_data = data + off;
+        off += path_size;
+
+        uint32_t blob_size;
+        std::memcpy(&blob_size, data + off, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        if (blob_size != 0) {
+            Metadata metadata{};
+            std::memcpy(&metadata, data + off, sizeof(Metadata));
+            off += sizeof(Metadata);
+
+            uint8_t* blob = (uint8_t*)malloc(blob_size);
+            std::memcpy(blob, data + off, blob_size);
+            off += blob_size;
+
+            add(blob, blob_size, metadata.width, metadata.height, metadata.format,
+                std::string{(const char*)name_data, name_size}, sampler);
+        } else {
+            add(std::string{(const char*)path_data, path_size}, std::string{(const char*)name_data, name_size},
+                sampler);
+        }
+    }
+
+    void serialize_sampler(uint8_t* out, const Sampler& prototype) {
+        std::memcpy(out, &prototype._info, sizeof(VkSamplerCreateInfo));
+    }
+
+    Sampler deserialize_sampler(uint8_t* in) {
+        Sampler res{};
+        std::memcpy(&res._info, in, sizeof(VkSamplerCreateInfo));
+        return res;
+    }
 
     uint32_t add(std::filesystem::path path, std::string name, const Sampler& sampler) {
         auto sampler_ix = acquire_sampler(sampler);
@@ -317,7 +484,7 @@ namespace engine::texture_registry {
 
             if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
                 texture_pool.destroy();
-                texture_pool = TexturePool{(uint32_t)(cap*1.5)};
+                texture_pool = TexturePool{(uint32_t)(cap * 1.5)};
                 rebuild_pool();
             }
 
@@ -367,7 +534,7 @@ namespace engine::texture_registry {
 
             if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
                 texture_pool.destroy();
-                texture_pool = TexturePool{(uint32_t)(cap*1.5)};
+                texture_pool = TexturePool{(uint32_t)(cap * 1.5)};
                 rebuild_pool();
             }
 
@@ -410,7 +577,7 @@ namespace engine::texture_registry {
         deleted[gid] = true;
 
         texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                             texture_pool::default_sampler);
+                            texture_pool::default_sampler);
     }
 
     std::string& get_name(uint32_t gid) {
@@ -491,7 +658,7 @@ namespace engine::texture_registry {
             upload_queue.enqueue(task);
 
             texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                                 texture_pool::default_sampler);
+                                texture_pool::default_sampler);
         }
     }
 
@@ -503,7 +670,7 @@ namespace engine::texture_registry {
             gpu_images[gid].destroy();
             GPUImageView::destroy(gpu_image_views[gid]);
             texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                                 texture_pool::default_sampler);
+                                texture_pool::default_sampler);
 
             gpu_images[gid] = GPUImage{};
             gpu_image_views[gid] = nullptr;
@@ -516,7 +683,7 @@ namespace engine::texture_registry {
             if (ref_counts[gid] == 0) continue;
 
             texture_pool.update(gid, gpu_image_views[gid], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                 initialized_samplers[samplers[gid]]);
+                                initialized_samplers[samplers[gid]]);
         }
     }
 

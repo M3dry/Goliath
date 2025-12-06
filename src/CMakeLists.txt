@@ -45,6 +45,7 @@ SET(ENGINE_SOURCES
     compute.cpp
     texture_registry.cpp
     material.cpp
+    culling.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}
@@ -59,5 +60,5 @@ target_include_directories(goliath
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
-target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd xxHash::xxhash)
+target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd xxHash::xxhash X11)
 target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)

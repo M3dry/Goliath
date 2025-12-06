@@ -7,6 +7,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
+#include <vulkan/vulkan_core.h>
 
 void check_vk_result(VkResult err) {
     if (err == 0) return;
@@ -45,17 +46,18 @@ namespace engine::imgui {
         imgui_info.QueueFamily = graphics_queue_family;
         imgui_info.Queue = graphics_queue;
         imgui_info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE;
-        imgui_info.Subpass = 0;
         imgui_info.MinImageCount = 2;
         imgui_info.ImageCount = 2;
-        imgui_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         imgui_info.Allocator = nullptr;
         imgui_info.CheckVkResultFn = check_vk_result;
-        imgui_info.PipelineRenderingCreateInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-            .pNext = nullptr,
-            .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &swapchain_format,
+        imgui_info.PipelineInfoMain = ImGui_ImplVulkan_PipelineInfo{
+            .Subpass = 0,
+            .MSAASamples = VK_SAMPLE_COUNT_1_BIT,
+            .PipelineRenderingCreateInfo = VkPipelineRenderingCreateInfoKHR{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
+                .colorAttachmentCount = 1,
+                .pColorAttachmentFormats = &engine::swapchain_format,
+            },
         };
         ImGui_ImplVulkan_Init(&imgui_info);
 
