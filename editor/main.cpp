@@ -18,6 +18,7 @@
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
+#include "imgui_impl_vulkan.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
@@ -173,7 +174,7 @@ struct Model {
 };
 
 bool imgui_model_instance(Model::Instance& instance, glm::mat4& transform) {
-    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
 
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
@@ -503,6 +504,18 @@ int main(int argc, char** argv) {
     glm::vec3 light_intensity{1.0f};
     glm::vec3 light_position{5.0f};
 
+    ImVec2 game_windows[engine::frames_in_flight]{};
+    engine::GPUImage game_window_images[engine::frames_in_flight]{};
+    VkImageView game_window_image_views[engine::frames_in_flight]{};
+    VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
+    std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
+    VkSampler game_window_sampler = engine::Sampler{}.create();
+
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        game_windows[i].x = -1.0f;
+        game_windows[i].y = -1.0f;
+    }
+
     double accum = 0;
     double last_time = glfwGetTime();
 
@@ -574,7 +587,51 @@ int main(int argc, char** argv) {
         }
 
         {
+            auto& game_window = game_windows[engine::get_current_frame()];
+            auto& game_window_image = game_window_images[engine::get_current_frame()];
+            auto& game_window_image_view = game_window_image_views[engine::get_current_frame()];
+            auto& game_window_texture = game_window_textures[engine::get_current_frame()];
+            auto& [game_window_barrier_applied, game_window_barrier] =
+                game_window_barriers[engine::get_current_frame()];
+            bool skip_game_window = false;
+
             engine::imgui::begin();
+            ImGui::DockSpaceOverViewport();
+
+            ImGui::Begin("Game");
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            if (avail.x <= 0 || avail.y <= 0) skip_game_window = true;
+            if ((avail.x != game_window.x || avail.y != game_window.y) && !skip_game_window) {
+                game_window_image.destroy();
+                engine::GPUImageView::destroy(game_window_image_view);
+                ImGui_ImplVulkan_RemoveTexture(game_window_texture);
+
+                auto image_upload =
+                    engine::GPUImage::upload(engine::GPUImageInfo{}
+                                                 .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                                                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                                 .width(avail.x)
+                                                 .height(avail.y)
+                                                 .format(VK_FORMAT_R8G8B8A8_UNORM)
+                                                 .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT));
+                game_window_image = image_upload.first;
+                game_window_barrier_applied = false;
+                game_window_barrier = image_upload.second;
+                game_window_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                game_window_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+                game_window_image_view =
+                    engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+
+                game_window_texture = ImGui_ImplVulkan_AddTexture(game_window_sampler, game_window_image_view,
+                                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+                game_window = avail;
+            }
+
+            if (!skip_game_window) ImGui::Image(game_window_texture, game_window);
+            ImGui::End();
+
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     if (ImGui::MenuItem("Load model")) {
@@ -708,8 +765,8 @@ int main(int argc, char** argv) {
                 std::erase_if(models, [&](auto& model) {
                     ImGui::PushID(model.gpu_group.data.address());
 
-                    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap |
-                                                                ImGuiTreeNodeFlags_SpanLabelWidth);
+                    bool open = ImGui::TreeNodeEx("##node",
+                                                  ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
@@ -767,8 +824,8 @@ int main(int argc, char** argv) {
                 std::erase_if(scenes, [&](auto& scene) {
                     ImGui::PushID(scene.gpu_group.data.address());
 
-                    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowItemOverlap |
-                                                                ImGuiTreeNodeFlags_SpanLabelWidth);
+                    bool open = ImGui::TreeNodeEx("##node",
+                                                  ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
@@ -833,7 +890,7 @@ int main(int argc, char** argv) {
             engine::prepare_draw();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
-                !model_barrier_applied || !scene_indirect_buffer_barrier_applied) {
+                !model_barrier_applied || !scene_indirect_buffer_barrier_applied || !game_window_barrier_applied) {
                 engine::synchronization::begin_barriers();
                 if (!visbuffer_barriers_applied) {
                     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -866,6 +923,12 @@ int main(int argc, char** argv) {
 
                     scene_indirect_buffer_barrier_applied = true;
                 }
+
+                if (!game_window_barrier_applied && !skip_game_window) {
+                    engine::synchronization::apply_barrier(game_window_barrier);
+
+                    game_window_barrier_applied = true;
+                }
                 engine::synchronization::end_barriers();
             }
 
@@ -879,8 +942,8 @@ int main(int argc, char** argv) {
 
             if (transforms_size != 0) {
                 engine::transport::begin();
-                engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()], transforms_size*sizeof(glm::mat4),
-                                          transform_buffer.data(), 0);
+                engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()],
+                                          transforms_size * sizeof(glm::mat4), transform_buffer.data(), 0);
                 auto timeline_wait = engine::transport::end();
 
                 engine::synchronization::begin_barriers();
@@ -896,11 +959,17 @@ int main(int argc, char** argv) {
             transform_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             transform_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
-            VkClearColorValue clear_color{};
-            clear_color.float32[0] = 0.0f;
-            clear_color.float32[1] = 0.0f;
-            clear_color.float32[2] = 0.3f;
-            clear_color.float32[3] = 1.0f;
+            VkClearColorValue target_clear_color{};
+            target_clear_color.float32[0] = 0.0f;
+            target_clear_color.float32[1] = 0.0f;
+            target_clear_color.float32[2] = 0.3f;
+            target_clear_color.float32[3] = 1.0f;
+
+            VkClearColorValue game_window_clear_color{};
+            target_clear_color.float32[0] = 0.0f;
+            target_clear_color.float32[1] = 0.0f;
+            target_clear_color.float32[2] = 0.3f;
+            target_clear_color.float32[3] = 1.0f;
 
             VkImageSubresourceRange clear_range{};
             clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -910,7 +979,11 @@ int main(int argc, char** argv) {
             clear_range.levelCount = 1;
 
             vkCmdClearColorImage(engine::get_cmd_buf(), target_images[engine::get_current_frame()].image,
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &clear_range);
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &target_clear_color, 1, &clear_range);
+            if (!skip_game_window) {
+                vkCmdClearColorImage(engine::get_cmd_buf(), game_window_image.image,
+                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &game_window_clear_color, 1, &clear_range);
+            }
 
             engine::culling::bind_flatten();
             uint transform_ix = 0;
@@ -954,7 +1027,8 @@ int main(int argc, char** argv) {
                                           .set_store_op(engine::StoreOp::Store)));
 
             uint8_t visbuffer_raster_pc[VisbufferRasterPC::size];
-            VisbufferRasterPC::write(visbuffer_raster_pc, draw_id_buffer.address(), indirect_draw_buffer.address(), cam.view_projection());
+            VisbufferRasterPC::write(visbuffer_raster_pc, draw_id_buffer.address(), indirect_draw_buffer.address(),
+                                     cam.view_projection());
 
             visbuffer_raster_pipeline.bind();
             visbuffer_raster_pipeline.draw_indirect_count(engine::GraphicsPipeline::DrawIndirectCountParams{
@@ -1075,85 +1149,107 @@ int main(int argc, char** argv) {
             target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
-            VkImageMemoryBarrier2 swapchain_barrier{};
-            swapchain_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            swapchain_barrier.pNext = nullptr;
-            swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            swapchain_barrier.image = engine::get_swapchain();
-            swapchain_barrier.subresourceRange = VkImageSubresourceRange{
+            VkImageMemoryBarrier2 game_window_texture_barrier{};
+            game_window_texture_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            game_window_texture_barrier.pNext = nullptr;
+            game_window_texture_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            game_window_texture_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            game_window_texture_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            game_window_texture_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            game_window_texture_barrier.image = game_window_image.image;
+            game_window_texture_barrier.subresourceRange = VkImageSubresourceRange{
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
                 .layerCount = 1,
             };
-            swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
-            swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-            swapchain_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            game_window_texture_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            game_window_texture_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            game_window_texture_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            game_window_texture_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            // VkImageMemoryBarrier2 swapchain_barrier{};
+            // swapchain_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            // swapchain_barrier.pNext = nullptr;
+            // swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            // swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            // swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            // swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            // swapchain_barrier.image = engine::get_swapchain();
+            // swapchain_barrier.subresourceRange = VkImageSubresourceRange{
+            //     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            //     .baseMipLevel = 0,
+            //     .levelCount = 1,
+            //     .baseArrayLayer = 0,
+            //     .layerCount = 1,
+            // };
+            // swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            // swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            // swapchain_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            // swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
-            engine::synchronization::apply_barrier(swapchain_barrier);
+            if (!skip_game_window) engine::synchronization::apply_barrier(game_window_texture_barrier);
             engine::synchronization::end_barriers();
 
-            VkImageBlit2 blit_region{};
-            blit_region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
-            blit_region.srcOffsets[0] = VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
-            };
-            blit_region.srcOffsets[1] = VkOffset3D{
-                .x = (int32_t)engine::swapchain_extent.width,
-                .y = (int32_t)engine::swapchain_extent.height,
-                .z = 1,
-            };
-            blit_region.srcSubresource = VkImageSubresourceLayers{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            blit_region.dstOffsets[0] = VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
-            };
-            blit_region.dstOffsets[1] = VkOffset3D{
-                .x = (int32_t)engine::swapchain_extent.width,
-                .y = (int32_t)engine::swapchain_extent.height,
-                .z = 1,
-            };
-            blit_region.dstSubresource = VkImageSubresourceLayers{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            VkBlitImageInfo2 blit_info{};
-            blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
-            blit_info.srcImage = target_images[engine::get_current_frame()].image;
-            blit_info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            blit_info.dstImage = engine::get_swapchain();
-            blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            blit_info.filter = VK_FILTER_NEAREST;
-            blit_info.regionCount = 1;
-            blit_info.pRegions = &blit_region;
-            vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+            if (!skip_game_window) {
+                VkImageBlit2 blit_region{};
+                blit_region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+                blit_region.srcOffsets[0] = VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                };
+                blit_region.srcOffsets[1] = VkOffset3D{
+                    .x = (int32_t)game_window.x,
+                    .y = (int32_t)game_window.y,
+                    .z = 1,
+                };
+                blit_region.srcSubresource = VkImageSubresourceLayers{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                };
+                blit_region.dstOffsets[0] = VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                };
+                blit_region.dstOffsets[1] = VkOffset3D{
+                    .x = (int32_t)game_window.x,
+                    .y = (int32_t)game_window.y,
+                    .z = 1,
+                };
+                blit_region.dstSubresource = VkImageSubresourceLayers{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                };
+                VkBlitImageInfo2 blit_info{};
+                blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+                blit_info.srcImage = target_images[engine::get_current_frame()].image;
+                blit_info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                blit_info.dstImage = game_window_image.image;
+                blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                blit_info.filter = VK_FILTER_NEAREST;
+                blit_info.regionCount = 1;
+                blit_info.pRegions = &blit_region;
+                vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+            }
 
-            swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            swapchain_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            swapchain_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            game_window_texture_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            game_window_texture_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            game_window_texture_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            game_window_texture_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            game_window_texture_barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            game_window_texture_barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(swapchain_barrier);
+            if (!skip_game_window) engine::synchronization::apply_barrier(game_window_texture_barrier);
             engine::synchronization::end_barriers();
 
             engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
@@ -1171,6 +1267,13 @@ int main(int argc, char** argv) {
             target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
+            game_window_texture_barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            game_window_texture_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            game_window_texture_barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            game_window_texture_barrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            game_window_texture_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            game_window_texture_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
             transform_barrier.srcAccessMask = transform_barrier.dstAccessMask;
             transform_barrier.srcStageMask = transform_barrier.dstStageMask;
             transform_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -1186,6 +1289,7 @@ int main(int argc, char** argv) {
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
+            if (!skip_game_window) engine::synchronization::apply_barrier(game_window_texture_barrier);
             engine::synchronization::end_barriers();
         }
 
@@ -1267,7 +1371,12 @@ int main(int argc, char** argv) {
         indirect_draw_buffers[i].destroy();
         transform_buffers[i].destroy();
         free(transforms[i]);
+
+        game_window_images[i].destroy();
+        engine::GPUImageView::destroy(game_window_image_views[i]);
+        ImGui_ImplVulkan_RemoveTexture(game_window_textures[i]);
     }
+    engine::Sampler::destroy(game_window_sampler);
 
     free(target_images);
     free(target_image_views);

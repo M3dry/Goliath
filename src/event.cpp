@@ -23,7 +23,11 @@ namespace engine::event {
     } while (0)
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    WRAP_IMGUI_CALLBACK(ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods));
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantTextInput && key == GLFW_KEY_L) {
+    } else {
+        WRAP_IMGUI_CALLBACK(ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods));
+    }
 
     engine::event::down[(uint32_t)key] = action == GLFW_PRESS || action == GLFW_REPEAT;
     engine::event::up[(uint32_t)key] = action == GLFW_RELEASE;
