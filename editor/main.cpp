@@ -19,6 +19,7 @@
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include <GLFW/glfw3.h>
 #include <cstring>
@@ -110,21 +111,6 @@ struct Model {
         GOM,
     };
 
-    struct Instance {
-        std::string name;
-
-        glm::vec3 translate{0.0f};
-        glm::vec3 rotate{0.0f};
-        glm::vec3 scale{1.0f};
-
-        void update_transform(glm::mat4* transform) const {
-            *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
-                         glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
-                                                 rotate.y, glm::vec3{1, 0, 0}),
-                                     rotate.z, glm::vec3{0, 0, 1}) *
-                         glm::scale(glm::identity<glm::mat4>(), scale);
-        }
-    };
     uint64_t last_instance_id = 0;
 
     std::string name;
@@ -137,7 +123,7 @@ struct Model {
     engine::Buffer indirect_draw_buffer;
     engine::GPUGroup gpu_group;
 
-    std::vector<Instance> instances{};
+    std::vector<size_t> instances{};
 
     engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size,
                             VkBufferMemoryBarrier2* barrier) {
@@ -172,41 +158,6 @@ struct Model {
         indirect_draw_buffer.destroy();
     }
 };
-
-bool imgui_model_instance(Model::Instance& instance, glm::mat4& transform) {
-    bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-    ImGui::InputText("##name", &instance.name);
-
-    ImGui::SameLine();
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-    if (ImGui::Button("Remove")) {
-        if (open) ImGui::TreePop();
-        return true;
-    }
-
-    if (open) {
-        ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
-
-        ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-        ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-        ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
-
-        ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
-        ImGui::TreePop();
-    }
-
-    transform = glm::translate(glm::identity<glm::mat4>(), instance.translate) *
-                glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1, 0}),
-                                        instance.rotate.y, glm::vec3{1, 0, 0}),
-                            instance.rotate.z, glm::vec3{0, 0, 1}) *
-                glm::scale(glm::identity<glm::mat4>(), instance.scale);
-
-    return false;
-}
 
 // <model count><total instance count><external count><names size>{<is external><name metadata><name data|if <name
 // metadata> valid><instance count><instance transforms><model data size><model data> |*model count}
@@ -272,7 +223,7 @@ uint8_t* serialize_scene(const Model* models, uint32_t models_size, uint32_t* ou
 
         for (const auto& instance : model.instances) {
             glm::mat4 transform{};
-            instance.update_transform((glm::mat4*)(out + offset));
+            // instance.update_transform((glm::mat4*)(out + offset));
             offset += sizeof(glm::mat4);
         }
 
@@ -340,10 +291,65 @@ struct Scene {
     }
 };
 
+struct Instance {
+    size_t model_ix;
+    std::string name;
+
+    glm::vec3 translate{0.0f};
+    glm::vec3 rotate{0.0f};
+    glm::vec3 scale{1.0f};
+
+    void update_transform(glm::mat4* transform) const {
+        *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
+                     glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
+                                             rotate.y, glm::vec3{1, 0, 0}),
+                                 rotate.z, glm::vec3{0, 0, 1}) *
+                     glm::scale(glm::identity<glm::mat4>(), scale);
+    }
+};
+
+// bool imgui_model_instance(Instance& instance, glm::mat4& transform) {
+//     bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+//
+//     ImGui::SameLine();
+//     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+//     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+//     ImGui::InputText("##name", &instance.name);
+//
+//     ImGui::SameLine();
+//     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+//     if (ImGui::Button("Remove")) {
+//         if (open) ImGui::TreePop();
+//         return true;
+//     }
+//
+//     if (open) {
+//         ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+//
+//         ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+//         ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+//         ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+//
+//         ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+//         ImGui::TreePop();
+//     }
+//
+//     transform = glm::translate(glm::identity<glm::mat4>(), instance.translate) *
+//                 glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1,
+//                 0}),
+//                                         instance.rotate.y, glm::vec3{1, 0, 0}),
+//                             instance.rotate.z, glm::vec3{0, 0, 1}) *
+//                 glm::scale(glm::identity<glm::mat4>(), instance.scale);
+//
+//     return false;
+// }
+
 int main(int argc, char** argv) {
     std::vector<Model> models{};
     std::vector<std::vector<Model>> models_to_destroy{};
     models_to_destroy.resize(engine::frames_in_flight);
+    std::vector<Instance> instances{};
+    size_t selected_instance = -1;
 
     std::vector<Scene> scenes{};
 
@@ -503,6 +509,8 @@ int main(int argc, char** argv) {
 
     glm::vec3 light_intensity{1.0f};
     glm::vec3 light_position{5.0f};
+
+    bool test_x = false;
 
     ImVec2 game_windows[engine::frames_in_flight]{};
     engine::GPUImage game_window_images[engine::frames_in_flight]{};
@@ -760,63 +768,171 @@ int main(int argc, char** argv) {
             }
             ImGui::EndMainMenuBar();
 
-            uint32_t transforms_size = 0;
+            uint32_t transforms_count = 0;
+            if (ImGui::Begin("Instances")) {
+                for (size_t i = 0; i < instances.size(); i++) {
+                    ImGui::PushID(i);
+
+                    if (ImGui::Selectable("", selected_instance == i,
+                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
+                        selected_instance = i;
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("X")) {
+                        instances.erase(instances.begin() + i);
+                        i--;
+                        ImGui::PopID();
+                        continue;
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::InputText("##name", &instances[i].name);
+                    if (ImGui::IsItemClicked()) {
+                        selected_instance = i;
+                    }
+
+                    instances[i].update_transform(transforms[engine::get_current_frame()] + transforms_count);
+                    transforms_count++;
+
+                    ImGui::PopID();
+                }
+            }
+            ImGui::End();
+
             if (ImGui::Begin("Models")) {
-                std::erase_if(models, [&](auto& model) {
+                float h = ImGui::GetFrameHeight();
+                float w = ImGui::GetContentRegionAvail().x;
+
+                if (w != 0.0f && h != 0.0f) {
+                    ImGuiID id = ImGui::GetID("##node");
+                    ImVec2 start = ImGui::GetCursorScreenPos();
+
+                    ImRect bb(start, ImVec2(start.x + w, start.y + h));
+
+                    ImGui::ItemAdd(bb, id);
+
+                    bool hovered = false;
+                    bool held    = false;
+                    bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_AllowOverlap);
+
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImU32 col = 0;
+                    if (held) col = ImGui::GetColorU32(ImGuiCol_HeaderActive);
+                    else if (hovered) col = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
+                    if (col)
+                        dl->AddRectFilled(bb.Min, bb.Max, col, ImGui::GetStyle().FrameRounding);
+
+                    ImGui::SetCursorScreenPos(start);
+
+                    if (ImGui::Button("+")) {
+                        printf("+\n");
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::Text("Test");
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("X")) {
+                        printf("X\n");
+                    }
+
+                    auto* storage = ImGui::GetCurrentWindow()->DC.StateStorage;
+                    bool open = storage->GetBool(id, false);
+                    if (pressed) {
+                        open = !open;
+                        storage->SetBool(id, open);
+                    }
+
+                    if (open) {
+                        ImGui::Indent();
+                        ImGui::Text("Child item");
+                        ImGui::Unindent();
+                    }
+                }
+
+                for (size_t i = 0; i < models.size(); i++) {
+                    auto& model = models[i];
                     ImGui::PushID(model.gpu_group.data.address());
 
-                    bool open = ImGui::TreeNodeEx("##node",
-                                                  ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+                    float h = ImGui::GetFrameHeight(); // custom height
+                    float w = ImGui::GetContentRegionAvail().x;
+
+                    ImGuiID id = ImGui::GetID("##node");
+
+                    ImGui::InvisibleButton("##hit", ImVec2(w, h), ImGuiButtonFlags_AllowOverlap);
+                    bool clicked = ImGui::IsItemClicked();
+                    bool hovered = ImGui::IsItemHovered();
+                    bool held    = ImGui::IsItemActive();
+                    ImVec2 start = ImGui::GetItemRectMin();
+
+                    ImVec2 min = ImGui::GetItemRectMin();
+                    ImVec2 max = ImGui::GetItemRectMax();
+
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    ImU32 col = 0;
+                    if (held) col = ImGui::GetColorU32(ImGuiCol_HeaderActive);
+                    else if (hovered) col = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
+
+                    if (col)
+                        dl->AddRectFilled(min, max, col, ImGui::GetStyle().FrameRounding);
+
+                    // 2. Draw the arrow + label manually at that position
+                    ImGui::SetCursorScreenPos(start);
+
+                    bool open = ImGui::TreeNodeBehavior(
+                        id, ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_Bullet, "");
+
+                    // 3. Apply your hitbox click to toggle the node
+                    if (clicked) ImGui::TreeNodeSetOpen(id, !open);
+
+                    // bool open = ImGui::TreeNodeEx("##node",
+                    //                               ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
+                    if (ImGui::Button("+")) {
+                        instances.emplace_back(0, std::format("{} #{}", model.name, model.last_instance_id++));
+                        model.instances.emplace_back(instances.size() - 1);
+                    }
+
+                    ImGui::SameLine();
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
                     ImGui::InputText("##name", &model.name);
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                    if (ImGui::Button("Unload")) {
+                    if (ImGui::Button("X")) {
                         models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight].emplace_back(
                             model);
 
+                        std::erase_if(instances, [&](auto& instance) -> bool {
+                            if (instance.model_ix > i) {
+                                instance.model_ix--;
+                                return false;
+                            } else {
+                                return instance.model_ix == i;
+                            }
+                        });
+
+                        models.erase(models.begin() + i);
+                        i--;
                         if (open) ImGui::TreePop();
                         ImGui::PopID();
-
-                        return true;
+                        continue;
                     }
-
-                    ImGui::SameLine();
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                    ImGui::Checkbox("Embed", &model.embed_optimized);
 
                     if (open) {
                         ImGui::Text("file path: %s", model.filepath.c_str());
-
-                        if (ImGui::Button("add instance")) {
-                            model.instances.emplace_back();
-                            model.instances.back().name = std::format("Instance #{}", model.last_instance_id++);
-                        }
-
-                        std::size_t i = 0;
-                        std::erase_if(model.instances, [&](auto& instance) {
-                            ImGui::PushID(i);
-                            auto remove = imgui_model_instance(
-                                model.instances[i],
-                                *(glm::mat4*)(transforms[engine::get_current_frame()] + transforms_size));
-                            ImGui::PopID();
-
-                            if (!remove) transforms_size++;
-
-                            i++;
-                            return remove;
-                        });
+                        ImGui::Checkbox("Embed", &model.embed_optimized);
 
                         ImGui::TreePop();
                     }
 
                     ImGui::PopID();
-                    return false;
-                });
+                }
             }
             ImGui::End();
 
@@ -867,7 +983,24 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if (ImGui::Begin("Window")) {
+            if (ImGui::Begin("Transformation") && selected_instance != -1) {
+                auto& instance = instances[selected_instance];
+
+                ImGui::InputText("name: ", &instance.name);
+
+                ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+                ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+                ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+
+                ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+
+                instance.update_transform(transforms[engine::get_current_frame()] + selected_instance);
+            }
+            ImGui::End();
+
+            if (ImGui::Begin("Config")) {
                 ImGui::SeparatorText("Camera");
                 ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
                 ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
@@ -940,10 +1073,10 @@ int main(int argc, char** argv) {
             transform_barrier.dstStageMask =
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
-            if (transforms_size != 0) {
+            if (transforms_count != 0) {
                 engine::transport::begin();
                 engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()],
-                                          transforms_size * sizeof(glm::mat4), transform_buffer.data(), 0);
+                                          transforms_count * sizeof(glm::mat4), transform_buffer.data(), 0);
                 auto timeline_wait = engine::transport::end();
 
                 engine::synchronization::begin_barriers();
@@ -990,10 +1123,10 @@ int main(int argc, char** argv) {
             for (auto& model : models) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
 
-                for (const auto& _ : model.instances) {
+                for (const auto& instance_ix : model.instances) {
                     engine::culling::flatten(model.gpu_group.data.address(), model.gpu_data.mesh_count,
                                              model.indirect_draw_buffer.address(), transform_buffer.address(),
-                                             transform_ix * sizeof(glm::mat4));
+                                             instance_ix * sizeof(glm::mat4));
                     transform_ix++;
                 }
             }
@@ -1169,26 +1302,6 @@ int main(int argc, char** argv) {
             game_window_texture_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             game_window_texture_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
-            // VkImageMemoryBarrier2 swapchain_barrier{};
-            // swapchain_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            // swapchain_barrier.pNext = nullptr;
-            // swapchain_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            // swapchain_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            // swapchain_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            // swapchain_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            // swapchain_barrier.image = engine::get_swapchain();
-            // swapchain_barrier.subresourceRange = VkImageSubresourceRange{
-            //     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            //     .baseMipLevel = 0,
-            //     .levelCount = 1,
-            //     .baseArrayLayer = 0,
-            //     .layerCount = 1,
-            // };
-            // swapchain_barrier.srcAccessMask = VK_ACCESS_2_NONE;
-            // swapchain_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-            // swapchain_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            // swapchain_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
             if (!skip_game_window) engine::synchronization::apply_barrier(game_window_texture_barrier);
@@ -1203,8 +1316,8 @@ int main(int argc, char** argv) {
                     .z = 0,
                 };
                 blit_region.srcOffsets[1] = VkOffset3D{
-                    .x = (int32_t)game_window.x,
-                    .y = (int32_t)game_window.y,
+                    .x = std::min((int32_t)game_window.x, (int32_t)engine::swapchain_extent.width),
+                    .y = std::min((int32_t)game_window.y, (int32_t)engine::swapchain_extent.height),
                     .z = 1,
                 };
                 blit_region.srcSubresource = VkImageSubresourceLayers{
@@ -1219,8 +1332,8 @@ int main(int argc, char** argv) {
                     .z = 0,
                 };
                 blit_region.dstOffsets[1] = VkOffset3D{
-                    .x = (int32_t)game_window.x,
-                    .y = (int32_t)game_window.y,
+                    .x = std::min((int32_t)game_window.x, (int32_t)engine::swapchain_extent.width),
+                    .y = std::min((int32_t)game_window.y, (int32_t)engine::swapchain_extent.height),
                     .z = 1,
                 };
                 blit_region.dstSubresource = VkImageSubresourceLayers{
