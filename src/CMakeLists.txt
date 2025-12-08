@@ -10,6 +10,8 @@ add_subdirectory(./tinygltf)
 set(XXHASH_BUNDLED_MODE ON CACHE BOOL "" FORCE)
 add_subdirectory(xxHash/cmake_unofficial)
 
+add_subdirectory(./simdjson)
+
 set(IMGUI_SOURCES
     imgui/imgui.cpp
     imgui/imgui_draw.cpp
@@ -60,5 +62,5 @@ target_include_directories(goliath
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
     )
-target_link_libraries(goliath PUBLIC glm::glm PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw nfd xxHash::xxhash X11)
+target_link_libraries(goliath PUBLIC glm::glm simdjson::simdjson PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw xxHash::xxhash X11)
 target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
