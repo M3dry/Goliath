@@ -251,6 +251,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     std::filesystem::current_path(project::project_root);
+
+    engine::init("Goliath editor", 1000, false);
+
     bool model_parse_error = false;
     models::init(project::models_registry, &model_parse_error);
     if (model_parse_error) {
@@ -258,13 +261,14 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
+
     bool scene_parse_error = false;
     scene::load(project::scenes_file, &scene_parse_error);
     if (scene_parse_error) {
         printf("Scenes weren't loaded");
         return 0;
     }
-
 
     size_t scene_count = 0;
     size_t current_scene = -1;
@@ -276,11 +280,7 @@ int main(int argc, char** argv) {
     }
     Scene* scene = &scenes[current_scene];
 
-    engine::init("Goliath editor", 1000, false);
     NFD_Init();
-
-    auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
-
     engine::culling::init(8192);
 
     VkImageMemoryBarrier2* visbuffer_barriers =

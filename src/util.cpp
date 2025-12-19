@@ -22,7 +22,6 @@ uint8_t* engine::util::read_file(const std::filesystem::path& path, uint32_t* si
 }
 
 void engine::util::save_file(const std::filesystem::path& path, uint8_t* data, uint32_t size) {
-    std::ofstream file{path, std::ios::binary | std::ios::trunc};
-
-    // file.write((const char*)data, size);
+    std::ofstream file{path, std::ios::binary};
+    file.write((const char*)data, size);
 }

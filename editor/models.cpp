@@ -316,9 +316,8 @@ namespace models {
         } else {
             auto save_size = model.get_optimized_size();
             uint8_t* save_data = (uint8_t*)malloc(save_size);
-            model.save_optimized(save_data);
+            model.save_optimized({save_data, save_size});
 
-            printf("path: %s\n", paths[gid.id].c_str());
             engine::util::save_file(paths[gid.id], save_data, save_size);
         }
 

@@ -69,7 +69,7 @@ namespace engine {
         collisions::AABB bounding_box;
 
         uint32_t get_optimized_size() const;
-        void save_optimized(uint8_t* data) const;
+        void save_optimized(std::span<uint8_t> data) const;
         static void load_optimized(Mesh* out, uint8_t* data);
 
         model::GPUOffset calc_offset(uint32_t start_offset, uint32_t* total_size) const;
@@ -140,7 +140,7 @@ namespace engine {
 
         uint32_t get_optimized_size() const;
         // [`data`, `data` + `get_optimized_size()`) must be a valid range
-        void save_optimized(uint8_t* data) const;
+        void save_optimized(std::span<uint8_t> data) const;
 
         static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
                              std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
