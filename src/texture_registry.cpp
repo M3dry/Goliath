@@ -559,14 +559,13 @@ namespace engine::texture_registry {
         }
     }
 
-    void remove(uint32_t gid) {
+    bool remove(uint32_t gid) {
+        if (ref_counts[gid] > 0) return false;
         std::lock_guard lock{gid_read};
 
         gpu_images[gid].destroy();
         GPUImageView::destroy(gpu_image_views[gid]);
         release_sampler(samplers[gid]);
-
-        ref_counts[gid] = 0;
 
         names[gid] = "";
         paths[gid] = "";
@@ -578,6 +577,8 @@ namespace engine::texture_registry {
 
         texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
                             texture_pool::default_sampler);
+
+        return true;
     }
 
     std::string& get_name(uint32_t gid) {

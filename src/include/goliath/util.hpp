@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <volk.h>
+#include <filesystem>
 
 namespace engine {
     enum struct CompareOp {
@@ -40,8 +41,8 @@ namespace engine::util {
     template <> struct is_padding<padding16> : std::true_type {};
     template <> struct is_padding<padding8> : std::true_type {};
 
-    uint8_t* read_file(const char* path, uint32_t* size);
-    void save_file(const char* path, uint8_t* data, uint32_t size);
+    uint8_t* read_file(const std::filesystem::path& path, uint32_t* size);
+    void save_file(const std::filesystem::path& path, uint8_t* data, uint32_t size);
 
     // `alignment` needs to be a power of two
     uint32_t constexpr align_up(uint32_t alignment, uint32_t size) {

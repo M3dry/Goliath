@@ -1,0 +1,157 @@
+#include "scene.hpp"
+#include "nlohmann/json_fwd.hpp"
+
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+namespace glm {
+    void to_json(nlohmann::json& j, const vec3& v) {
+        j = nlohmann::json{
+            v.x,
+            v.y,
+            v.z,
+        };
+    }
+
+    void from_json(const nlohmann::json& j, vec3& v) {
+        j.at(0).get_to(v.x);
+        j.at(1).get_to(v.y);
+        j.at(2).get_to(v.z);
+    }
+}
+
+namespace scene {
+    void to_json(nlohmann::json& j, const Instance& inst) {
+        j = nlohmann::json{
+            {"model_gid", inst.model_gid}, {"name", inst.name},   {"translate", inst.translate},
+            {"rotate", inst.rotate},       {"scale", inst.scale},
+        };
+    }
+
+    void from_json(const nlohmann::json& j, Instance& inst) {
+        j.at("model_gid").get_to(inst.model_gid);
+        j.at("name").get_to(inst.name);
+        j.at("translate").get_to(inst.translate);
+        j.at("rotate").get_to(inst.rotate);
+        j.at("scale").get_to(inst.scale);
+    }
+
+    void to_json(nlohmann::json& j, const Scene& scene) {
+        j = nlohmann::json{
+            {"name", scene.name},
+            {"used_models", scene.used_models},
+            {"instances", scene.instances},
+            {"selected_instance", scene.selected_instance},
+        };
+    }
+
+    void from_json(const nlohmann::json& j, Scene& scene) {
+        j.at("name").get_to(scene.name);
+        j.at("used_models").get_to(scene.used_models);
+        j.at("instances").get_to(scene.instances);
+        j.at("selected_instance").get_to(scene.selected_instance);
+    }
+
+    void Instance::update_transform(glm::mat4& transform) const {
+        transform = glm::translate(glm::identity<glm::mat4>(), translate) *
+                    glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
+                                            rotate.y, glm::vec3{1, 0, 0}),
+                                rotate.z, glm::vec3{0, 0, 1}) *
+                    glm::scale(glm::identity<glm::mat4>(), scale);
+    }
+
+    void Scene::acquire() {
+        models::acquire(used_models.data(), used_models.size());
+        ref_count++;
+    }
+
+    void Scene::release() {
+        models::release(used_models.data(), used_models.size());
+        ref_count--;
+    }
+
+    void Scene::add_model(models::gid gid) {
+        used_models.emplace_back(gid);
+
+        auto rc = ref_count;
+        while (rc-- == 0) {
+            models::acquire(&gid, 1);
+        }
+    }
+
+    uint32_t selected_scene_ = 0;
+    std::vector<Scene> scenes{};
+
+    void load(std::filesystem::path scenes_json, bool* parse_error) {
+        *parse_error = false;
+
+        std::ifstream i{scenes_json};
+        if (!i) {
+            selected_scene_ = 0;
+            scenes = {Scene{"Default"}};
+
+            return;
+        }
+
+        nlohmann::json j;
+        try {
+            j = nlohmann::json::parse(i);
+            if (parse_error) *parse_error = false;
+        } catch (const nlohmann::json::parse_error& e) {
+            if (parse_error) *parse_error = true;
+
+            selected_scene_ = 0;
+            scenes = {Scene{"Default"}};
+
+            return;
+        }
+
+        selected_scene_ = j.value("selected_scene", 0);
+        scenes = j.value<std::vector<Scene>>("scenes", {Scene{"Default"}});
+    }
+
+    void save(std::filesystem::path scenes_json) {
+        std::ofstream o{scenes_json};
+
+        o << nlohmann::json{
+            {"selected_instance", selected_scene_},
+            {"scenes", scenes},
+        };
+    }
+
+    void emplace_scene(std::string name) {
+        scenes.emplace_back(name);
+    }
+
+    // false - couldn't remove scene since it's the only scene
+    bool remove_scene(size_t ix) {
+        if (scenes.size() <= 1) return false;
+        scenes.erase(scenes.begin() + ix);
+
+        return true;
+    }
+
+    void move_to(size_t ix, size_t dest) {
+        auto scene = scenes[ix];
+        remove_scene(ix);
+        scenes.insert(scenes.begin() + dest, scene);
+    }
+
+    Scene& selected_scene() {
+        return scenes[selected_scene_];
+    }
+
+    uint32_t selected_scene_ix() {
+        return selected_scene_;
+    }
+
+    void select_scene(uint32_t ix) {
+        selected_scene().release();
+        selected_scene_ = ix;
+        selected_scene().acquire();
+    }
+
+    std::span<Scene> get_scenes() {
+        return scenes;
+    }
+}

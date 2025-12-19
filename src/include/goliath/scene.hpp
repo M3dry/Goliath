@@ -7,7 +7,6 @@
 
 // <model count><total instance count><external count><names size>{<is external><name metadata><name data|if <name metadata> valid><instance count><instance transforms><model data size><model data> |*model count}
 // <model data> = <embedded||GLB||GLTF>(<binary embeded data> || <file path>)
-
 namespace engine {
     struct Scene {
         struct Str {

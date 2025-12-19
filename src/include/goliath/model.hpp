@@ -139,7 +139,7 @@ namespace engine {
         };
 
         uint32_t get_optimized_size() const;
-        // [`data` + `off`, `data` + `get_optimized_size()`) must be a valid range
+        // [`data`, `data` + `get_optimized_size()`) must be a valid range
         void save_optimized(uint8_t* data) const;
 
         static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,

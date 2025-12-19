@@ -13,9 +13,9 @@
 [submodule "src/xxHash"]
 	path = src/xxHash
 	url = https://github.com/Cyan4973/xxHash.git
-[submodule "src/simdjson"]
-	path = src/simdjson
-	url = https://github.com/simdjson/simdjson.git
+[submodule "src/json"]
+	path = src/json
+	url = https://github.com/nlohmann/json
 [submodule "editor/nativefiledialog-extended"]
 	path = editor/nativefiledialog-extended
 	url = https://github.com/btzy/nativefiledialog-extended.git

@@ -3,6 +3,9 @@ add_subdirectory(./nativefiledialog-extended)
 
 SET(EDITOR_SOURCES
     main.cpp
+    models.cpp
+    scene.cpp
+    project.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES})

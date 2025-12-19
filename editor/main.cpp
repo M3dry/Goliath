@@ -1,3 +1,5 @@
+#include "models.hpp"
+#include "project.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
@@ -21,6 +23,7 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include "scene.hpp"
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <filesystem>
@@ -88,8 +91,6 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
     }
 }
 
-using ModelPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
-using ScenePC = engine::PushConstant<uint64_t, uint64_t, glm::mat4, glm::mat4>;
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
@@ -159,138 +160,6 @@ struct Model {
     }
 };
 
-// <model count><total instance count><external count><names size>{<is external><name metadata><name data|if <name
-// metadata> valid><instance count><instance transforms><model data size><model data> |*model count}
-// <model data> = <embedded||GLB||GLTF>(<binary embeded data> || <file path>)
-uint8_t* serialize_scene(const Model* models, uint32_t models_size, uint32_t* out_size) {
-    uint32_t total_size = sizeof(uint32_t) /* <model count> */ + sizeof(uint32_t) /* <total instance count> */ +
-                          sizeof(uint32_t) /* <external count> */ + sizeof(uint32_t) /* <names size> */ +
-                          sizeof(uint32_t) * models_size /* <name metadata>s */ +
-                          sizeof(uint32_t) * models_size /* <instance count>s */;
-    uint32_t total_instance_count = 0;
-    uint32_t names_size = 0;
-
-    for (uint32_t i = 0; i < models_size; i++) {
-        total_size += sizeof(uint8_t); // <is external>
-
-        auto& model = models[i];
-        names_size += model.name.size() + 1;
-
-        total_size += sizeof(uint8_t); // <embedded||GLB||GLTF>
-        if (model.embed_optimized) {
-            total_size += model.cpu_data.get_optimized_size(); // <model data size>
-        } else {
-            total_size += sizeof(uint32_t);                   // <filepath size>
-            total_size += model.filepath.string().size() + 1; // <model data size>
-        }
-
-        total_instance_count += model.instances.size();
-    }
-    total_size += total_instance_count * sizeof(glm::mat4); // <instance transforms>s
-    total_size += names_size;                               // <names size>
-
-    uint8_t* out = (uint8_t*)malloc(total_size);
-
-    uint32_t offset = 0;
-    std::memcpy(out + offset, &models_size, sizeof(uint32_t));
-    offset += sizeof(uint32_t);
-
-    std::memcpy(out + offset, &total_instance_count, sizeof(uint32_t));
-    offset += sizeof(uint32_t);
-
-    std::memset(out + offset, 0, sizeof(uint32_t));
-    offset += sizeof(uint32_t);
-
-    std::memcpy(out + offset, &names_size, sizeof(uint32_t));
-    offset += sizeof(uint32_t);
-
-    for (std::size_t i = 0; i < models_size; i++) {
-        auto& model = models[i];
-
-        std::memset(out + offset, 0, sizeof(uint8_t));
-        offset += sizeof(uint8_t);
-
-        uint32_t name_size = model.name.size() + 1;
-        std::memcpy(out + offset, &name_size, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        std::memcpy(out + offset, model.name.c_str(), name_size);
-        offset += name_size;
-
-        uint32_t instance_count = model.instances.size();
-        std::memcpy(out + offset, &instance_count, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        for (const auto& instance : model.instances) {
-            glm::mat4 transform{};
-            // instance.update_transform((glm::mat4*)(out + offset));
-            offset += sizeof(glm::mat4);
-        }
-
-        if (model.embed_optimized) {
-            std::memset(out + offset, 0, sizeof(uint8_t));
-            offset += sizeof(uint8_t);
-
-            model.cpu_data.save_optimized(out + offset);
-        } else {
-            uint8_t model_type = model.filepath.extension() == ".glb" ? 1 : 2;
-            std::memcpy(out + offset, &model_type, sizeof(uint8_t));
-            offset += sizeof(uint8_t);
-
-            uint32_t filepath_size = model.filepath.string().size() + 1;
-            std::memcpy(out + offset, &filepath_size, sizeof(uint32_t));
-            offset += sizeof(uint32_t);
-
-            std::memcpy(out + offset, model.filepath.c_str(), filepath_size);
-            offset += filepath_size;
-        }
-    }
-
-    printf("total size: %d\n", total_size);
-    printf("offset: %d\n", offset);
-    *out_size = total_size;
-    return out;
-}
-
-struct Scene {
-    std::string name;
-    std::filesystem::path filepath;
-
-    engine::Scene cpu_data;
-
-    uint64_t timeline;
-    engine::GPUGroup gpu_group;
-    engine::GPUScene gpu_data;
-
-    glm::vec3 translate{0.0f};
-    glm::vec3 rotate{0.0f};
-    glm::vec3 scale{1.0f};
-
-    glm::mat4 transform = glm::identity<glm::mat4>();
-
-    void load(const char* path, VkBufferMemoryBarrier2* indirect_buffer_barrier,
-              VkBufferMemoryBarrier2* model_barrier) {
-        uint32_t file_size;
-        auto file = engine::util::read_file(path, &file_size);
-
-        engine::Scene::load(&cpu_data, file, file_size);
-
-        timeline = engine::transport::begin();
-        engine::gpu_group::begin();
-        engine::GPUScene::upload(&gpu_data, &cpu_data, indirect_buffer_barrier);
-        gpu_group = engine::gpu_group::end(model_barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
-        engine::transport::end();
-
-        free(file);
-    }
-
-    void destroy() {
-        cpu_data.destroy();
-        gpu_group.destroy();
-        gpu_data.destroy();
-    }
-};
-
 struct Instance {
     size_t model_ix;
     std::string name;
@@ -308,53 +177,109 @@ struct Instance {
     }
 };
 
-// bool imgui_model_instance(Instance& instance, glm::mat4& transform) {
-//     bool open = ImGui::TreeNodeEx("##node", ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
-//
-//     ImGui::SameLine();
-//     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-//     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-//     ImGui::InputText("##name", &instance.name);
-//
-//     ImGui::SameLine();
-//     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-//     if (ImGui::Button("Remove")) {
-//         if (open) ImGui::TreePop();
-//         return true;
-//     }
-//
-//     if (open) {
-//         ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
-//
-//         ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-//         ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-//         ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
-//
-//         ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
-//         ImGui::TreePop();
-//     }
-//
-//     transform = glm::translate(glm::identity<glm::mat4>(), instance.translate) *
-//                 glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), instance.rotate.x, glm::vec3{0, 1,
-//                 0}),
-//                                         instance.rotate.y, glm::vec3{1, 0, 0}),
-//                             instance.rotate.z, glm::vec3{0, 0, 1}) *
-//                 glm::scale(glm::identity<glm::mat4>(), instance.scale);
-//
-//     return false;
-// }
+struct Scene {
+    std::string name;
 
-int main(int argc, char** argv) {
     std::vector<Model> models{};
-    std::vector<std::vector<Model>> models_to_destroy{};
-    models_to_destroy.resize(engine::frames_in_flight);
+    std::array<std::vector<Model>, engine::frames_in_flight> models_to_destroy{};
     std::vector<Instance> instances{};
     size_t selected_instance = -1;
 
-    std::vector<Scene> scenes{};
+    static std::vector<Scene> init(size_t& current_scene) {
+        return {};
+    }
+
+    void save() {}
+
+    void load_models() {}
+
+    void unload_models() {}
+
+    void add_model(std::filesystem::path path, VkBufferMemoryBarrier2* barrier, uint64_t timeline_value) {
+        uint32_t size;
+        auto* file = engine::util::read_file(path, &size);
+
+        auto extension = path.extension();
+        barrier->dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+        barrier->dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        Model::DataType type;
+        if (extension == ".glb") {
+            type = Model::GLB;
+        } else if (extension == ".gltf") {
+            type = Model::GLTF;
+        } else if (extension == ".gom") {
+            type = Model::GOM;
+        } else {
+            assert(false && "Wrong filetype");
+        }
+
+        models.emplace_back();
+        models.back().name = path.stem();
+        models.back().filepath = std::move(path);
+        models.back().timeline = timeline_value;
+
+        auto& model = models.back();
+        auto err = model.load(models.back().filepath.parent_path(), type, file, size, barrier);
+        if (err != engine::Model::Ok) {
+            printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
+            assert(false);
+        }
+
+        free(file);
+    }
+
+    void destroy() {
+        for (auto& model : models) {
+            model.destroy();
+        }
+        for (auto& models : models_to_destroy) {
+            for (auto& model : models) {
+                model.destroy();
+            }
+        }
+    }
+};
+
+int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
+        project::init();
+        return 0;
+    }
+
+    if (!project::find_project()) {
+        printf("Project root couldn't be find. To initialize a project use `%s init`\n", argv[0]);
+        return 0;
+    }
+    std::filesystem::current_path(project::project_root);
+    bool model_parse_error = false;
+    models::init(project::models_registry, &model_parse_error);
+    if (model_parse_error) {
+        printf("Models weren't loaded");
+        return 0;
+    }
+
+    bool scene_parse_error = false;
+    scene::load(project::scenes_file, &scene_parse_error);
+    if (scene_parse_error) {
+        printf("Scenes weren't loaded");
+        return 0;
+    }
+
+
+    size_t scene_count = 0;
+    size_t current_scene = -1;
+    std::vector<Scene> scenes = Scene::init(current_scene);
+    if (scenes.size() == 0 || current_scene == -1) {
+        scenes.emplace_back("Default");
+        scene_count++;
+        current_scene = scenes.size() - 1;
+    }
+    Scene* scene = &scenes[current_scene];
 
     engine::init("Goliath editor", 1000, false);
     NFD_Init();
+
+    auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
 
     engine::culling::init(8192);
 
@@ -484,9 +409,9 @@ int main(int argc, char** argv) {
     }
 
     VkBufferMemoryBarrier2 model_barrier{};
-    VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
+    // VkBufferMemoryBarrier2 scene_indirect_buffer_barrier{};
     bool model_barrier_applied = true;
-    bool scene_indirect_buffer_barrier_applied = true;
+    // bool scene_indirect_buffer_barrier_applied = true;
 
     float fov = 90.0f;
     glm::vec3 look_at{0.0f};
@@ -642,7 +567,7 @@ int main(int argc, char** argv) {
 
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
-                    if (ImGui::MenuItem("Load model")) {
+                    if (ImGui::MenuItem("Add model")) {
                         nfdu8filteritem_t filters[1] = {
                             {"Model files", "gltf,glb,gom"},
                         };
@@ -664,38 +589,7 @@ int main(int argc, char** argv) {
 
                             auto timeline_value = engine::transport::begin();
                             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                                uint32_t size;
-                                auto* file = engine::util::read_file(path, &size);
-                                std::filesystem::path file_path{path};
-
-                                auto extension = file_path.extension();
-                                model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                                model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                                Model::DataType type;
-                                if (extension == ".glb") {
-                                    type = Model::GLB;
-                                } else if (extension == ".gltf") {
-                                    type = Model::GLTF;
-                                } else if (extension == ".gom") {
-                                    type = Model::GOM;
-                                } else {
-                                    assert(false && "Wrong filetype");
-                                }
-
-                                models.emplace_back();
-                                models.back().name = file_path.stem();
-                                models.back().filepath = std::move(file_path);
-                                models.back().timeline = timeline_value;
-
-                                auto& model = models.back();
-                                auto err =
-                                    model.load(models.back().filepath.parent_path(), type, file, size, &model_barrier);
-                                if (err != engine::Model::Ok) {
-                                    printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
-                                    assert(false);
-                                }
-
-                                free(file);
+                                scene->add_model(path, &model_barrier, timeline_value);
                                 NFD_PathSet_FreePath(path);
                             }
                             engine::transport::end();
@@ -704,65 +598,6 @@ int main(int argc, char** argv) {
                             NFD_PathSet_Free(paths);
                         }
                     }
-
-                    if (ImGui::MenuItem("Open scene")) {
-                        nfdu8filteritem_t filters[1] = {
-                            {"Scene file", "gos"},
-                        };
-
-                        auto current_path = std::filesystem::current_path();
-                        nfdopendialogu8args_t args{};
-                        args.filterCount = 1;
-                        args.filterList = filters;
-                        args.defaultPath = current_path.c_str();
-                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-
-                        nfdu8char_t* path;
-                        auto res = NFD_OpenDialogU8_With(&path, &args);
-                        if (res == NFD_OKAY) {
-                            scenes.emplace_back();
-
-                            model_barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-                            model_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                            scene_indirect_buffer_barrier.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-                            scene_indirect_buffer_barrier.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-                            scenes.back().load(path, &scene_indirect_buffer_barrier, &model_barrier);
-                            std::filesystem::path path_fs = path;
-                            scenes.back().name = path_fs.stem();
-                            scenes.back().filepath = std::move(path_fs);
-
-                            model_barrier_applied = false;
-                            scene_indirect_buffer_barrier_applied = false;
-
-                            NFD_FreePath(path);
-                        }
-                    }
-
-                    if (ImGui::MenuItem("Save scene")) {
-                        nfdu8filteritem_t filters[1] = {
-                            {"Scene file", "gos"},
-                        };
-
-                        auto current_path = std::filesystem::current_path();
-                        nfdsavedialogu8args_t args{};
-                        args.defaultName = "scene.gos";
-                        args.filterCount = 1;
-                        args.filterList = filters;
-                        args.defaultPath = current_path.c_str();
-                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-
-                        nfdu8char_t* path;
-                        auto res = NFD_SaveDialogU8_With(&path, &args);
-                        if (res == NFD_OKAY) {
-                            uint32_t data_size;
-                            auto data = serialize_scene(models.data(), models.size(), &data_size);
-                            engine::util::save_file(path, (uint8_t*)data, data_size);
-
-                            NFD_FreePath(path);
-                            free(data);
-                        }
-                    }
-
                     ImGui::EndMenu();
                 }
             }
@@ -770,26 +605,26 @@ int main(int argc, char** argv) {
 
             uint32_t transforms_count = 0;
             if (ImGui::Begin("Instances")) {
-                for (size_t i = 0; i < instances.size(); i++) {
+                for (size_t i = 0; i < scene->instances.size(); i++) {
                     ImGui::PushID(i);
 
-                    if (ImGui::Selectable("", selected_instance == i,
+                    if (ImGui::Selectable("", scene->selected_instance == i,
                                           ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
                                           ImVec2(0.0, ImGui::GetFrameHeight()))) {
-                        selected_instance = i;
+                        scene->selected_instance = i;
                     }
 
                     ImGui::SameLine();
-                    ImGui::InputText("##name", &instances[i].name);
+                    ImGui::InputText("##name", &scene->instances[i].name);
                     if (ImGui::IsItemClicked()) {
-                        selected_instance = i;
+                        scene->selected_instance = i;
                     }
 
                     ImGui::SameLine();
                     if (ImGui::Button("X")) {
-                        if (selected_instance == i) selected_instance = -1;
-                        instances.erase(instances.begin() + i);
-                        for (auto& m : models) {
+                        if (scene->selected_instance == i) scene->selected_instance = -1;
+                        scene->instances.erase(scene->instances.begin() + i);
+                        for (auto& m : scene->models) {
                             std::erase_if(m.instances, [&](auto& instance) -> bool {
                                 if (instance > i) {
                                     instance--;
@@ -804,7 +639,7 @@ int main(int argc, char** argv) {
                         continue;
                     }
 
-                    instances[i].update_transform(transforms[engine::get_current_frame()] + transforms_count);
+                    scene->instances[i].update_transform(transforms[engine::get_current_frame()] + transforms_count);
                     transforms_count++;
 
                     ImGui::PopID();
@@ -813,15 +648,17 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             if (ImGui::Begin("Models")) {
-                for (size_t i = 0; i < models.size(); i++) {
-                    auto& model = models[i];
+                for (size_t i = 0; i < scene->models.size(); i++) {
+                    auto& model = scene->models[i];
                     ImGui::PushID(model.gpu_group.data.address());
 
                     ImGuiID id = ImGui::GetID("##node");
                     auto* storage = ImGui::GetCurrentWindow()->DC.StateStorage;
                     bool open = storage->GetBool(id, false);
                     bool pressed = ImGui::Selectable(
-                        "##node", selected_instance != -1 && instances[selected_instance].model_ix == i, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                        "##node",
+                        scene->selected_instance != -1 && scene->instances[scene->selected_instance].model_ix == i,
+                        ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
                         ImVec2(0.0, ImGui::GetFrameHeight()));
                     if (pressed) {
                         open = !open;
@@ -833,17 +670,18 @@ int main(int argc, char** argv) {
 
                     ImGui::SameLine();
                     if (ImGui::Button("+")) {
-                        instances.emplace_back(i, std::format("{} #{}", model.name, model.last_instance_id++));
-                        model.instances.emplace_back(instances.size() - 1);
+                        scene->instances.emplace_back(i, std::format("{} #{}", model.name, model.last_instance_id++));
+                        model.instances.emplace_back(scene->instances.size() - 1);
                     }
 
                     ImGui::SameLine();
                     if (ImGui::Button("X")) {
-                        models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight].emplace_back(
-                            model);
+                        scene->models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight]
+                            .emplace_back(model);
 
-                        if (selected_instance != -1 && instances[selected_instance].model_ix == i) selected_instance = -1;
-                        std::erase_if(instances, [&](auto& instance) -> bool {
+                        if (scene->selected_instance != -1 && scene->instances[scene->selected_instance].model_ix == i)
+                            scene->selected_instance = -1;
+                        std::erase_if(scene->instances, [&](auto& instance) -> bool {
                             if (instance.model_ix > i) {
                                 instance.model_ix--;
                                 return false;
@@ -851,12 +689,12 @@ int main(int argc, char** argv) {
                                 return instance.model_ix == i;
                             }
                         });
-                        models.erase(models.begin() + i);
-                        for (auto& m : models) {
+                        scene->models.erase(scene->models.begin() + i);
+                        for (auto& m : scene->models) {
                             m.instances.clear();
                         }
-                        for (size_t j = 0; j < instances.size(); j++) {
-                            models[instances[j].model_ix].instances.emplace_back(j);
+                        for (size_t j = 0; j < scene->instances.size(); j++) {
+                            scene->models[scene->instances[j].model_ix].instances.emplace_back(j);
                         }
                         i--;
                         ImGui::PopID();
@@ -876,55 +714,47 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if (ImGui::Begin("Scenes")) {
-                std::erase_if(scenes, [&](auto& scene) {
-                    ImGui::PushID(scene.gpu_group.data.address());
+            if (ImGui::Begin("Scenes", nullptr)) {
+                if (ImGui::Button("+")) {
+                    scene_count++;
+                    scenes.emplace_back(std::format("Scene {}", scene_count));
+                    scene = &scenes[current_scene];
+                }
 
-                    bool open = ImGui::TreeNodeEx("##node",
-                                                  ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanLabelWidth);
+                for (size_t i = 0; i < scenes.size(); i++) {
+                    ImGui::PushID(i);
+
+                    if (ImGui::Selectable("", &scenes[i] == scene,
+                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
+                        scene = &scenes[i];
+                    }
 
                     ImGui::SameLine();
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 5);
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                    ImGui::InputText("##name", &scene.name);
+                    if (ImGui::Button("X") && scenes.size() != 1) {
+                        if (current_scene == i) current_scene = i - 1;
+                        else if (current_scene > i) current_scene--;
+                        current_scene = std::min<size_t>(0, current_scene);
 
-                    ImGui::SameLine();
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 2);
-                    if (ImGui::Button("Unload")) {
-                        scene.destroy();
+                        scene->destroy();
+                        scenes.erase(scenes.begin() + i);
+                        i--;
 
-                        if (open) ImGui::TreePop();
+                        scene = &scenes[current_scene];
                         ImGui::PopID();
-                        return true;
+                        continue;
                     }
 
-                    if (open) {
-                        ImGui::DragFloat3("XYZ", glm::value_ptr(scene.translate), 0.1f, 0.0f, 0.0f, "%.2f");
-
-                        ImGui::DragFloat("yaw", &scene.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-                        ImGui::DragFloat("pitch", &scene.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-                        ImGui::DragFloat("roll", &scene.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
-
-                        ImGui::DragFloat3("scale", glm::value_ptr(scene.scale), 0.1f, 0.0f, 0.0f, "%.2f");
-
-                        scene.transform = glm::translate(glm::identity<glm::mat4>(), scene.translate) *
-                                          glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(),
-                                                                              scene.rotate.x, glm::vec3{0, 1, 0}),
-                                                                  scene.rotate.y, glm::vec3{1, 0, 0}),
-                                                      scene.rotate.z, glm::vec3{0, 0, 1}) *
-                                          glm::scale(glm::identity<glm::mat4>(), scene.scale);
-
-                        ImGui::TreePop();
-                    }
+                    ImGui::SameLine();
+                    ImGui::InputText("##name", &scenes[i].name);
 
                     ImGui::PopID();
-                    return false;
-                });
+                }
             }
             ImGui::End();
 
-            if (ImGui::Begin("Transformation") && selected_instance != -1) {
-                auto& instance = instances[selected_instance];
+            if (ImGui::Begin("Transformation") && scene->selected_instance != -1) {
+                auto& instance = scene->instances[scene->selected_instance];
 
                 ImGui::InputText("name: ", &instance.name);
 
@@ -936,7 +766,7 @@ int main(int argc, char** argv) {
 
                 ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
 
-                instance.update_transform(transforms[engine::get_current_frame()] + selected_instance);
+                instance.update_transform(transforms[engine::get_current_frame()] + scene->selected_instance);
             }
             ImGui::End();
 
@@ -963,7 +793,8 @@ int main(int argc, char** argv) {
             engine::prepare_draw();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
-                !model_barrier_applied || !scene_indirect_buffer_barrier_applied || !game_window_barrier_applied) {
+                !model_barrier_applied /* || !scene_indirect_buffer_barrier_applied */ ||
+                !game_window_barrier_applied) {
                 engine::synchronization::begin_barriers();
                 if (!visbuffer_barriers_applied) {
                     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -991,12 +822,11 @@ int main(int argc, char** argv) {
 
                     model_barrier_applied = true;
                 }
-                if (!scene_indirect_buffer_barrier_applied) {
-                    engine::synchronization::apply_barrier(scene_indirect_buffer_barrier);
-
-                    scene_indirect_buffer_barrier_applied = true;
-                }
-
+                // if (!scene_indirect_buffer_barrier_applied) {
+                //     engine::synchronization::apply_barrier(scene_indirect_buffer_barrier);
+                //
+                //     scene_indirect_buffer_barrier_applied = true;
+                // }
                 if (!game_window_barrier_applied && !skip_game_window) {
                     engine::synchronization::apply_barrier(game_window_barrier);
 
@@ -1060,7 +890,7 @@ int main(int argc, char** argv) {
 
             engine::culling::bind_flatten();
             uint transform_ix = 0;
-            for (auto& model : models) {
+            for (auto& model : scene->models) {
                 if (!engine::transport::is_ready(model.timeline)) continue;
 
                 for (const auto& instance_ix : model.instances) {
@@ -1071,12 +901,12 @@ int main(int argc, char** argv) {
                 }
             }
 
-            for (auto& scene : scenes) {
-                if (!engine::transport::is_ready(scene.timeline)) continue;
-
-                engine::culling::flatten(scene.gpu_group.data.address(), scene.gpu_data.draw_count,
-                                         scene.gpu_data.draw_indirect.address(), scene.gpu_group.data.address(), 0);
-            }
+            // for (auto& scene : scenes) {
+            //     if (!engine::transport::is_ready(scene.timeline)) continue;
+            //
+            //     engine::culling::flatten(scene.gpu_group.data.address(), scene.gpu_data.draw_count,
+            //                              scene.gpu_data.draw_indirect.address(), scene.gpu_group.data.address(), 0);
+            // }
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
@@ -1347,10 +1177,10 @@ int main(int argc, char** argv) {
         }
 
     end_of_frame:
-        for (auto& model : models_to_destroy[engine::get_current_frame()]) {
+        for (auto& model : scene->models_to_destroy[engine::get_current_frame()]) {
             model.destroy();
         }
-        models_to_destroy[engine::get_current_frame()].clear();
+        scene->models_to_destroy[engine::get_current_frame()].clear();
 
         if (engine::next_frame()) {
             for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -1385,17 +1215,8 @@ int main(int argc, char** argv) {
 
     NFD_Quit();
 
-    for (auto& model : models) {
-        model.destroy();
-    }
-    for (auto& models : models_to_destroy) {
-        for (auto& model : models) {
-            model.destroy();
-        }
-    }
-
-    for (auto& scene : scenes) {
-        scene.destroy();
+    for (auto& s : scenes) {
+        s.destroy();
     }
 
     visbuffer_raster_pipeline.destroy();

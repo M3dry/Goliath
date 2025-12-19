@@ -1,0 +1,63 @@
+#include "project.hpp"
+
+#include <filesystem>
+#include <nlohmann/json.hpp>
+
+#include <fstream>
+
+namespace project {
+    std::filesystem::path project_root;
+    std::filesystem::path models_directory;
+    std::filesystem::path models_registry;
+    std::filesystem::path textures_directory;
+    std::filesystem::path textures_registry;
+    std::filesystem::path scenes_file;
+
+    void parse(const std::filesystem::path& json_file) {
+        std::ifstream i{json_file};
+        nlohmann::json j = nlohmann::json::parse(i);
+
+        models_directory = project_root / std::filesystem::path{j["models_directory"]};
+        models_registry = project_root / std::filesystem::path{j["models_registry"]};
+        textures_directory = project_root / std::filesystem::path{j["textures_directory"]};
+        textures_registry = project_root / std::filesystem::path{j["textures_registry"]};
+        scenes_file = project_root / std::filesystem::path{j["scenes"]};
+    }
+
+    bool find_project() {
+        std::filesystem::path current = std::filesystem::current_path();
+
+        while (true) {
+            std::filesystem::path project_file = current / "goliath.json";
+
+            if (std::filesystem::exists(project_file)) {
+                project_root = current;
+                parse(project_file);
+                return true;
+            }
+
+            std::filesystem::path parent = current.parent_path();
+            if (parent == current) break;
+            current = parent;
+        }
+
+        return false;
+    }
+
+    void init() {
+        std::ofstream o{"./goliath.json"};
+        o << nlohmann::json{
+            {"models_directory", "./assets/models"},
+            {"models_registry", "./assets/models.reg"},
+            {"textures_directory", "./assets/textures"},
+            {"textures_registry", "./assets/textures.reg"},
+            {"scenes", "./scenes.json"},
+        };
+
+        std::filesystem::create_directory("./assets");
+        std::filesystem::create_directory("./assets/models");
+        std::filesystem::create_directory("./assets/textures");
+
+        o.flush();
+    }
+}
