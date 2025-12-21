@@ -134,7 +134,8 @@ namespace engine {
         if (builder._img_data != nullptr) {
             transport::upload(&barrier, builder._img_data, builder._size, builder._width, builder._height,
                               builder._image_info.format, gpu_img.image);
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors disappear thanks to this
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors
+                                                           // disappear thanks to this
         } else {
             barrier.image = gpu_img.image;
             barrier.srcQueueFamilyIndex = graphics_queue_family;
@@ -210,5 +211,44 @@ namespace engine {
 
     void Sampler::destroy(VkSampler sampler) {
         vkDestroySampler(device, sampler, nullptr);
+    }
+
+    void to_json(nlohmann::json& j, const Sampler& sampler) {
+        j = nlohmann::json{
+            {"addr_u", sampler._info.addressModeU},
+            {"addr_v", sampler._info.addressModeV},
+            {"addr_w", sampler._info.addressModeW},
+            {"mipmap", sampler._info.mipmapMode},
+            {"anisotropy", sampler._info.anisotropyEnable},
+            {"compare", sampler._info.compareEnable ? std::make_optional(sampler._info.compareOp) : std::nullopt},
+            {"border", sampler._info.borderColor},
+            {"min_filter", sampler._info.minFilter},
+            {"mag_filter", sampler._info.magFilter},
+            {"unnormalized_coords", sampler._info.unnormalizedCoordinates},
+            {"max_lod", sampler._info.maxLod},
+            {"min_lod", sampler._info.minLod},
+            {"mip_lod_bias", sampler._info.mipLodBias},
+        };
+    }
+
+    void from_json(const nlohmann::json& j, Sampler& sampler) {
+        sampler = Sampler{};
+        j["addr_u"].get_to(sampler._info.addressModeU);
+        j["addr_v"].get_to(sampler._info.addressModeV);
+        j["addr_w"].get_to(sampler._info.addressModeW);
+        j["mipmap"].get_to(sampler._info.mipmapMode);
+        j["anisotropy"].get_to(sampler._info.anisotropyEnable);
+        if (j["compare"].is_null()) {
+            sampler._info.compareEnable = false;
+        } else {
+            j["compare"].get_to(sampler._info.compareOp);
+        }
+        j["border"].get_to(sampler._info.borderColor);
+        j["min_filter"].get_to(sampler._info.minFilter);
+        j["mag_filter"].get_to(sampler._info.magFilter);
+        j["unnormalized_coords"].get_to(sampler._info.unnormalizedCoordinates);
+        j["max_lod"].get_to(sampler._info.maxLod);
+        j["min_lod"].get_to(sampler._info.minLod);
+        j["mip_lod_bias"].get_to(sampler._info.mipLodBias);
     }
 }

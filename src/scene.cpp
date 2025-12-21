@@ -94,7 +94,7 @@ void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
         assert(offset < size);
 
         if (model_type == 0) {
-            Model::load_optimized(&out->models[i], data);
+            Model::load_optimized(out->models[i], {data, size});
         } else if (model_type == 1) {
             uint32_t file_size;
             auto file = engine::util::read_file((const char*)(data + offset), &file_size);

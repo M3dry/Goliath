@@ -18,6 +18,23 @@
 
 #include "stb_image.h"
 
+struct JsonModelEntry {
+    std::string name;
+    std::filesystem::path path;
+};
+
+void to_json(nlohmann::json& j, const JsonModelEntry& entry) {
+    j = nlohmann::json{
+        {"name", entry.name},
+        {"path", entry.path},
+    };
+}
+
+void from_json(const nlohmann::json& j, JsonModelEntry& entry) {
+    j["name"].get_to(entry.name);
+    j["path"].get_to(entry.path);
+}
+
 namespace engine::texture_registry {
     uint32_t get_texture_store_size(uint32_t gid);
     void serialize_texture(uint8_t* out, uint32_t gid);
@@ -237,9 +254,11 @@ namespace engine::texture_registry {
                         VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                     synchronization::apply_barrier(barrier);
 
-                    free(blobs[task.gid].first);
-                    blobs[task.gid].first = nullptr;
-                    blobs[task.gid].second = 0;
+                    if (!paths[task.gid].empty()) {
+                        free(blobs[task.gid].first);
+                        blobs[task.gid].first = nullptr;
+                        blobs[task.gid].second = 0;
+                    }
                 }
             }
             finish_timeline = transport::end();
@@ -308,7 +327,7 @@ namespace engine::texture_registry {
         std::memcpy(&sampler_count, file_data + off, sizeof(uint32_t));
         off += sizeof(uint32_t);
 
-        for (uint32_t gid = 0; gid < texture_count; gid++) {
+        for (uint32_t i = 0; i < texture_count; i++) {
             uint32_t texture_offset;
             std::memcpy(&texture_offset, file_data + off, sizeof(uint32_t));
             off += sizeof(uint32_t);
@@ -317,18 +336,19 @@ namespace engine::texture_registry {
         }
     }
 
-    uint8_t* save(uint32_t* size) {
-        uint32_t texture_count = names.size();
+    uint8_t* save(uint32_t& size) {
+        uint32_t texture_count = names.size() - 1;
         uint32_t sampler_count = sampler_prototypes.size();
 
         uint32_t header_size = sizeof(uint32_t) + texture_count * sizeof(uint32_t) + sizeof(uint32_t) +
                                sampler_count * sizeof(VkSamplerCreateInfo);
         uint32_t total_size = header_size;
 
-        for (uint32_t gid = 0; gid < texture_count; gid++) {
+        for (uint32_t gid = 1; gid <= texture_count; gid++) {
             total_size += get_texture_store_size(gid);
         }
 
+        size = total_size;
         uint8_t* out = (uint8_t*)malloc(total_size);
         uint32_t off = 0;
 
@@ -339,7 +359,7 @@ namespace engine::texture_registry {
         off += sizeof(uint32_t);
 
         uint32_t texture_offset = header_size;
-        for (uint32_t gid = 0; gid < texture_count; gid++) {
+        for (uint32_t gid = 1; gid <= texture_count; gid++) {
             std::memcpy(out + off, &texture_offset, sizeof(uint32_t));
 
             serialize_texture(out + texture_offset, gid);

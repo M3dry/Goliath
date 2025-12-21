@@ -1,5 +1,3 @@
-#include "models.hpp"
-#include "project.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
@@ -12,7 +10,6 @@
 #include "goliath/model.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
-#include "goliath/scene.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/texture_registry.hpp"
@@ -21,10 +18,14 @@
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
-#include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
+#include "models.hpp"
+#include "project.hpp"
 #include "scene.hpp"
+#include "ui.hpp"
 #include <GLFW/glfw3.h>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -49,6 +50,7 @@
 #endif
 
 #include <nfd_glfw3.h>
+
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
                   uint32_t frames_in_flight) {
@@ -105,140 +107,140 @@ struct PBRShadingSet {
     glm::mat4 view_proj_matrix;
 };
 
-struct Model {
-    enum DataType {
-        GLTF,
-        GLB,
-        GOM,
-    };
-
-    uint64_t last_instance_id = 0;
-
-    std::string name;
-    std::filesystem::path filepath;
-    bool embed_optimized = false;
-
-    uint64_t timeline;
-    engine::Model cpu_data;
-    engine::GPUModel gpu_data;
-    engine::Buffer indirect_draw_buffer;
-    engine::GPUGroup gpu_group;
-
-    std::vector<size_t> instances{};
-
-    engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size,
-                            VkBufferMemoryBarrier2* barrier) {
-        engine::Model::Err err;
-        if (type == GOM) {
-            engine::Model::load_optimized(&cpu_data, data);
-            err = engine::Model::Ok;
-        } else if (type == GLTF) {
-            err = engine::Model::load_gltf(&cpu_data, {data, size}, cwd);
-        } else if (type == GLB) {
-            err = engine::Model::load_glb(&cpu_data, {data, size}, cwd);
-        } else {
-            err = engine::Model::InvalidFormat;
-        }
-
-        if (err != engine::Model::Ok) {
-            return err;
-        }
-
-        engine::gpu_group::begin();
-        auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
-        gpu_data = _gpu_data;
-        indirect_draw_buffer = _indirect_draw_buffer;
-        gpu_group = engine::gpu_group::end(barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
-
-        return engine::Model::Ok;
-    }
-
-    void destroy() {
-        cpu_data.destroy();
-        gpu_group.destroy();
-        indirect_draw_buffer.destroy();
-    }
-};
-
-struct Instance {
-    size_t model_ix;
-    std::string name;
-
-    glm::vec3 translate{0.0f};
-    glm::vec3 rotate{0.0f};
-    glm::vec3 scale{1.0f};
-
-    void update_transform(glm::mat4* transform) const {
-        *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
-                     glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
-                                             rotate.y, glm::vec3{1, 0, 0}),
-                                 rotate.z, glm::vec3{0, 0, 1}) *
-                     glm::scale(glm::identity<glm::mat4>(), scale);
-    }
-};
-
-struct Scene {
-    std::string name;
-
-    std::vector<Model> models{};
-    std::array<std::vector<Model>, engine::frames_in_flight> models_to_destroy{};
-    std::vector<Instance> instances{};
-    size_t selected_instance = -1;
-
-    static std::vector<Scene> init(size_t& current_scene) {
-        return {};
-    }
-
-    void save() {}
-
-    void load_models() {}
-
-    void unload_models() {}
-
-    void add_model(std::filesystem::path path, VkBufferMemoryBarrier2* barrier, uint64_t timeline_value) {
-        uint32_t size;
-        auto* file = engine::util::read_file(path, &size);
-
-        auto extension = path.extension();
-        barrier->dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-        barrier->dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-        Model::DataType type;
-        if (extension == ".glb") {
-            type = Model::GLB;
-        } else if (extension == ".gltf") {
-            type = Model::GLTF;
-        } else if (extension == ".gom") {
-            type = Model::GOM;
-        } else {
-            assert(false && "Wrong filetype");
-        }
-
-        models.emplace_back();
-        models.back().name = path.stem();
-        models.back().filepath = std::move(path);
-        models.back().timeline = timeline_value;
-
-        auto& model = models.back();
-        auto err = model.load(models.back().filepath.parent_path(), type, file, size, barrier);
-        if (err != engine::Model::Ok) {
-            printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
-            assert(false);
-        }
-
-        free(file);
-    }
-
-    void destroy() {
-        for (auto& model : models) {
-            model.destroy();
-        }
-        for (auto& models : models_to_destroy) {
-            for (auto& model : models) {
-                model.destroy();
-            }
-        }
-    }
-};
+// struct Model {
+//     enum DataType {
+//         GLTF,
+//         GLB,
+//         GOM,
+//     };
+//
+//     uint64_t last_instance_id = 0;
+//
+//     std::string name;
+//     std::filesystem::path filepath;
+//     bool embed_optimized = false;
+//
+//     uint64_t timeline;
+//     engine::Model cpu_data;
+//     engine::GPUModel gpu_data;
+//     engine::Buffer indirect_draw_buffer;
+//     engine::GPUGroup gpu_group;
+//
+//     std::vector<size_t> instances{};
+//
+//     engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size,
+//                             VkBufferMemoryBarrier2* barrier) {
+//         engine::Model::Err err;
+//         if (type == GOM) {
+//             engine::Model::load_optimized(cpu_data, {data, size});
+//             err = engine::Model::Ok;
+//         } else if (type == GLTF) {
+//             err = engine::Model::load_gltf(&cpu_data, {data, size}, cwd);
+//         } else if (type == GLB) {
+//             err = engine::Model::load_glb(&cpu_data, {data, size}, cwd);
+//         } else {
+//             err = engine::Model::InvalidFormat;
+//         }
+//
+//         if (err != engine::Model::Ok) {
+//             return err;
+//         }
+//
+//         engine::gpu_group::begin();
+//         auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
+//         gpu_data = _gpu_data;
+//         indirect_draw_buffer = _indirect_draw_buffer;
+//         gpu_group = engine::gpu_group::end(barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
+//
+//         return engine::Model::Ok;
+//     }
+//
+//     void destroy() {
+//         cpu_data.destroy();
+//         gpu_group.destroy();
+//         indirect_draw_buffer.destroy();
+//     }
+// };
+//
+// struct Instance {
+//     size_t model_ix;
+//     std::string name;
+//
+//     glm::vec3 translate{0.0f};
+//     glm::vec3 rotate{0.0f};
+//     glm::vec3 scale{1.0f};
+//
+//     void update_transform(glm::mat4* transform) const {
+//         *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
+//                      glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
+//                                              rotate.y, glm::vec3{1, 0, 0}),
+//                                  rotate.z, glm::vec3{0, 0, 1}) *
+//                      glm::scale(glm::identity<glm::mat4>(), scale);
+//     }
+// };
+//
+// struct Scene {
+//     std::string name;
+//
+//     std::vector<Model> models{};
+//     std::array<std::vector<Model>, engine::frames_in_flight> models_to_destroy{};
+//     std::vector<Instance> instances{};
+//     size_t selected_instance = -1;
+//
+//     static std::vector<Scene> init(size_t& current_scene) {
+//         return {};
+//     }
+//
+//     void save() {}
+//
+//     void load_models() {}
+//
+//     void unload_models() {}
+//
+//     void add_model(std::filesystem::path path, VkBufferMemoryBarrier2* barrier, uint64_t timeline_value) {
+//         uint32_t size;
+//         auto* file = engine::util::read_file(path, &size);
+//
+//         auto extension = path.extension();
+//         barrier->dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+//         barrier->dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+//         Model::DataType type;
+//         if (extension == ".glb") {
+//             type = Model::GLB;
+//         } else if (extension == ".gltf") {
+//             type = Model::GLTF;
+//         } else if (extension == ".gom") {
+//             type = Model::GOM;
+//         } else {
+//             assert(false && "Wrong filetype");
+//         }
+//
+//         models.emplace_back();
+//         models.back().name = path.stem();
+//         models.back().filepath = std::move(path);
+//         models.back().timeline = timeline_value;
+//
+//         auto& model = models.back();
+//         auto err = model.load(models.back().filepath.parent_path(), type, file, size, barrier);
+//         if (err != engine::Model::Ok) {
+//             printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
+//             assert(false);
+//         }
+//
+//         free(file);
+//     }
+//
+//     void destroy() {
+//         for (auto& model : models) {
+//             model.destroy();
+//         }
+//         for (auto& models : models_to_destroy) {
+//             for (auto& model : models) {
+//                 model.destroy();
+//             }
+//         }
+//     }
+// };
 
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
@@ -253,15 +255,31 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(project::project_root);
 
     engine::init("Goliath editor", 1000, false);
-
-    bool model_parse_error = false;
-    models::init(project::models_registry, &model_parse_error);
-    if (model_parse_error) {
-        printf("Models weren't loaded");
-        return 0;
+    uint32_t tex_reg_size;
+    auto* tex_reg_data = engine::util::read_file(project::textures_registry, &tex_reg_size);
+    if (tex_reg_data != nullptr) {
+        engine::texture_registry::load(tex_reg_data, tex_reg_size);
+    } else {
+        printf("NOTE: texture registry file doesn't exist\n");
     }
 
-    auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
+    auto models_registry_json = engine::util::read_json(project::models_registry);
+    if (models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
+        !std::filesystem::exists(project::models_registry)) {
+        models_registry_json = nlohmann::json::array();
+    } else if (!models_registry_json.has_value()) {
+        printf("Models weren't loaded\n");
+        return 0;
+    }
+    models::init(*models_registry_json);
+
+    // auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
+    // std::ofstream models_save_file{project::models_registry};
+    // models_save_file << models::save();
+    //
+    // uint32_t tex_reg_save_size;
+    // auto* tex_reg_save = engine::texture_registry::save(tex_reg_save_size);
+    // engine::util::save_file(project::textures_registry, tex_reg_save, tex_reg_save_size);
 
     bool scene_parse_error = false;
     scene::load(project::scenes_file, &scene_parse_error);
@@ -270,15 +288,17 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    scene::selected_scene().acquire();
+
     size_t scene_count = 0;
     size_t current_scene = -1;
-    std::vector<Scene> scenes = Scene::init(current_scene);
-    if (scenes.size() == 0 || current_scene == -1) {
-        scenes.emplace_back("Default");
-        scene_count++;
-        current_scene = scenes.size() - 1;
-    }
-    Scene* scene = &scenes[current_scene];
+    // std::vector<Scene> scenes = Scene::init(current_scene);
+    // if (scenes.size() == 0 || current_scene == -1) {
+    //     scenes.emplace_back("Default");
+    //     scene_count++;
+    //     current_scene = scenes.size() - 1;
+    // }
+    // Scene* scene = &scenes[current_scene];
 
     NFD_Init();
     engine::culling::init(8192);
@@ -452,6 +472,11 @@ int main(int argc, char** argv) {
     double accum = 0;
     double last_time = glfwGetTime();
 
+    std::string models_query{};
+    models::gid models_selected{};
+    models_selected.generation = -1;
+    models_selected.id = -1;
+
     bool done = false;
     uint64_t update_count = 0;
     while (!glfwWindowShouldClose(engine::window)) {
@@ -566,207 +591,62 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             if (ImGui::BeginMainMenuBar()) {
-                if (ImGui::BeginMenu("File")) {
-                    if (ImGui::MenuItem("Add model")) {
-                        nfdu8filteritem_t filters[1] = {
-                            {"Model files", "gltf,glb,gom"},
-                        };
-                        auto current_path = std::filesystem::current_path();
-                        nfdopendialogu8args_t args{};
-                        args.filterCount = 1;
-                        args.filterList = filters;
-                        args.defaultPath = current_path.c_str();
-                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-
-                        const nfdpathset_t* paths;
-                        auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
-                        if (res == NFD_OKAY) {
-                            nfdpathsetenum_t enumerator;
-                            NFD_PathSet_GetEnum(paths, &enumerator);
-
-                            nfdchar_t* path;
-                            std::size_t i = 0;
-
-                            auto timeline_value = engine::transport::begin();
-                            while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                                scene->add_model(path, &model_barrier, timeline_value);
-                                NFD_PathSet_FreePath(path);
-                            }
-                            engine::transport::end();
-
-                            NFD_PathSet_FreeEnum(&enumerator);
-                            NFD_PathSet_Free(paths);
-                        }
-                    }
-                    ImGui::EndMenu();
-                }
+                // if (ImGui::BeginMenu("File")) {
+                //     if (ImGui::MenuItem("Add model")) {
+                //         nfdu8filteritem_t filters[1] = {
+                //             {"Model files", "gltf,glb,gom"},
+                //         };
+                //         auto current_path = std::filesystem::current_path();
+                //         nfdopendialogu8args_t args{};
+                //         args.filterCount = 1;
+                //         args.filterList = filters;
+                //         args.defaultPath = current_path.c_str();
+                //         NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+                //
+                //         const nfdpathset_t* paths;
+                //         auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
+                //         if (res == NFD_OKAY) {
+                //             nfdpathsetenum_t enumerator;
+                //             NFD_PathSet_GetEnum(paths, &enumerator);
+                //
+                //             nfdchar_t* path;
+                //             std::size_t i = 0;
+                //
+                //             auto timeline_value = engine::transport::begin();
+                //             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
+                //                 scene->add_model(path, &model_barrier, timeline_value);
+                //                 NFD_PathSet_FreePath(path);
+                //             }
+                //             engine::transport::end();
+                //
+                //             NFD_PathSet_FreeEnum(&enumerator);
+                //             NFD_PathSet_Free(paths);
+                //         }
+                //     }
+                //     ImGui::EndMenu();
+                // }
             }
             ImGui::EndMainMenuBar();
 
-            uint32_t transforms_count = 0;
+            transforms[engine::get_current_frame()][0] = glm::identity<glm::mat4>();
+
             if (ImGui::Begin("Instances")) {
-                for (size_t i = 0; i < scene->instances.size(); i++) {
-                    ImGui::PushID(i);
-
-                    if (ImGui::Selectable("", scene->selected_instance == i,
-                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
-                        scene->selected_instance = i;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::InputText("##name", &scene->instances[i].name);
-                    if (ImGui::IsItemClicked()) {
-                        scene->selected_instance = i;
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("X")) {
-                        if (scene->selected_instance == i) scene->selected_instance = -1;
-                        scene->instances.erase(scene->instances.begin() + i);
-                        for (auto& m : scene->models) {
-                            std::erase_if(m.instances, [&](auto& instance) -> bool {
-                                if (instance > i) {
-                                    instance--;
-                                    return false;
-                                } else {
-                                    return instance == i;
-                                }
-                            });
-                        }
-                        i--;
-                        ImGui::PopID();
-                        continue;
-                    }
-
-                    scene->instances[i].update_transform(transforms[engine::get_current_frame()] + transforms_count);
-                    transforms_count++;
-
-                    ImGui::PopID();
-                }
+                ui::instances_pane(transforms[engine::get_current_frame()]);
             }
             ImGui::End();
 
             if (ImGui::Begin("Models")) {
-                for (size_t i = 0; i < scene->models.size(); i++) {
-                    auto& model = scene->models[i];
-                    ImGui::PushID(model.gpu_group.data.address());
-
-                    ImGuiID id = ImGui::GetID("##node");
-                    auto* storage = ImGui::GetCurrentWindow()->DC.StateStorage;
-                    bool open = storage->GetBool(id, false);
-                    bool pressed = ImGui::Selectable(
-                        "##node",
-                        scene->selected_instance != -1 && scene->instances[scene->selected_instance].model_ix == i,
-                        ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                        ImVec2(0.0, ImGui::GetFrameHeight()));
-                    if (pressed) {
-                        open = !open;
-                        storage->SetBool(id, open);
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::InputText("##name", &model.name);
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("+")) {
-                        scene->instances.emplace_back(i, std::format("{} #{}", model.name, model.last_instance_id++));
-                        model.instances.emplace_back(scene->instances.size() - 1);
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("X")) {
-                        scene->models_to_destroy[(engine::get_current_frame() - 1) % engine::frames_in_flight]
-                            .emplace_back(model);
-
-                        if (scene->selected_instance != -1 && scene->instances[scene->selected_instance].model_ix == i)
-                            scene->selected_instance = -1;
-                        std::erase_if(scene->instances, [&](auto& instance) -> bool {
-                            if (instance.model_ix > i) {
-                                instance.model_ix--;
-                                return false;
-                            } else {
-                                return instance.model_ix == i;
-                            }
-                        });
-                        scene->models.erase(scene->models.begin() + i);
-                        for (auto& m : scene->models) {
-                            m.instances.clear();
-                        }
-                        for (size_t j = 0; j < scene->instances.size(); j++) {
-                            scene->models[scene->instances[j].model_ix].instances.emplace_back(j);
-                        }
-                        i--;
-                        ImGui::PopID();
-                        continue;
-                    }
-
-                    if (open) {
-                        ImGui::Indent();
-                        ImGui::TextWrapped("file path: %s", model.filepath.c_str());
-                        ImGui::Checkbox("Embed", &model.embed_optimized);
-
-                        ImGui::Unindent();
-                    }
-
-                    ImGui::PopID();
-                }
+                ui::models_pane();
             }
             ImGui::End();
 
             if (ImGui::Begin("Scenes", nullptr)) {
-                if (ImGui::Button("+")) {
-                    scene_count++;
-                    scenes.emplace_back(std::format("Scene {}", scene_count));
-                    scene = &scenes[current_scene];
-                }
-
-                for (size_t i = 0; i < scenes.size(); i++) {
-                    ImGui::PushID(i);
-
-                    if (ImGui::Selectable("", &scenes[i] == scene,
-                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
-                        scene = &scenes[i];
-                    }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("X") && scenes.size() != 1) {
-                        if (current_scene == i) current_scene = i - 1;
-                        else if (current_scene > i) current_scene--;
-                        current_scene = std::min<size_t>(0, current_scene);
-
-                        scene->destroy();
-                        scenes.erase(scenes.begin() + i);
-                        i--;
-
-                        scene = &scenes[current_scene];
-                        ImGui::PopID();
-                        continue;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::InputText("##name", &scenes[i].name);
-
-                    ImGui::PopID();
-                }
+                ui::scene_pane();
             }
             ImGui::End();
 
-            if (ImGui::Begin("Transformation") && scene->selected_instance != -1) {
-                auto& instance = scene->instances[scene->selected_instance];
-
-                ImGui::InputText("name: ", &instance.name);
-
-                ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
-
-                ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-                ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-                ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
-
-                ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
-
-                instance.update_transform(transforms[engine::get_current_frame()] + scene->selected_instance);
+            if (ImGui::Begin("Transformation")) {
+                ui::transform_pane(transforms[engine::get_current_frame()]);
             }
             ImGui::End();
 
@@ -791,6 +671,7 @@ int main(int argc, char** argv) {
             engine::imgui::end();
 
             engine::prepare_draw();
+            models::process_uploads();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
                 !model_barrier_applied /* || !scene_indirect_buffer_barrier_applied */ ||
@@ -843,10 +724,10 @@ int main(int argc, char** argv) {
             transform_barrier.dstStageMask =
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
-            if (transforms_count != 0) {
+            if (scene::selected_scene().instances.size() != 0) {
                 engine::transport::begin();
                 engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()],
-                                          transforms_count * sizeof(glm::mat4), transform_buffer.data(), 0);
+                                          scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer.data(), 0);
                 auto timeline_wait = engine::transport::end();
 
                 engine::synchronization::begin_barriers();
@@ -889,24 +770,18 @@ int main(int argc, char** argv) {
             }
 
             engine::culling::bind_flatten();
-            uint transform_ix = 0;
-            for (auto& model : scene->models) {
-                if (!engine::transport::is_ready(model.timeline)) continue;
+            auto curr_scene = scene::selected_scene();
+            uint32_t transform_ix = 0;
+            for (auto i = 0; i < curr_scene.used_models.size(); i++) {
+                auto mgid = curr_scene.used_models[i];
+                if (*models::is_loaded(mgid) != models::LoadState::OnGPU) continue;
 
-                for (const auto& instance_ix : model.instances) {
-                    engine::culling::flatten(model.gpu_group.data.address(), model.gpu_data.mesh_count,
-                                             model.indirect_draw_buffer.address(), transform_buffer.address(),
-                                             instance_ix * sizeof(glm::mat4));
+                for (const auto& _ : curr_scene.instances_of_used_models[i]) {
+                    auto res = engine::culling::flatten(mgid, transform_buffer.address(), transform_ix * sizeof(glm::mat4));
+
                     transform_ix++;
                 }
             }
-
-            // for (auto& scene : scenes) {
-            //     if (!engine::transport::is_ready(scene.timeline)) continue;
-            //
-            //     engine::culling::flatten(scene.gpu_group.data.address(), scene.gpu_data.draw_count,
-            //                              scene.gpu_data.draw_indirect.address(), scene.gpu_group.data.address(), 0);
-            // }
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
@@ -1177,10 +1052,10 @@ int main(int argc, char** argv) {
         }
 
     end_of_frame:
-        for (auto& model : scene->models_to_destroy[engine::get_current_frame()]) {
-            model.destroy();
-        }
-        scene->models_to_destroy[engine::get_current_frame()].clear();
+        // for (auto& model : scene->models_to_destroy[engine::get_current_frame()]) {
+        //     model.destroy();
+        // }
+        // scene->models_to_destroy[engine::get_current_frame()].clear();
 
         if (engine::next_frame()) {
             for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -1215,9 +1090,9 @@ int main(int argc, char** argv) {
 
     NFD_Quit();
 
-    for (auto& s : scenes) {
-        s.destroy();
-    }
+    // for (auto& s : scenes) {
+    //     s.destroy();
+    // }
 
     visbuffer_raster_pipeline.destroy();
     engine::destroy_shader(visbuffer_raster_fragment_module);
@@ -1258,6 +1133,10 @@ int main(int argc, char** argv) {
 
     free(depth_image_views);
     free(depth_images);
+
+    scene::selected_scene().release();
+    scene::destroy();
+    models::destroy();
 
     engine::culling::destroy();
     engine::visbuffer::destroy();

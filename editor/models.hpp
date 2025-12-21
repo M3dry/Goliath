@@ -5,9 +5,17 @@
 #include <nlohmann/json.hpp>
 
 namespace models {
+    enum struct Err {
+        BadGeneration,
+    };
+
     struct gid {
         uint8_t generation:8;
         uint32_t id:24;
+
+        bool operator==(const gid& other) const {
+            return id == other.id && generation == other.generation;
+        }
     };
 
     void to_json(nlohmann::json& j, const gid& gid);
@@ -15,7 +23,7 @@ namespace models {
 
     void process_uploads();
 
-    void init(std::filesystem::path json_file, bool* parse_error);
+    void init(const nlohmann::json& j);
     void destroy();
 
     nlohmann::json save();
@@ -23,16 +31,32 @@ namespace models {
     gid add(std::filesystem::path path, std::string name);
     bool remove(gid gid);
 
-    std::string& get_name(gid gid);
-    const std::filesystem::path& get_path(gid gid);
-    std::optional<engine::Model>& get_cpu_model(gid gid);
+    std::expected<std::string*, Err> get_name(gid gid);
+    std::expected<const std::filesystem::path*, Err> get_path(gid gid);
+    std::expected<engine::Model*, Err> get_cpu_model(gid gid);
 
     // timeline == -1 implies the model hasn't been yet uploaded to the GPU
-    uint64_t get_timeline(gid gid);
-    engine::Buffer get_draw_buffer(gid gid);
-    engine::GPUModel get_gpu_model(gid gid);
-    engine::GPUGroup get_gpu_group(gid gid);
+    std::expected<uint64_t, Err> get_timeline(gid gid);
+    std::expected<engine::Buffer, Err> get_draw_buffer(gid gid);
+    std::expected<engine::GPUModel, Err> get_gpu_model(gid gid);
+    std::expected<engine::GPUGroup, Err> get_gpu_group(gid gid);
+
+    uint8_t get_generation(uint32_t ix);
+
+    enum struct LoadState {
+        OnDisk,
+        OnCPU,
+        OnGPU,
+    };
+
+    std::expected<LoadState, Err> is_loaded(gid gid);
 
     void acquire(const gid* gids, uint32_t count);
     void release(const gid* gids, uint32_t count);
+
+    std::span<std::string> get_names();
+}
+
+namespace engine::culling {
+    std::expected<void, models::Err> flatten(models::gid gid, uint64_t transforms_addr, uint32_t default_transform_offset);
 }

@@ -10,7 +10,7 @@
 
 namespace scene {
     struct Instance {
-        size_t model_gid;
+        models::gid model_gid;
         std::string name;
 
         glm::vec3 translate{0.0f};
@@ -24,6 +24,8 @@ namespace scene {
         std::string name;
 
         std::vector<models::gid> used_models;
+        std::vector<std::vector<size_t>> instances_of_used_models;
+
         std::vector<Instance> instances{};
         size_t selected_instance = -1;
         uint32_t ref_count = 0;
@@ -31,11 +33,18 @@ namespace scene {
         void acquire();
         void release();
 
+        void destroy();
+
         void add_model(models::gid gid);
+        void add_instance(Instance instance);
+
+        void remove_instance(size_t ix);
     };
 
     void load(std::filesystem::path scenes_json, bool* parser_error);
     void save(std::filesystem::path scenes_json);
+
+    void destroy();
 
     void emplace_scene(std::string name);
     // false - couldn't remove scene since it's the only scene

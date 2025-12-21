@@ -207,7 +207,14 @@ namespace engine::transport {
         assert(transport_block);
         ring_buffer_start_index = align(ring_buffer_start_index);
 
+        assert(size <= BUFFER_SIZE && "trying to uplaod a really huge block of data (exceeds limit of 256MB)");
+
+        if (ring_buffer_start_index + size > BUFFER_SIZE) {
+            vkQueueWaitIdle(transport_queue);
+            ring_buffer_start_index = 0;
+        }
         std::memcpy(ring_buffer_data + ring_buffer_start_index, src, size);
+
         if (!coherent) {
             vmaFlushAllocation(allocator, ring_buffer_allocation, ring_buffer_start_index, size);
         }

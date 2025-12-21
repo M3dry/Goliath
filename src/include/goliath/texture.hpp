@@ -371,4 +371,7 @@ namespace engine {
 
         static void destroy(VkSampler sampler);
     };
+
+    void to_json(nlohmann::json& j, const Sampler& sampler);
+    void from_json(const nlohmann::json& j, Sampler& sampler);
 }

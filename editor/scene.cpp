@@ -70,12 +70,59 @@ namespace scene {
         ref_count--;
     }
 
+    void Scene::destroy() {
+        while (ref_count-- != 0) {
+            release();
+        }
+    }
+
     void Scene::add_model(models::gid gid) {
+        for (const auto used_gid : used_models) {
+            if (gid == used_gid) {
+                return;
+            }
+        }
         used_models.emplace_back(gid);
+        instances_of_used_models.emplace_back();
 
         auto rc = ref_count;
-        while (rc-- == 0) {
+        while (rc-- != 0) {
             models::acquire(&gid, 1);
+        }
+    }
+
+    void Scene::add_instance(Instance instance) {
+        bool model_exists = false;
+        for (size_t i = 0; i < used_models.size(); i++) {
+            if (instance.model_gid == used_models[i]) {
+                instances_of_used_models[i].emplace_back(instances.size());
+                model_exists = true;
+                break;
+            }
+        }
+
+        if (!model_exists) {
+            add_model(instance.model_gid);
+            instances_of_used_models.back().emplace_back(instances.size());
+        }
+
+        instances.emplace_back(instance);
+        selected_instance = instances.size() - 1;
+    }
+
+    void Scene::remove_instance(size_t ix) {
+        if (selected_instance == ix) selected_instance = -1;
+        instances.erase(instances.begin() + ix);
+
+        for (auto& insts : instances_of_used_models) {
+            std::erase_if(insts, [&](auto& inst_ix) {
+                if (inst_ix > ix) {
+                    inst_ix--;
+                    return false;
+                } else {
+                    return inst_ix == ix;
+                }
+            });
         }
     }
 
@@ -119,6 +166,12 @@ namespace scene {
         };
     }
 
+    void destroy() {
+        for (auto& scene : scenes) {
+            scene.destroy();
+        }
+    }
+
     void emplace_scene(std::string name) {
         scenes.emplace_back(name);
     }
@@ -126,6 +179,7 @@ namespace scene {
     // false - couldn't remove scene since it's the only scene
     bool remove_scene(size_t ix) {
         if (scenes.size() <= 1) return false;
+        scenes[ix].destroy();
         scenes.erase(scenes.begin() + ix);
 
         return true;
@@ -133,7 +187,7 @@ namespace scene {
 
     void move_to(size_t ix, size_t dest) {
         auto scene = scenes[ix];
-        remove_scene(ix);
+        scenes.erase(scenes.begin() + ix);
         scenes.insert(scenes.begin() + dest, scene);
     }
 

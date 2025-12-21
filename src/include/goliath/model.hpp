@@ -49,7 +49,7 @@ namespace engine {
     using material_id = uint16_t;
 
     struct Mesh {
-        material_id material_id = (material_id)-1;
+        material_id material_id = -1;
         uint32_t material_texture_count = 0;
         uint32_t material_data_size = 0;
         void* material_data = nullptr;
@@ -70,7 +70,7 @@ namespace engine {
 
         uint32_t get_optimized_size() const;
         void save_optimized(std::span<uint8_t> data) const;
-        static void load_optimized(Mesh* out, uint8_t* data);
+        static void load_optimized(Mesh& out, std::span<uint8_t> data);
 
         model::GPUOffset calc_offset(uint32_t start_offset, uint32_t* total_size) const;
         // returns data size it wrote to `buf`
@@ -146,7 +146,7 @@ namespace engine {
                              std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
         static Err load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir,
                             std::string* tinygltf_err = nullptr, std::string* tinygltf_warning = nullptr);
-        static void load_optimized(Model* out, uint8_t* data);
+        static void load_optimized(Model& out, std::span<uint8_t> data);
 
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {

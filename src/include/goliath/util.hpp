@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cmath>
+#include <expected>
 #include <volk.h>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 
 namespace engine {
     enum struct CompareOp {
@@ -43,6 +45,13 @@ namespace engine::util {
 
     uint8_t* read_file(const std::filesystem::path& path, uint32_t* size);
     void save_file(const std::filesystem::path& path, uint8_t* data, uint32_t size);
+
+    enum struct ReadJsonErr {
+        ParseErr,
+        FileErr,
+    };
+
+    std::expected<nlohmann::json, ReadJsonErr> read_json(const std::filesystem::path& path);
 
     // `alignment` needs to be a power of two
     uint32_t constexpr align_up(uint32_t alignment, uint32_t size) {

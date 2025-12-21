@@ -17,11 +17,11 @@ namespace project {
         std::ifstream i{json_file};
         nlohmann::json j = nlohmann::json::parse(i);
 
-        models_directory = project_root / std::filesystem::path{j["models_directory"]};
-        models_registry = project_root / std::filesystem::path{j["models_registry"]};
-        textures_directory = project_root / std::filesystem::path{j["textures_directory"]};
-        textures_registry = project_root / std::filesystem::path{j["textures_registry"]};
-        scenes_file = project_root / std::filesystem::path{j["scenes"]};
+        models_directory = std::filesystem::path{j["models_directory"]};
+        models_registry = std::filesystem::path{j["models_registry"]};
+        textures_directory = std::filesystem::path{j["textures_directory"]};
+        textures_registry = std::filesystem::path{j["textures_registry"]};
+        scenes_file = std::filesystem::path{j["scenes"]};
     }
 
     bool find_project() {
@@ -52,7 +52,7 @@ namespace project {
             {"textures_directory", "./assets/textures"},
             {"textures_registry", "./assets/textures.reg"},
             {"scenes", "./scenes.json"},
-        };
+        }.dump(4);
 
         std::filesystem::create_directory("./assets");
         std::filesystem::create_directory("./assets/models");

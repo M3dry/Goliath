@@ -6,6 +6,7 @@ SET(EDITOR_SOURCES
     models.cpp
     scene.cpp
     project.cpp
+    ui.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES})
