@@ -1,4 +1,5 @@
 #include "goliath/buffer.hpp"
+#include "engine_.hpp"
 #include "goliath/engine.hpp"
 
 namespace engine {
@@ -42,6 +43,6 @@ namespace engine {
     }
 
     void Buffer::destroy() {
-        vmaDestroyBuffer(allocator, _buf, _allocation);
+        destroy_buffer(_buf, _allocation);
     }
 }

@@ -5,10 +5,7 @@
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
-#include "goliath/gpu_group.hpp"
 #include "goliath/imgui.hpp"
-#include "goliath/model.hpp"
-#include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
@@ -18,7 +15,6 @@
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
-#include "misc/cpp/imgui_stdlib.h"
 #include "models.hpp"
 #include "project.hpp"
 #include "scene.hpp"
@@ -28,7 +24,6 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
-#include <format>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <unistd.h>

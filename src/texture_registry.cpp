@@ -2,9 +2,9 @@
 #include "goliath/engine.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/transport.hpp"
+#include "goliath/mspc_queue.hpp"
 
 #include <array>
-#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <glm/ext/vector_float4.hpp>
@@ -72,11 +72,8 @@ namespace engine::texture_registry {
     };
 
     static constexpr std::size_t gpu_queue_size = 64;
-    std::array<task, gpu_queue_size> gpu_queue{};
-    std::atomic<uint32_t> gpu_queue_write_ix{0};
-    std::atomic<uint32_t> gpu_queue_processing_ix{0};
+    MSPCQueue<task, gpu_queue_size> gpu_queue;
     std::mutex gid_read{};
-
     std::deque<std::pair<uint64_t, task>> finalize_queue{};
 
     std::vector<bool> deleted{};
@@ -132,14 +129,7 @@ namespace engine::texture_registry {
 
                         load_texture_data(task.gid, task.generation);
 
-                        uint32_t ix = gpu_queue_write_ix.fetch_add(1, std::memory_order_acq_rel);
-                        uint32_t slot = ix % gpu_queue_size;
-
-                        while (ix >= gpu_queue_processing_ix.load(std::memory_order_acquire) + gpu_queue_size) {
-                            std::this_thread::yield();
-                        }
-
-                        gpu_queue[slot] = task;
+                        gpu_queue.enqueue(task);
                     }
                 });
             }
@@ -219,14 +209,8 @@ namespace engine::texture_registry {
     }
 
     void process_uploads() {
-        uint32_t end = gpu_queue_write_ix.load(std::memory_order_acquire);
-        uint32_t start = gpu_queue_processing_ix.load(std::memory_order_acquire);
-
         std::vector<task> tasks{};
-        tasks.resize(end - start);
-        std::memcpy(tasks.data(), gpu_queue.data() + start, sizeof(task) * (end - start));
-
-        gpu_queue_processing_ix.store(end, std::memory_order_release);
+        gpu_queue.drain(tasks);
 
         std::vector<VkImageMemoryBarrier2> barriers{};
         barriers.resize(tasks.size());
@@ -332,7 +316,9 @@ namespace engine::texture_registry {
             std::memcpy(&texture_offset, file_data + off, sizeof(uint32_t));
             off += sizeof(uint32_t);
 
-            deserialize_texture((VkSamplerCreateInfo*)(file_data + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t)*texture_count), file_data, texture_offset);
+            deserialize_texture((VkSamplerCreateInfo*)(file_data + sizeof(uint32_t) + sizeof(uint32_t) +
+                                                       sizeof(uint32_t) * texture_count),
+                                file_data, texture_offset);
         }
     }
 

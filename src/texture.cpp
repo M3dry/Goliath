@@ -1,4 +1,5 @@
 #include "goliath/texture.hpp"
+#include "engine_.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/transport.hpp"
 #include <vulkan/vulkan_core.h>
@@ -148,7 +149,7 @@ namespace engine {
     }
 
     void GPUImage::destroy() {
-        vmaDestroyImage(allocator, image, allocation);
+        destroy_image(image, allocation);
     }
 
     GPUImageView::GPUImageView(const GPUImage& img) {
@@ -200,7 +201,7 @@ namespace engine {
     }
 
     void GPUImageView::destroy(VkImageView view) {
-        vkDestroyImageView(device, view, nullptr);
+        destroy_view(view);
     }
 
     VkSampler Sampler::create() const {

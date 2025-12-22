@@ -4,9 +4,9 @@
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/culling.hpp"
+#include "goliath/mspc_queue.hpp"
 #include "project.hpp"
 
-#include <atomic>
 #include <condition_variable>
 #include <expected>
 #include <filesystem>
@@ -69,9 +69,7 @@ namespace models {
     using task = gid;
 
     static constexpr std::size_t queue_size = 64;
-    std::array<task, queue_size> queue{};
-    std::atomic<uint32_t> queue_write_ix{0};
-    std::atomic<uint32_t> queue_processing_ix{0};
+    engine::MSPCQueue<task, queue_size> queue;
     std::mutex gid_read{};
 
     void load_model_data(gid gid) {
@@ -104,14 +102,7 @@ namespace models {
 
                         load_model_data(task);
 
-                        uint32_t ix = queue_write_ix.fetch_add(1, std::memory_order_acq_rel);
-                        uint32_t slot = ix % queue_size;
-
-                        while (ix >= queue_processing_ix.load(std::memory_order_acquire) + queue_size) {
-                            std::this_thread::yield();
-                        }
-
-                        queue[slot] = task;
+                        queue.enqueue(task);
                     }
                 });
             }
@@ -145,14 +136,8 @@ namespace models {
     queue_pool upload_queue{};
 
     void process_uploads() {
-        uint32_t end = queue_write_ix.load(std::memory_order_acquire);
-        uint32_t start = queue_processing_ix.load(std::memory_order_acquire);
-
         std::vector<task> tasks{};
-        tasks.resize(end - start);
-        std::memcpy(tasks.data(), queue.data() + start, sizeof(task) * (end - start));
-
-        queue_processing_ix.store(end, std::memory_order_release);
+        queue.drain(tasks);
 
         std::vector<VkImageMemoryBarrier2> barriers{};
         barriers.resize(tasks.size());

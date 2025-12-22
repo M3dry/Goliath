@@ -552,6 +552,8 @@ namespace engine {
     }
 
     void Mesh::load_optimized(Mesh& out, std::span<uint8_t> data) {
+        out = Mesh{};
+
         uint32_t off = 0;
 
         std::memcpy(&out.material_id, data.data() + off, sizeof(material_id));
@@ -625,6 +627,8 @@ namespace engine {
         }
 
         if (has_tangents) {
+            printf("has tangents\n");
+
             auto size = (out.indexed_tangents ? out.index_count : out.vertex_count)*sizeof(glm::vec4);
             out.tangents = (glm::vec4*)malloc(size);
             std::memcpy(out.tangents, data.data() + off, size);
@@ -707,6 +711,8 @@ namespace engine {
         }
 
         if (!indexed_tangents && offset.tangent_offset != (uint32_t)-1) {
+            printf("indexed tangents: %d\n", indexed_tangents);
+            printf("tangent offset: %d\n", offset.tangent_offset);
             std::memcpy(buf + offset.tangent_offset, tangents, index_count * sizeof(glm::vec4));
         }
 

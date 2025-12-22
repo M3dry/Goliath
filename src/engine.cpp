@@ -127,6 +127,45 @@ namespace engine {
         frames = new FrameData[frames_in_flight]{};
     }
 
+    void FrameData::cleanup_resources() {
+        for (auto [buf, alloc] : buffers_to_free) {
+            vmaDestroyBuffer(allocator, buf, alloc);
+        }
+
+        for (auto [img, alloc] : images_to_free) {
+            vmaDestroyImage(allocator, img, alloc);
+        }
+
+        for (auto view : views_to_free) {
+            vkDestroyImageView(device, view, nullptr);
+        }
+
+        for (auto sampler : samplers_to_free) {
+            vkDestroySampler(device, sampler, nullptr);
+        }
+
+        buffers_to_free.clear();
+        images_to_free.clear();
+        views_to_free.clear();
+        samplers_to_free.clear();
+    }
+
+    void FrameData::destroy_buffer(VkBuffer buf, VmaAllocation alloc) {
+        buffers_to_free.emplace_back(buf, alloc);
+    }
+
+    void FrameData::destroy_image(VkImage img, VmaAllocation alloc) {
+        images_to_free.emplace_back(img, alloc);
+    }
+
+    void FrameData::destroy_view(VkImageView view) {
+        views_to_free.emplace_back(view);
+    }
+
+    void FrameData::destroy_sampler(VkSampler sampler) {
+        samplers_to_free.emplace_back(sampler);
+    }
+
     FrameData::FrameData() {
         VkCommandPoolCreateInfo cmd_pool_info{};
         cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -163,6 +202,8 @@ namespace engine {
         vkDestroyCommandPool(device, cmd_pool, nullptr);
         vkDestroyFence(device, render_fence, nullptr);
         vkDestroySemaphore(device, swapchain_semaphore, nullptr);
+
+        cleanup_resources();
     }
 
     void init(const char* window_name, uint32_t max_texture_count, bool fullscreen) {
@@ -376,6 +417,8 @@ namespace engine {
         VK_CHECK(vkWaitForFences(device, 1, &frame.render_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &frame.render_fence));
 
+        frame.cleanup_resources();
+
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
                                             &swapchain_ix);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
@@ -474,6 +517,22 @@ namespace engine {
 
     DescriptorPool& get_frame_descriptor_pool() {
         return get_current_frame_data().descriptor_pool;
+    }
+
+    void destroy_buffer(VkBuffer buf, VmaAllocation alloc) {
+        get_current_frame_data().destroy_buffer(buf, alloc);
+    }
+
+    void destroy_image(VkImage img, VmaAllocation alloc) {
+        get_current_frame_data().destroy_image(img, alloc);
+    }
+
+    void destroy_view(VkImageView view) {
+        get_current_frame_data().destroy_view(view);
+    }
+
+    void destroy_sampler(VkSampler sampler) {
+        get_current_frame_data().destroy_sampler(sampler);
     }
 
     uint32_t get_current_frame() {
