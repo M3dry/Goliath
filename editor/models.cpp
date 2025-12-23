@@ -1,12 +1,13 @@
 #include "models.hpp"
+#include "goliath/culling.hpp"
 #include "goliath/gpu_group.hpp"
+#include "goliath/mspc_queue.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
-#include "goliath/culling.hpp"
-#include "goliath/mspc_queue.hpp"
 #include "project.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <expected>
 #include <filesystem>
@@ -46,7 +47,7 @@ namespace models {
     std::vector<std::optional<engine::Model>> cpu_datas{};
     std::vector<UploadedModelData> gpu_datas{};
 
-    std::vector<uint8_t> generations{};
+    std::vector<std::unique_ptr<std::atomic<uint8_t>>> generations{};
     std::vector<bool> deleted{};
 
     struct JsonModelEntry {
@@ -66,16 +67,32 @@ namespace models {
         j["path"].get_to(entry.path);
     }
 
-    using task = gid;
+    struct task {
+        enum Type {
+            Acquire,
+            Add,
+        };
 
-    static constexpr std::size_t queue_size = 64;
-    engine::MSPCQueue<task, queue_size> queue;
+        Type type;
+        gid gid;
+    };
+
+    static constexpr std::size_t gpu_queue_size = 64;
+    engine::MSPCQueue<gid, gpu_queue_size> gpu_queue;
     std::mutex gid_read{};
+
+    std::vector<gid> initializing_models{};
+    static constexpr std::size_t initialized_queue_size = 32;
+    engine::MSPCQueue<gid, initialized_queue_size> initialized_queue;
+
+    bool is_initializing(gid gid) {
+        return std::find(initializing_models.begin(), initializing_models.end(), gid) != initializing_models.end();
+    }
 
     void load_model_data(gid gid) {
         std::lock_guard lock{gid_read};
 
-        if (generations[gid.id != gid.generation]) return;
+        if (generations[gid.id]->load() != gid.generation) return;
 
         uint32_t model_size;
         auto* model_data = engine::util::read_file(project::models_directory / paths[gid.id], &model_size);
@@ -83,6 +100,58 @@ namespace models {
         cpu_datas[gid.id] = engine::Model{};
         engine::Model::load_optimized(cpu_datas[gid.id].value(), {model_data, model_size});
 
+        free(model_data);
+    }
+
+    void add_model(gid gid) {
+        std::lock_guard lock{gid_read};
+
+        if (generations[gid.id]->load() != gid.generation) return;
+        const auto& path = paths[gid.id];
+
+        uint32_t model_size;
+        auto* model_data = engine::util::read_file(path, &model_size);
+
+        bool optimized = false;
+        engine::Model model{};
+
+        if (generations[gid.id]->load() != gid.generation) goto cleanup;
+
+        {
+            const auto& ext = path.extension();
+            if (ext == ".glb") {
+                engine::Model::load_glb(&model, {model_data, model_size}, path.parent_path());
+            } else if (ext == ".gltf") {
+                engine::Model::load_gltf(&model, {model_data, model_size}, path.parent_path());
+            } else {
+                optimized = true;
+            }
+
+            if (generations[gid.id]->load() != gid.generation) goto cleanup;
+            paths[gid.id] = std::format("{:02X}{:06X}.gom", (uint8_t)gid.generation, gid.id & 0x00ffffff);
+
+            if (optimized) {
+                engine::util::save_file(project::models_directory / paths[gid.id], model_data, model_size);
+            } else {
+                auto save_size = model.get_optimized_size();
+                uint8_t* save_data = (uint8_t*)malloc(save_size);
+
+                model.save_optimized({save_data, save_size});
+
+                engine::util::save_file(project::models_directory / paths[gid.id], save_data, save_size);
+
+                free(save_data);
+            }
+        }
+
+        if (generations[gid.id]->load() != gid.generation) {
+            std::filesystem::remove(project::models_directory /
+                                    std::format("{:02X}{:06X}.gom", (uint8_t)gid.generation, gid.id & 0x00ffffff));
+            goto cleanup;
+        }
+
+    cleanup:
+        model.destroy();
         free(model_data);
     }
 
@@ -100,9 +169,20 @@ namespace models {
                             tasks.pop();
                         }
 
-                        load_model_data(task);
+                        switch (task.type) {
+                            case task::Acquire:
+                                while (is_initializing(task.gid)) {
+                                    _mm_pause();
+                                }
 
-                        queue.enqueue(task);
+                                load_model_data(task.gid);
+                                gpu_queue.enqueue(task.gid);
+                                break;
+                            case task::Add:
+                                add_model(task.gid);
+                                initialized_queue.enqueue(task.gid);
+                                break;
+                        }
                     }
                 });
             }
@@ -133,29 +213,33 @@ namespace models {
         bool stop = false;
     };
 
-    queue_pool upload_queue{};
+    queue_pool io_pool{};
 
     void process_uploads() {
-        std::vector<task> tasks{};
-        queue.drain(tasks);
+        std::vector<gid> upload_gids{};
+        gpu_queue.drain(upload_gids);
+
+        std::vector<gid> initialized_gids{};
+        initialized_queue.drain(initialized_gids);
 
         std::vector<VkImageMemoryBarrier2> barriers{};
-        barriers.resize(tasks.size());
+        barriers.resize(upload_gids.size());
 
         uint64_t finish_timeline;
-        if (tasks.size() != 0) {
+        if (upload_gids.size() != 0) {
             engine::synchronization::begin_barriers();
             auto timeline = engine::transport::begin();
-            for (const auto& task : tasks) {
-                if (generations[task.id] == task.generation && ref_counts[task.id] != 0 && !deleted[task.id]) {
-                    auto& cpu_data = *cpu_datas[task.id];
+            for (const auto& gid : upload_gids) {
+                if (generations[gid.id]->load() == gid.generation && ref_counts[gid.id] != 0 && !deleted[gid.id]) {
+                    auto& cpu_data = *cpu_datas[gid.id];
                     engine::gpu_group::begin();
                     auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
 
                     VkBufferMemoryBarrier2 barrier{};
                     barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    auto& gpu_data = gpu_datas[task.id];
+                    barrier.dstStageMask =
+                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    auto& gpu_data = gpu_datas[gid.id];
                     gpu_data.group = engine::gpu_group::end(&barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
                     gpu_data.draw_buffer = draw_buffer;
                     gpu_data.gpu = gpu;
@@ -167,12 +251,16 @@ namespace models {
             engine::transport::end();
             engine::synchronization::end_barriers();
         }
+
+        std::erase_if(initializing_models, [&](auto gid) {
+            return std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_models.end();
+        });
     }
 
     std::optional<gid> find_empty_gid() {
         for (uint32_t i = 0; i < deleted.size(); i++) {
             if (deleted[i]) {
-                return gid{generations[i], i};
+                return gid{generations[i]->load(), i};
             }
         }
 
@@ -197,7 +285,8 @@ namespace models {
                 cpu_datas.emplace_back();
                 gpu_datas.emplace_back();
 
-                generations.emplace_back(0);
+                generations.emplace_back(std::make_unique<std::atomic<uint8_t>>(0));
+
                 deleted.emplace_back(true);
                 id_counter++;
             }
@@ -210,7 +299,7 @@ namespace models {
             cpu_datas.emplace_back();
             gpu_datas.emplace_back();
 
-            generations.emplace_back(gen);
+            generations.emplace_back(std::make_unique<std::atomic<uint8_t>>(gen));
             deleted.emplace_back(false);
 
             id_counter++;
@@ -247,7 +336,7 @@ namespace models {
             uint8_t gid_id = gid.id;
 
             names[gid.id] = std::move(name);
-            paths[gid.id] = std::format("{:02X}{:06X}.gos", gid_gen, gid_id & 0x00ffffff);
+            paths[gid.id] = std::move(path);
 
             ref_counts[gid.id] = 0;
 
@@ -256,7 +345,7 @@ namespace models {
                 .timeline = (size_t)-1,
             };
 
-            generations[gid.id]++;
+            generations[gid.id]->fetch_add(1, std::memory_order_release);
             deleted[gid.id] = false;
         } else {
             std::lock_guard lock{gid_read};
@@ -266,7 +355,7 @@ namespace models {
             uint8_t gid_id = gid.id;
 
             names.emplace_back(std::move(name));
-            paths.emplace_back(std::format("00{:06X}.gos", gid_id & 0x00ffffff));
+            paths.emplace_back(std::move(path));
 
             ref_counts.emplace_back(0);
 
@@ -275,45 +364,22 @@ namespace models {
                 .timeline = (size_t)-1,
             });
 
-            generations.emplace_back(0);
+            generations.emplace_back(std::make_unique<std::atomic<uint8_t>>(0));
             deleted.emplace_back(false);
         }
 
-        uint32_t model_size;
-        auto* model_data = engine::util::read_file(path, &model_size);
+        initializing_models.emplace_back(gid);
+        io_pool.enqueue({task::Add, gid});
 
-        const auto& ext = path.extension();
-        bool optimized = false;
-        engine::Model model{};
-
-        if (ext == ".glb") {
-            engine::Model::load_glb(&model, {model_data, model_size}, path.parent_path());
-        } else if (ext == ".gltf") {
-            engine::Model::load_gltf(&model, {model_data, model_size}, path.parent_path());
-        } else {
-            optimized = true;
-        }
-
-        if (optimized) {
-            engine::util::save_file(project::models_directory / paths[gid.id], model_data, model_size);
-        } else {
-            auto save_size = model.get_optimized_size();
-            uint8_t* save_data = (uint8_t*)malloc(save_size);
-            model.save_optimized({save_data, save_size});
-
-            engine::util::save_file(project::models_directory / paths[gid.id], save_data, save_size);
-        }
-
-        if (!optimized) model.destroy();
-
-        free(model_data);
         return gid;
     }
 
     bool remove(gid gid) {
-        if (generations[gid.id] == gid.generation) return false;
+        if (generations[gid.id]->load() != gid.generation) return false;
         if (ref_counts[gid.id] > 0) return false;
-        std::lock_guard lock{gid_read};
+
+        deleted[gid.id] = true;
+        generations[gid.id]->fetch_add(1, std::memory_order_release);
 
         std::filesystem::remove(project::models_directory / paths[gid.id]);
 
@@ -328,60 +394,58 @@ namespace models {
             .timeline = (size_t)-1,
         };
 
-        deleted[gid.id] = true;
-
         return true;
     }
 
     std::expected<std::string*, Err> get_name(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return &names[gid.id];
     }
 
     std::expected<const std::filesystem::path*, Err> get_path(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return &paths[gid.id];
     }
 
     std::expected<engine::Model*, Err> get_cpu_model(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         auto& model = cpu_datas[gid.id];
         return model ? &*model : nullptr;
     }
 
     std::expected<uint64_t, Err> get_timeline(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return gpu_datas[gid.id].timeline;
     }
 
     std::expected<engine::Buffer, Err> get_draw_buffer(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return gpu_datas[gid.id].draw_buffer;
     }
 
     std::expected<engine::GPUModel, Err> get_gpu_model(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return gpu_datas[gid.id].gpu;
     }
 
     std::expected<engine::GPUGroup, Err> get_gpu_group(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         return gpu_datas[gid.id].group;
     }
 
     uint8_t get_generation(uint32_t ix) {
-        return generations[ix];
+        return generations[ix]->load();
     }
 
     std::expected<LoadState, Err> is_loaded(gid gid) {
-        if (gid.generation != generations[gid.id]) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id]->load() != gid.generation) return std::unexpected(Err::BadGeneration);
 
         if (engine::transport::is_ready(gpu_datas[gid.id].timeline)) return LoadState::OnGPU;
         if (cpu_datas[gid.id]) return LoadState::OnCPU;
@@ -391,20 +455,20 @@ namespace models {
     void acquire(const gid* gids, uint32_t count) {
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (gid.generation != generations[gid.id]) continue;
+            if (generations[gid.id]->load() != gid.generation) continue;
 
             if (++ref_counts[gid.id] != 1) return;
 
             cpu_datas[gid.id] = std::nullopt;
             gpu_datas[gid.id].timeline = -1;
-            upload_queue.enqueue(gid);
+            io_pool.enqueue({task::Acquire, gid});
         }
     }
 
     void release(const gid* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (generations[gid.id] != gid.generation) continue;
+            if (generations[gid.id]->load() != gid.generation) continue;
             if (ref_counts[gid.id] == 0 || --ref_counts[gid.id] != 0) continue;
 
             if (cpu_datas[gid.id]) cpu_datas[gid.id]->destroy();
@@ -421,11 +485,13 @@ namespace models {
 }
 
 namespace engine::culling {
-    std::expected<void, models::Err> flatten(models::gid gid, uint64_t transforms_addr, uint32_t default_transform_offset) {
-        if (models::generations[gid.id] != gid.generation) return std::unexpected(models::Err::BadGeneration);
+    std::expected<void, models::Err> flatten(models::gid gid, uint64_t transforms_addr,
+                                             uint32_t default_transform_offset) {
+        if (models::generations[gid.id]->load() != gid.generation) return std::unexpected(models::Err::BadGeneration);
 
         auto& gpu = models::gpu_datas[gid.id];
-        engine::culling::flatten(gpu.group.data.address(), gpu.gpu.mesh_count, gpu.draw_buffer.address(), transforms_addr, default_transform_offset);
+        engine::culling::flatten(gpu.group.data.address(), gpu.gpu.mesh_count, gpu.draw_buffer.address(),
+                                 transforms_addr, default_transform_offset);
 
         return {};
     }

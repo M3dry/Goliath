@@ -6,6 +6,7 @@
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/imgui.hpp"
+#include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
@@ -101,141 +102,6 @@ struct PBRShadingSet {
     float _3;
     glm::mat4 view_proj_matrix;
 };
-
-// struct Model {
-//     enum DataType {
-//         GLTF,
-//         GLB,
-//         GOM,
-//     };
-//
-//     uint64_t last_instance_id = 0;
-//
-//     std::string name;
-//     std::filesystem::path filepath;
-//     bool embed_optimized = false;
-//
-//     uint64_t timeline;
-//     engine::Model cpu_data;
-//     engine::GPUModel gpu_data;
-//     engine::Buffer indirect_draw_buffer;
-//     engine::GPUGroup gpu_group;
-//
-//     std::vector<size_t> instances{};
-//
-//     engine::Model::Err load(const std::string& cwd, DataType type, uint8_t* data, uint32_t size,
-//                             VkBufferMemoryBarrier2* barrier) {
-//         engine::Model::Err err;
-//         if (type == GOM) {
-//             engine::Model::load_optimized(cpu_data, {data, size});
-//             err = engine::Model::Ok;
-//         } else if (type == GLTF) {
-//             err = engine::Model::load_gltf(&cpu_data, {data, size}, cwd);
-//         } else if (type == GLB) {
-//             err = engine::Model::load_glb(&cpu_data, {data, size}, cwd);
-//         } else {
-//             err = engine::Model::InvalidFormat;
-//         }
-//
-//         if (err != engine::Model::Ok) {
-//             return err;
-//         }
-//
-//         engine::gpu_group::begin();
-//         auto [_gpu_data, _indirect_draw_buffer] = engine::model::upload(&cpu_data);
-//         gpu_data = _gpu_data;
-//         indirect_draw_buffer = _indirect_draw_buffer;
-//         gpu_group = engine::gpu_group::end(barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
-//
-//         return engine::Model::Ok;
-//     }
-//
-//     void destroy() {
-//         cpu_data.destroy();
-//         gpu_group.destroy();
-//         indirect_draw_buffer.destroy();
-//     }
-// };
-//
-// struct Instance {
-//     size_t model_ix;
-//     std::string name;
-//
-//     glm::vec3 translate{0.0f};
-//     glm::vec3 rotate{0.0f};
-//     glm::vec3 scale{1.0f};
-//
-//     void update_transform(glm::mat4* transform) const {
-//         *transform = glm::translate(glm::identity<glm::mat4>(), translate) *
-//                      glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
-//                                              rotate.y, glm::vec3{1, 0, 0}),
-//                                  rotate.z, glm::vec3{0, 0, 1}) *
-//                      glm::scale(glm::identity<glm::mat4>(), scale);
-//     }
-// };
-//
-// struct Scene {
-//     std::string name;
-//
-//     std::vector<Model> models{};
-//     std::array<std::vector<Model>, engine::frames_in_flight> models_to_destroy{};
-//     std::vector<Instance> instances{};
-//     size_t selected_instance = -1;
-//
-//     static std::vector<Scene> init(size_t& current_scene) {
-//         return {};
-//     }
-//
-//     void save() {}
-//
-//     void load_models() {}
-//
-//     void unload_models() {}
-//
-//     void add_model(std::filesystem::path path, VkBufferMemoryBarrier2* barrier, uint64_t timeline_value) {
-//         uint32_t size;
-//         auto* file = engine::util::read_file(path, &size);
-//
-//         auto extension = path.extension();
-//         barrier->dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-//         barrier->dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-//         Model::DataType type;
-//         if (extension == ".glb") {
-//             type = Model::GLB;
-//         } else if (extension == ".gltf") {
-//             type = Model::GLTF;
-//         } else if (extension == ".gom") {
-//             type = Model::GOM;
-//         } else {
-//             assert(false && "Wrong filetype");
-//         }
-//
-//         models.emplace_back();
-//         models.back().name = path.stem();
-//         models.back().filepath = std::move(path);
-//         models.back().timeline = timeline_value;
-//
-//         auto& model = models.back();
-//         auto err = model.load(models.back().filepath.parent_path(), type, file, size, barrier);
-//         if (err != engine::Model::Ok) {
-//             printf("error: %d @%d in %s\n", err, __LINE__, __FILE__);
-//             assert(false);
-//         }
-//
-//         free(file);
-//     }
-//
-//     void destroy() {
-//         for (auto& model : models) {
-//             model.destroy();
-//         }
-//         for (auto& models : models_to_destroy) {
-//             for (auto& model : models) {
-//                 model.destroy();
-//             }
-//         }
-//     }
-// };
 
 int main(int argc, char** argv) {
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
@@ -586,40 +452,41 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             if (ImGui::BeginMainMenuBar()) {
-                // if (ImGui::BeginMenu("File")) {
-                //     if (ImGui::MenuItem("Add model")) {
-                //         nfdu8filteritem_t filters[1] = {
-                //             {"Model files", "gltf,glb,gom"},
-                //         };
-                //         auto current_path = std::filesystem::current_path();
-                //         nfdopendialogu8args_t args{};
-                //         args.filterCount = 1;
-                //         args.filterList = filters;
-                //         args.defaultPath = current_path.c_str();
-                //         NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
-                //
-                //         const nfdpathset_t* paths;
-                //         auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
-                //         if (res == NFD_OKAY) {
-                //             nfdpathsetenum_t enumerator;
-                //             NFD_PathSet_GetEnum(paths, &enumerator);
-                //
-                //             nfdchar_t* path;
-                //             std::size_t i = 0;
-                //
-                //             auto timeline_value = engine::transport::begin();
-                //             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                //                 scene->add_model(path, &model_barrier, timeline_value);
-                //                 NFD_PathSet_FreePath(path);
-                //             }
-                //             engine::transport::end();
-                //
-                //             NFD_PathSet_FreeEnum(&enumerator);
-                //             NFD_PathSet_Free(paths);
-                //         }
-                //     }
-                //     ImGui::EndMenu();
-                // }
+                if (ImGui::BeginMenu("File")) {
+                    if (ImGui::MenuItem("Add model")) {
+                        nfdu8filteritem_t filters[1] = {
+                            {"Model files", "gltf,glb,gom"},
+                        };
+                        auto current_path = std::filesystem::current_path();
+                        nfdopendialogu8args_t args{};
+                        args.filterCount = 1;
+                        args.filterList = filters;
+                        args.defaultPath = current_path.c_str();
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+
+                        const nfdpathset_t* paths;
+                        auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
+                        if (res == NFD_OKAY) {
+                            nfdpathsetenum_t enumerator;
+                            NFD_PathSet_GetEnum(paths, &enumerator);
+
+                            nfdchar_t* path;
+                            std::size_t i = 0;
+
+                            // auto timeline_value = engine::transport::begin();
+                            while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
+                                models::add(path, std::filesystem::path{path}.filename().string());
+                            //     scene->add_model(path, &model_barrier, timeline_value);
+                                NFD_PathSet_FreePath(path);
+                            }
+                            // engine::transport::end();
+
+                            NFD_PathSet_FreeEnum(&enumerator);
+                            NFD_PathSet_Free(paths);
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
             }
             ImGui::EndMainMenuBar();
 
