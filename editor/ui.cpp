@@ -1,10 +1,15 @@
 #include "ui.hpp"
 
+#include "goliath/engine.hpp"
+#include "goliath/synchronization.hpp"
+#include "goliath/texture.hpp"
 #include "imgui.h"
+#include "imgui_impl_vulkan.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "models.hpp"
 #include "scene.hpp"
 #include <limits>
+#include <vulkan/vulkan_core.h>
 
 int32_t score_search(std::string_view query, std::string_view candidate) {
     if (query.empty()) return 0;
@@ -30,11 +35,172 @@ int32_t score_search(std::string_view query, std::string_view candidate) {
 }
 
 namespace ui {
+    bool skip_game_window = false;
+    ImVec2 game_windows[engine::frames_in_flight]{};
+    engine::GPUImage game_window_images[engine::frames_in_flight]{};
+    VkImageView game_window_image_views[engine::frames_in_flight]{};
+    VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
+    std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
+    VkSampler game_window_sampler;;
+
     std::string models_query{};
     models::gid selected_model{
         .generation = (uint8_t)-1,
         .id = (uint32_t)-1,
     };
+
+    void init() {
+        game_window_sampler = engine::Sampler{}.create();
+
+        for (size_t i = 0; i < engine::frames_in_flight; i++) {
+            game_windows[i].x = -1.0f;
+            game_windows[i].y = -1.0f;
+        }
+    }
+
+    void destroy() {
+        engine::Sampler::destroy(game_window_sampler);
+
+        for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
+            game_window_images[i].destroy();
+            engine::GPUImageView::destroy(game_window_image_views[i]);
+            ImGui_ImplVulkan_RemoveTexture(game_window_textures[i]);
+        }
+    }
+
+    std::optional<VkImageMemoryBarrier2> game_window() {
+        auto curr_frame = engine::get_current_frame();
+        auto& game_window_ = game_windows[curr_frame];
+        auto& game_window_image = game_window_images[curr_frame];
+        auto& game_window_image_view = game_window_image_views[curr_frame];
+        auto& game_window_texture = game_window_textures[curr_frame];
+        auto& [game_window_barrier_applied, game_window_barrier] =
+            game_window_barriers[curr_frame];
+
+        ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImVec2 avail = ImGui::GetWindowSize();
+        skip_game_window = avail.x <= 0 || avail.y <= 0;
+
+        bool new_barrier = false;
+        if ((avail.x != game_window_.x || avail.y != game_window_.y) && !skip_game_window) {
+            game_window_image.destroy();
+            engine::GPUImageView::destroy(game_window_image_view);
+            ImGui_ImplVulkan_RemoveTexture(game_window_texture);
+
+            auto image_upload =
+                engine::GPUImage::upload(engine::GPUImageInfo{}
+                                             .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                                             .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                             .width(avail.x)
+                                             .height(avail.y)
+                                             .format(VK_FORMAT_R8G8B8A8_UNORM)
+                                             .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT));
+            game_window_image = image_upload.first;
+            game_window_barrier_applied = false;
+            game_window_barrier = image_upload.second;
+            game_window_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            game_window_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+            game_window_image_view =
+                engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+
+            game_window_texture = ImGui_ImplVulkan_AddTexture(game_window_sampler, game_window_image_view,
+                                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            game_window_ = avail;
+
+            new_barrier = true;
+        }
+
+        if (!skip_game_window) {
+            ImGui::SetCursorPos(ImGui::GetStyle().FramePadding);
+            ImGui::Image(game_window_texture, game_window_);
+        }
+        ImGui::End();
+
+        return new_barrier ? std::make_optional(game_window_barrier) : std::nullopt;
+    }
+
+    bool skipped_game_window() {
+        return skip_game_window;
+    }
+
+    std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 blit_info) {
+        if (ui::skipped_game_window()) return std::nullopt;
+
+        auto curr_frame = engine::get_current_frame();
+        auto& game_window_ = game_windows[curr_frame];
+        auto& game_window_image = game_window_images[curr_frame];
+
+        VkImageMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.pNext = nullptr;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = game_window_image.image;
+        barrier.subresourceRange = VkImageSubresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+
+        blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+        blit_info.dstImage = game_window_image.image;
+        blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        VkImageBlit2 region = blit_info.pRegions[0];
+
+        int32_t width = std::min((int32_t)game_window_.x, region.srcOffsets[1].x);
+        int32_t height = std::min((int32_t)game_window_.y, region.srcOffsets[1].y);
+
+        region.dstOffsets[0] = VkOffset3D{
+            .x = 0,
+            .y = 0,
+            .z = 0,
+        };
+        region.srcOffsets[1] = region.dstOffsets[1] = VkOffset3D{
+            .x = width,
+            .y = height,
+            .z = 1,
+        };
+        region.dstSubresource = VkImageSubresourceLayers{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        blit_info.pRegions = &region;
+
+        vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+
+        engine::synchronization::begin_barriers();
+        engine::synchronization::apply_barrier(barrier);
+        engine::synchronization::end_barriers();
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+        return barrier;
+    }
+
+    ImVec2 game_window_size() {
+        return game_windows[engine::get_current_frame()];
+    }
+
+    engine::GPUImage get_window_image() {
+        return game_window_images[engine::get_current_frame()];
+    }
 
     void models_pane() {
         ImGui::InputText("Search", &models_query);

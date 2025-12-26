@@ -1,9 +1,21 @@
 #pragma once
 
+#include "goliath/texture.hpp"
+#include "imgui.h"
 #include "models.hpp"
 #include "scene.hpp"
+#include <vulkan/vulkan_core.h>
 
 namespace ui {
+    void init();
+    void destroy();
+
+    std::optional<VkImageMemoryBarrier2> game_window();
+    bool skipped_game_window();
+    std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);
+    ImVec2 game_window_size();
+    engine::GPUImage get_window_image();
+
     void models_pane();
     void model_entry(models::gid gid);
 

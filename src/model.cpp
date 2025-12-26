@@ -627,8 +627,6 @@ namespace engine {
         }
 
         if (has_tangents) {
-            printf("has tangents\n");
-
             auto size = (out.indexed_tangents ? out.index_count : out.vertex_count)*sizeof(glm::vec4);
             out.tangents = (glm::vec4*)malloc(size);
             std::memcpy(out.tangents, data.data() + off, size);
