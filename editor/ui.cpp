@@ -243,7 +243,7 @@ namespace ui {
     }
 
     void model_entry(models::gid gid) {
-        ImGui::PushID(&gid);
+        ImGui::PushID(gid.id);
         auto name = *models::get_name(gid);
 
         bool double_click = false;
@@ -265,7 +265,9 @@ namespace ui {
         }
 
         ImGui::SameLine();
-        ImGui::InputText("##name", name);
+        if (ImGui::InputText("##name", name)) {
+            printf("hello\n");
+        }
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             selected_model.generation = -1;
             selected_model.id = -1;

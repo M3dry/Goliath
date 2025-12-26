@@ -20,11 +20,14 @@
 
 namespace models {
     void to_json(nlohmann::json& j, const gid& gid) {
-        j = nlohmann::json{gid};
+        uint32_t gid_;
+        std::memcpy(&gid_, &gid, sizeof(uint32_t));
+        j = gid_;
     }
 
     void from_json(const nlohmann::json& j, gid& gid) {
-        j.get_to(gid);
+        uint32_t gid_ = j;
+        std::memcpy(&gid, &gid_, sizeof(uint32_t));
     }
 
     struct UploadedModelData {
@@ -75,6 +78,7 @@ namespace models {
 
         Type type;
         gid gid;
+        std::filesystem::path orig_path{};
     };
 
     static constexpr std::size_t gpu_queue_size = 64;
@@ -103,14 +107,13 @@ namespace models {
         free(model_data);
     }
 
-    void add_model(gid gid) {
+    void add_model(gid gid, std::filesystem::path orig_path) {
         std::lock_guard lock{gid_read};
 
         if (generations[gid.id]->load() != gid.generation) return;
-        const auto& path = paths[gid.id];
 
         uint32_t model_size;
-        auto* model_data = engine::util::read_file(path, &model_size);
+        auto* model_data = engine::util::read_file(orig_path, &model_size);
 
         bool optimized = false;
         engine::Model model{};
@@ -118,17 +121,16 @@ namespace models {
         if (generations[gid.id]->load() != gid.generation) goto cleanup;
 
         {
-            const auto& ext = path.extension();
+            const auto& ext = orig_path.extension();
             if (ext == ".glb") {
-                engine::Model::load_glb(&model, {model_data, model_size}, path.parent_path());
+                engine::Model::load_glb(&model, {model_data, model_size}, orig_path.parent_path());
             } else if (ext == ".gltf") {
-                engine::Model::load_gltf(&model, {model_data, model_size}, path.parent_path());
+                engine::Model::load_gltf(&model, {model_data, model_size}, orig_path.parent_path());
             } else {
                 optimized = true;
             }
 
             if (generations[gid.id]->load() != gid.generation) goto cleanup;
-            paths[gid.id] = std::format("{:02X}{:06X}.gom", (uint8_t)gid.generation, gid.id & 0x00ffffff);
 
             if (optimized) {
                 engine::util::save_file(project::models_directory / paths[gid.id], model_data, model_size);
@@ -179,7 +181,7 @@ namespace models {
                                 gpu_queue.enqueue(task.gid);
                                 break;
                             case task::Add:
-                                add_model(task.gid);
+                                add_model(task.gid, task.orig_path);
                                 initialized_queue.enqueue(task.gid);
                                 break;
                         }
@@ -336,7 +338,7 @@ namespace models {
             uint8_t gid_id = gid.id;
 
             names[gid.id] = std::move(name);
-            paths[gid.id] = std::move(path);
+            paths[gid.id] = std::format("{:02X}{:06X}.gom", (uint8_t)gid.generation, gid.id & 0x00ffffff);
 
             ref_counts[gid.id] = 0;
 
@@ -355,7 +357,7 @@ namespace models {
             uint8_t gid_id = gid.id;
 
             names.emplace_back(std::move(name));
-            paths.emplace_back(std::move(path));
+            paths.emplace_back(std::format("{:02X}{:06X}.gom", (uint8_t)gid.generation, gid.id & 0x00ffffff));
 
             ref_counts.emplace_back(0);
 
@@ -369,7 +371,7 @@ namespace models {
         }
 
         initializing_models.emplace_back(gid);
-        io_pool.enqueue({task::Add, gid});
+        io_pool.enqueue({task::Add, gid, path});
 
         return gid;
     }

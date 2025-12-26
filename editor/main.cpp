@@ -26,10 +26,12 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <unistd.h>
+#include <fstream>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
 #include <nfd.h>
+
 
 #ifdef __linux__
 #define GLFW_EXPOSE_NATIVE_X11
@@ -419,6 +421,10 @@ int main(int argc, char** argv) {
 
                             NFD_PathSet_FreeEnum(&enumerator);
                             NFD_PathSet_Free(paths);
+
+                            std::ofstream f{project::models_registry};
+                            f << models::save();
+                            f.flush();
                         }
                     }
                     ImGui::EndMenu();

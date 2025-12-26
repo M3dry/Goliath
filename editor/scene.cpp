@@ -1,5 +1,6 @@
 #include "scene.hpp"
 #include "nlohmann/json_fwd.hpp"
+#include "project.hpp"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -63,6 +64,18 @@ namespace scene {
     void Scene::acquire() {
         models::acquire(used_models.data(), used_models.size());
         ref_count++;
+
+        if (instances_of_used_models.size() != used_models.size()) {
+            instances_of_used_models.resize(used_models.size());
+
+            for (size_t inst_ix = 0; inst_ix < instances.size(); inst_ix++) {
+                auto it = std::find(used_models.begin(), used_models.end(), instances[inst_ix].model_gid);
+                assert(it != used_models.end() && "Model must be in the `used_models` field of the scene");
+
+                auto ix = std::distance(it, used_models.begin());
+                instances_of_used_models[ix].emplace_back(inst_ix);
+            }
+        }
     }
 
     void Scene::release() {
@@ -108,6 +121,8 @@ namespace scene {
 
         instances.emplace_back(instance);
         selected_instance = instances.size() - 1;
+
+        save(project::scenes_file);
     }
 
     void Scene::remove_instance(size_t ix) {
@@ -124,6 +139,8 @@ namespace scene {
                 }
             });
         }
+
+        save(project::scenes_file);
     }
 
     uint32_t selected_scene_ = 0;
@@ -174,6 +191,8 @@ namespace scene {
 
     void emplace_scene(std::string name) {
         scenes.emplace_back(name);
+
+        save(project::scenes_file);
     }
 
     // false - couldn't remove scene since it's the only scene
@@ -182,6 +201,7 @@ namespace scene {
         scenes[ix].destroy();
         scenes.erase(scenes.begin() + ix);
 
+        save(project::scenes_file);
         return true;
     }
 
@@ -189,6 +209,8 @@ namespace scene {
         auto scene = scenes[ix];
         scenes.erase(scenes.begin() + ix);
         scenes.insert(scenes.begin() + dest, scene);
+
+        save(project::scenes_file);
     }
 
     Scene& selected_scene() {
@@ -203,6 +225,8 @@ namespace scene {
         selected_scene().release();
         selected_scene_ = ix;
         selected_scene().acquire();
+
+        save(project::scenes_file);
     }
 
     std::span<Scene> get_scenes() {
