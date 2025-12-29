@@ -138,7 +138,7 @@ void engine::Scene::destroy() {
     free(name_data);
 }
 
-void instance_transforms_upload_func(uint8_t* out, uint32_t start, uint32_t size, uint32_t* texture_gids,
+void instance_transforms_upload_func(uint8_t* out, uint32_t start, uint32_t size, engine::textures::gid* texture_gids,
                                      uint32_t texture_gid_count, void* ctx) {
     std::memcpy(out, ctx, size);
 }
@@ -159,7 +159,7 @@ void engine::GPUScene::upload(engine::GPUScene* out, const Scene* scene, VkBuffe
     }
 
     out->draw_indirect =
-        Buffer::create(total_mesh_count * sizeof(DrawCommand),
+        Buffer::create("scene draw buffer", total_mesh_count * sizeof(DrawCommand),
                        VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     out->draw_count = total_mesh_count;
 

@@ -10,7 +10,7 @@
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/texture_registry.hpp"
+#include "goliath/texture_registry2.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -115,32 +115,25 @@ int main(int argc, char** argv) {
     }
     std::filesystem::current_path(project::project_root);
 
-    engine::init("Goliath editor", 1000, false);
-    uint32_t tex_reg_size;
-    auto* tex_reg_data = engine::util::read_file(project::textures_registry, &tex_reg_size);
-    if (tex_reg_data != nullptr) {
-        engine::texture_registry::load(tex_reg_data, tex_reg_size);
-    } else {
-        printf("NOTE: texture registry file doesn't exist\n");
+    engine::init("Goliath editor", 1000, project::textures_directory, false);
+    auto tex_reg_json = engine::util::read_json(project::textures_registry);
+    if (tex_reg_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::textures_registry)) {
+        tex_reg_json = nlohmann::json::array();
+    } else if (!tex_reg_json.has_value()) {
+        printf("Texture registry file is corrupted\n");
+        return 0;
     }
+    engine::textures::load(*tex_reg_json);
 
     auto models_registry_json = engine::util::read_json(project::models_registry);
     if (models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::models_registry)) {
         models_registry_json = nlohmann::json::array();
     } else if (!models_registry_json.has_value()) {
-        printf("Models weren't loaded\n");
+        printf("Models registry file is corrupted\n");
         return 0;
     }
     models::init(*models_registry_json);
-
-    // auto mgid = models::add("./DamagedHelmet.glb", "Damanged Helmet");
-    // std::ofstream models_save_file{project::models_registry};
-    // models_save_file << models::save();
-    //
-    // uint32_t tex_reg_save_size;
-    // auto* tex_reg_save = engine::texture_registry::save(tex_reg_save_size);
-    // engine::util::save_file(project::textures_registry, tex_reg_save, tex_reg_save_size);
 
     bool scene_parse_error = false;
     scene::load(project::scenes_file, &scene_parse_error);
@@ -213,7 +206,7 @@ int main(int argc, char** argv) {
                                     .shader(pbr_module)
                                     .descriptor_layout(0, engine::visbuffer::shading_set_layout)
                                     .descriptor_layout(1, pbr_shading_set_layout)
-                                    .descriptor_layout(2, engine::texture_registry::get_texture_pool().set_layout)
+                                    .descriptor_layout(2, engine::textures::get_texture_pool().set_layout)
                                     .push_constant(PBRPC::size));
 
     uint32_t postprocessing_spv_size;
@@ -256,7 +249,7 @@ int main(int argc, char** argv) {
     engine::Buffer draw_id_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
         draw_id_buffers[i] =
-            engine::Buffer::create(sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
+            engine::Buffer::create(std::format("draw id buffer #{}", i).c_str(), sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
                                    VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
                                        VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
                                    std::nullopt);
@@ -264,7 +257,7 @@ int main(int argc, char** argv) {
 
     engine::Buffer indirect_draw_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        indirect_draw_buffers[i] = engine::Buffer::create(
+        indirect_draw_buffers[i] = engine::Buffer::create(std::format("indirect draw buffer #{}", i).c_str(),
             sizeof(engine::culling::CulledDrawCommand) * max_draw_size,
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
@@ -277,7 +270,7 @@ int main(int argc, char** argv) {
         (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
     };
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        transform_buffers[i] = engine::Buffer::create(
+        transform_buffers[i] = engine::Buffer::create(std::format("transforms buffer #{}", i).c_str(),
             sizeof(glm::mat4) * 1024, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
             std::nullopt);
     }
@@ -422,9 +415,13 @@ int main(int argc, char** argv) {
                             NFD_PathSet_FreeEnum(&enumerator);
                             NFD_PathSet_Free(paths);
 
-                            std::ofstream f{project::models_registry};
-                            f << models::save();
-                            f.flush();
+                            std::ofstream mf{project::models_registry};
+                            mf << models::save();
+                            mf.flush();
+
+                            std::ofstream tf{project::textures_registry};
+                            tf << engine::textures::save();
+                            tf.flush();
                         }
                     }
                     ImGui::EndMenu();
@@ -661,7 +658,7 @@ int main(int argc, char** argv) {
                         {
                             shading.vis_and_target_set,
                             pbr_shading_set,
-                            engine::texture_registry::get_texture_pool().set,
+                            engine::textures::get_texture_pool().set,
                             engine::descriptor::null_set,
                         },
                     .indirect_buffer = engine::visbuffer::stages,

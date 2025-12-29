@@ -1,17 +1,6 @@
 #pragma once
 
-#include "goliath/texture.hpp"
-
 #include <volk.h>
-
-namespace engine::texture_pool {
-    static constexpr uint32_t null_ix = (uint32_t)-1;
-
-    extern GPUImage default_texture;
-    extern VkImageView default_texture_view;
-    static constexpr VkImageLayout default_texture_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    extern VkSampler default_sampler;
-}
 
 namespace engine {
     class TexturePool {

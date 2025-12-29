@@ -67,10 +67,10 @@ namespace engine::culling {
 
         for (size_t i = 0; i < frames_in_flight; i++) {
             task_buffers[i] =
-                Buffer::create(max_tasks * task_size,
+                Buffer::create("culling tasks buffer", max_tasks * task_size,
                                VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
             task_data_buffers[i] =
-                Buffer::create(max_tasks * task_data_size,
+                Buffer::create("culling task data buffer", max_tasks * task_data_size,
                                VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
         }
     }

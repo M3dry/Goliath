@@ -1,6 +1,7 @@
 #pragma once
 
 #include "goliath/texture.hpp"
+#include "goliath/samplers.hpp"
 #include "goliath/texture_pool.hpp"
 
 #include <cstdint>

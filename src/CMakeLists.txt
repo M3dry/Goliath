@@ -45,7 +45,9 @@ SET(ENGINE_SOURCES
     gpu_group.cpp
     visbuffer.cpp
     compute.cpp
+    samplers.cpp
     texture_registry.cpp
+    texture_registry2.cpp
     material.cpp
     culling.cpp
 

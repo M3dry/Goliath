@@ -1,6 +1,6 @@
 #pragma once
 
-#include "goliath/texture_registry.hpp"
+#include "goliath/texture_registry2.hpp"
 #include <cstdint>
 #include <cstring>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -38,7 +38,7 @@ namespace engine::material {
     constexpr size_t size(const attribute& attr) {
         switch (attr) {
             using enum attribute;
-            case Texture: return sizeof(uint32_t);
+            case Texture: return sizeof(textures::gid);
             case Float: return sizeof(float);
             case Uint: return sizeof(uint32_t);
             case Int: return sizeof(int32_t);
@@ -116,19 +116,19 @@ namespace engine {
 
         void acquire_textures(uint8_t* material_data) {
             for (const auto& offset : texture_gid_offsets) {
-                uint32_t gid;
+                textures::gid gid;
                 std::memcpy(&gid, material_data + offset, sizeof(uint32_t));
 
-                texture_registry::acquire(&gid, 1);
+                textures::acquire(&gid, 1);
             }
         }
 
         void release_textures(uint8_t* material_data) {
             for (const auto& offset : texture_gid_offsets) {
-                uint32_t gid;
+                textures::gid gid;
                 std::memcpy(&gid, material_data + offset, sizeof(uint32_t));
 
-                texture_registry::release(&gid, 1);
+                textures::release(&gid, 1);
             }
         }
     };
@@ -138,11 +138,11 @@ namespace engine::material::pbr {
     extern Material schema;
 
     struct Data {
-        uint32_t albedo_map{0};
-        uint32_t metallic_roughness_map{0};
-        uint32_t normal_map{0};
-        uint32_t occlusion_map{0};
-        uint32_t emissive_map{0};
+        textures::gid albedo_map{0, 0};
+        textures::gid metallic_roughness_map{0, 0};
+        textures::gid normal_map{0, 0};
+        textures::gid occlusion_map{0, 0};
+        textures::gid emissive_map{0, 0};
 
         uint32_t albedo_texcoord;
         uint32_t metallic_roughness_texcoord;

@@ -4,7 +4,7 @@
 #include "goliath/gpu_group.hpp"
 #include "goliath/material.hpp"
 #include "goliath/rendering.hpp"
-#include "goliath/texture.hpp"
+#include "goliath/samplers.hpp"
 
 #include <format>
 #include <utility>
@@ -18,7 +18,7 @@
 
 struct Handled {
     std::vector<std::pair<uint32_t, std::vector<uint32_t>>> meshes{};
-    std::vector<std::pair<uint32_t, uint32_t>> textures{};
+    std::vector<std::pair<uint32_t, engine::textures::gid>> textures{};
 };
 
 uint32_t get_type_size(int type) {
@@ -107,14 +107,14 @@ void* copy_buffer(uint32_t* size, uint32_t* element_size, const tinygltf::Model&
     return arr;
 }
 
-uint32_t parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
-    if (tex_id == -1) return 0;
+engine::textures::gid parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
+    if (tex_id == -1) return {0, 0};
     for (const auto& [id, gid] : handled.textures) {
         if (tex_id == id) return gid;
     }
 
     const auto& texture = model.textures[tex_id];
-    if (texture.source == -1) return 0;
+    if (texture.source == -1) return {0,0};
 
     const auto& image = model.images[texture.source];
 
@@ -203,7 +203,7 @@ bool resize = false;
         std::memcpy(image_data, image.image.data(), image_size);
     }
 
-    auto gid = engine::texture_registry::add((uint8_t*)image_data, image_size, image.width, image.height, format,
+    auto gid = engine::textures::add({(uint8_t*)image_data, image_size}, image.width, image.height, format,
                                              texture.name, sampler);
     handled.textures.emplace_back(tex_id, gid);
     return gid;
@@ -866,7 +866,7 @@ namespace engine {
 }
 
 namespace engine::model {
-    void upload_func(uint8_t* data, uint32_t start, uint32_t size, uint32_t* texture_gids, uint32_t texture_gid_count,
+    void upload_func(uint8_t* data, uint32_t start, uint32_t size, textures::gid* texture_gids, uint32_t texture_gid_count,
                      void* ctx) {
         const uint8_t* final_data = data + size;
         const Model* model;
@@ -936,7 +936,7 @@ namespace engine::model {
 
         void* draw_buf_host;
         bool draw_buf_coherent;
-        auto draw_buf = Buffer::create(model->mesh_indices_count * sizeof(DrawCommand),
+        auto draw_buf = Buffer::create("model draw buffer", model->mesh_indices_count * sizeof(DrawCommand),
                                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        {{&draw_buf_host, &draw_buf_coherent}});
 

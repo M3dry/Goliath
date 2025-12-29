@@ -31,7 +31,7 @@ namespace engine {
 
         void flush_mapped(uint32_t start, uint32_t size);
 
-        static Buffer create(uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags = 0);
+        static Buffer create(const char* name, uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags = 0);
         void destroy();
 
       private:

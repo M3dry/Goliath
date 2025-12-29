@@ -84,7 +84,7 @@ namespace engine::visbuffer {
             fragment_id_buffer_size =
                 util::align_up(alignment, swapchain_extent.width * swapchain_extent.height * sizeof(uint32_t));
 
-            stages = Buffer::create(frames_in_flight * (material_count_buffer_size + offsets_buffer_size +
+            stages = Buffer::create("visbuffer stages buffer",frames_in_flight * (material_count_buffer_size + offsets_buffer_size +
                                                         shading_dispatch_buffer_size + fragment_id_buffer_size),
                                     VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT |
                                         VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT,

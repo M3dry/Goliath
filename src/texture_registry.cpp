@@ -18,23 +18,6 @@
 
 #include "stb_image.h"
 
-struct JsonModelEntry {
-    std::string name;
-    std::filesystem::path path;
-};
-
-void to_json(nlohmann::json& j, const JsonModelEntry& entry) {
-    j = nlohmann::json{
-        {"name", entry.name},
-        {"path", entry.path},
-    };
-}
-
-void from_json(const nlohmann::json& j, JsonModelEntry& entry) {
-    j["name"].get_to(entry.name);
-    j["path"].get_to(entry.path);
-}
-
 namespace engine::texture_registry {
     uint32_t get_texture_store_size(uint32_t gid);
     void serialize_texture(uint8_t* out, uint32_t gid);
@@ -276,12 +259,7 @@ namespace engine::texture_registry {
         auto default_tex =
             add((uint8_t*)data, 4 * sizeof(uint8_t), 1, 1, VK_FORMAT_R8G8B8A8_UNORM, "default texture", Sampler{});
 
-        ref_counts[default_tex]++;
-        task task{
-            .gid = default_tex,
-            .generation = generations[default_tex],
-        };
-        upload_queue.enqueue(task);
+        acquire(&default_tex, 1);
     }
 
     void destroy() {
@@ -581,8 +559,8 @@ namespace engine::texture_registry {
 
         deleted[gid] = true;
 
-        texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                            texture_pool::default_sampler);
+        texture_pool.update(gid, gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            initialized_samplers[samplers[0]]);
 
         return true;
     }
@@ -664,8 +642,8 @@ namespace engine::texture_registry {
             };
             upload_queue.enqueue(task);
 
-            texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                                texture_pool::default_sampler);
+            texture_pool.update(gid, gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                initialized_samplers[samplers[0]]);
         }
     }
 
@@ -676,8 +654,8 @@ namespace engine::texture_registry {
 
             gpu_images[gid].destroy();
             GPUImageView::destroy(gpu_image_views[gid]);
-            texture_pool.update(gid, texture_pool::default_texture_view, texture_pool::default_texture_layout,
-                                texture_pool::default_sampler);
+            texture_pool.update(gid, gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                initialized_samplers[samplers[0]]);
 
             gpu_images[gid] = GPUImage{};
             gpu_image_views[gid] = nullptr;

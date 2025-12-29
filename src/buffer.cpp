@@ -7,7 +7,7 @@ namespace engine {
         vmaFlushAllocation(allocator, _allocation, start, size);
     }
 
-    Buffer Buffer::create(uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags) {
+    Buffer Buffer::create(const char* name, uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags) {
         Buffer buf{};
 
         VkBufferCreateInfo buffer_info{};
@@ -38,6 +38,8 @@ namespace engine {
         address_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         buf._address = vkGetBufferDeviceAddress(device, &address_info);
         buf._size = size;
+
+        vmaSetAllocationName(allocator, buf._allocation, name);
 
         return buf;
     }

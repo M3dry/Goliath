@@ -3,6 +3,7 @@
 #include "goliath/engine.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
+#include "goliath/samplers.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -50,7 +51,7 @@ namespace ui {
     };
 
     void init() {
-        game_window_sampler = engine::Sampler{}.create();
+        game_window_sampler = engine::samplers::get(0);
 
         for (size_t i = 0; i < engine::frames_in_flight; i++) {
             game_windows[i].x = -1.0f;
@@ -59,8 +60,6 @@ namespace ui {
     }
 
     void destroy() {
-        engine::Sampler::destroy(game_window_sampler);
-
         for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
             game_window_images[i].destroy();
             engine::GPUImageView::destroy(game_window_image_views[i]);

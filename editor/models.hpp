@@ -32,7 +32,6 @@ namespace models {
     bool remove(gid gid);
 
     std::expected<std::string*, Err> get_name(gid gid);
-    std::expected<const std::filesystem::path*, Err> get_path(gid gid);
     std::expected<engine::Model*, Err> get_cpu_model(gid gid);
 
     // timeline == -1 implies the model hasn't been yet uploaded to the GPU

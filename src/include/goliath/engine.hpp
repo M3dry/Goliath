@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <volk.h>
 #define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
@@ -44,7 +45,8 @@ namespace engine {
     extern VkQueue transport_queue;
     extern uint32_t transport_queue_family;
 
-    void init(const char* window_name, uint32_t max_texture_count, bool fullscreen);
+    void init(const char* window_name, uint32_t init_texture_capacity, std::filesystem::path texture_registry_directory,
+              bool fullscreen);
     void destroy();
 
     VkCommandBuffer get_cmd_buf();
