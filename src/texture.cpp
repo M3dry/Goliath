@@ -84,7 +84,7 @@ namespace engine {
 
     std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const Image& img, VkImageLayout new_layout) {
         GPUImage gpu_img;
-        VkImageMemoryBarrier2 barrier;
+        VkImageMemoryBarrier2 barrier{};
 
         VkImageCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -121,7 +121,7 @@ namespace engine {
 
     std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const GPUImageInfo& builder) {
         GPUImage gpu_img;
-        VkImageMemoryBarrier2 barrier;
+        VkImageMemoryBarrier2 barrier{};
 
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -135,11 +135,11 @@ namespace engine {
         if (builder._img_data != nullptr) {
             transport::upload(&barrier, builder._img_data, builder._size, builder._width, builder._height,
                               builder._image_info.format, gpu_img.image);
-            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors
+            // barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors
                                                            // disappear thanks to this
         } else {
             barrier.image = gpu_img.image;
-            barrier.srcQueueFamilyIndex = graphics_queue_family;
+            barrier.dstQueueFamilyIndex = graphics_queue_family;
             transport::transition(&barrier, builder._aspect_mask);
         }
         gpu_img.layout = builder._new_image_layout;

@@ -1,5 +1,6 @@
 #include "models.hpp"
 #include "goliath/culling.hpp"
+#include "goliath/engine.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/mspc_queue.hpp"
 #include "goliath/synchronization.hpp"
@@ -188,6 +189,7 @@ namespace models {
                     barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                     barrier.dstStageMask =
                         VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstQueueFamilyIndex = engine::graphics_queue_family;
                     auto& gpu_data = gpu_datas[gid.id];
                     gpu_data.group = engine::gpu_group::end(&barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
                     gpu_data.draw_buffer = draw_buffer;

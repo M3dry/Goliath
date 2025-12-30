@@ -52,19 +52,26 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (!std::filesystem::exists(argv[1])) {
+        printf("File `%s` doesn't exist\n", argv[1]);
+        return -1;
+    }
+
     auto [image, metadata] = read_goi(argv[1]);
     engine::transport::begin();
     auto [gpu_image, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
-                                 .data(image.data())
-                                 .size(image.size())
-                                 .width(metadata.width)
-                                 .height(metadata.height)
-                                 .format(metadata.format)
-                                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                 .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+                                                             .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                                             .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                                             .data(image.data())
+                                                             .size(image.size())
+                                                             .width(metadata.width)
+                                                             .height(metadata.height)
+                                                             .format(metadata.format));
     auto image_timeline = engine::transport::end();
     auto gpu_image_view = engine::GPUImageView{gpu_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
-    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
     bool barrier_applied = false;
 
@@ -73,17 +80,13 @@ int main(int argc, char** argv) {
     free(image.data());
 
     uint32_t image_vertex_spv_size;
-    auto image_vertex_spv_data =
-        engine::util::read_file("goiview_vertex.spv", &image_vertex_spv_size);
-    auto image_vertex_module =
-        engine::create_shader({image_vertex_spv_data, image_vertex_spv_size});
+    auto image_vertex_spv_data = engine::util::read_file("goiview_vertex.spv", &image_vertex_spv_size);
+    auto image_vertex_module = engine::create_shader({image_vertex_spv_data, image_vertex_spv_size});
     free(image_vertex_spv_data);
 
     uint32_t image_fragment_spv_size;
-    auto image_fragment_spv_data =
-        engine::util::read_file("goiview_fragment.spv", &image_fragment_spv_size);
-    auto image_fragment_module =
-        engine::create_shader({image_fragment_spv_data, image_fragment_spv_size});
+    auto image_fragment_spv_data = engine::util::read_file("goiview_fragment.spv", &image_fragment_spv_size);
+    auto image_fragment_module = engine::create_shader({image_fragment_spv_data, image_fragment_spv_size});
     free(image_fragment_spv_data);
 
     auto image_descriptor_layout = engine::DescriptorSet<engine::descriptor::Binding{
@@ -93,12 +96,12 @@ int main(int argc, char** argv) {
     }>::create();
 
     auto image_pipeline = engine::GraphicsPipeline(engine::GraphicsPipelineBuilder{}
-                                                                  .vertex(image_vertex_module)
-                                                                  .fragment(image_fragment_module)
-                                                                  .push_constant_size(ImagePC::size)
-                                                                  .add_color_attachment(engine::swapchain_format)
-                                                                  .descriptor_layout(0, image_descriptor_layout))
-                                         .cull_mode(engine::CullMode::Back);
+                                                       .vertex(image_vertex_module)
+                                                       .fragment(image_fragment_module)
+                                                       .push_constant_size(ImagePC::size)
+                                                       .add_color_attachment(engine::swapchain_format)
+                                                       .descriptor_layout(0, image_descriptor_layout))
+                              .cull_mode(engine::CullMode::NoCull);
 
     double accum = 0;
     double last_time = glfwGetTime();
@@ -141,24 +144,27 @@ int main(int argc, char** argv) {
                     .set_load_op(engine::LoadOp::Clear)
                     .set_store_op(engine::StoreOp::Store)));
 
-            auto image_descriptor = engine::descriptor::new_set(image_descriptor_layout);
-            engine::descriptor::begin_update(image_descriptor);
-            engine::descriptor::update_sampled_image(0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, gpu_image_view, image_sampler);
-            engine::descriptor::end_update();
-
-            uint8_t image_pc[ImagePC::size]{};
-            ImagePC::write(image_pc, glm::uvec2{engine::swapchain_extent.width, engine::swapchain_extent.height}, glm::uvec2{metadata.width, metadata.height});
-
-            image_pipeline.bind();
             if (engine::transport::is_ready(image_timeline)) {
+                auto image_descriptor = engine::descriptor::new_set(image_descriptor_layout);
+                engine::descriptor::begin_update(image_descriptor);
+                engine::descriptor::update_sampled_image(0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, gpu_image_view,
+                                                         image_sampler);
+                engine::descriptor::end_update();
+
+                uint8_t image_pc[ImagePC::size]{};
+                ImagePC::write(image_pc, glm::uvec2{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                               glm::uvec2{metadata.width, metadata.height});
+
+                image_pipeline.bind();
                 image_pipeline.draw(engine::GraphicsPipeline::DrawParams{
                     .push_constant = image_pc,
-                    .descriptor_indexes = {
-                        image_descriptor,
-                        engine::descriptor::null_set,
-                        engine::descriptor::null_set,
-                        engine::descriptor::null_set,
-                    },
+                    .descriptor_indexes =
+                        {
+                            image_descriptor,
+                            engine::descriptor::null_set,
+                            engine::descriptor::null_set,
+                            engine::descriptor::null_set,
+                        },
                     .vertex_count = 3,
                 });
             }

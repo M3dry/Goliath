@@ -191,13 +191,10 @@ namespace engine::transport {
         dep_info.pBufferMemoryBarriers = barrier;
         vkCmdPipelineBarrier2(cmd_bufs[current_cmd_buf], &dep_info);
 
-        uint32_t dst_queue_family = barrier->dstQueueFamilyIndex;
         barrier->srcStageMask = VK_PIPELINE_STAGE_2_NONE;
         barrier->srcAccessMask = 0;
         barrier->dstStageMask = dstStage;
         barrier->dstAccessMask = dstAccess;
-        barrier->dstQueueFamilyIndex = barrier->srcQueueFamilyIndex;
-        barrier->srcQueueFamilyIndex = dst_queue_family;
 
         ring_buffer_start_index = (ring_buffer_start_index + size) % BUFFER_SIZE;
     }
@@ -302,13 +299,10 @@ namespace engine::transport {
         dep_info.pImageMemoryBarriers = &barrier_cpy;
         vkCmdPipelineBarrier2(cmd_bufs[current_cmd_buf], &dep_info);
 
-        uint32_t dst_queue_family = barrier->dstQueueFamilyIndex;
         barrier->srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier->srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         barrier->dstStageMask = dstStage;
         barrier->dstAccessMask = dstAccess;
-        barrier->dstQueueFamilyIndex = barrier->srcQueueFamilyIndex;
-        barrier->srcQueueFamilyIndex = dst_queue_family;
         barrier->newLayout = newLayout;
 
         ring_buffer_start_index = (ring_buffer_start_index + size) % BUFFER_SIZE;
