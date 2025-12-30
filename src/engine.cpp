@@ -2,7 +2,7 @@
 #include "engine_.hpp"
 #include "event_.hpp"
 #include "goliath/samplers.hpp"
-#include "texture_registry2_.hpp"
+#include "textures_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <volk.h>

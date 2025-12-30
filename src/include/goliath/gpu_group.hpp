@@ -1,7 +1,7 @@
 #pragma once
 
 #include "goliath/buffer.hpp"
-#include "goliath/texture_registry2.hpp"
+#include "goliath/textures.hpp"
 
 namespace engine {
     struct GPUGroup {

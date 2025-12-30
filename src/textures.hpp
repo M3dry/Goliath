@@ -14,11 +14,25 @@ namespace engine::textures {
     };
 
     struct gid {
-        uint8_t generation:8;
-        uint32_t id:24;
+        uint32_t value;
 
-        bool operator==(const gid& other) const {
-            return id == other.id && generation == other.generation;
+        static constexpr uint32_t id_mask = 0x00FF'FFFFu;
+        static constexpr uint32_t gen_mask = 0xFF00'0000u;
+        static constexpr uint32_t gen_shift = 24;
+
+        gid() : value(0) {}
+        gid(uint32_t generation, uint32_t id) : value((id & id_mask) | ((generation & 0xFFu) << gen_shift)) {}
+
+        uint32_t id() const {
+            return value & id_mask;
+        }
+
+        uint32_t gen() const {
+            return (value & gen_mask) >> gen_shift;
+        }
+
+        bool operator==(gid other) const {
+            return value == other.value;
         }
     };
 

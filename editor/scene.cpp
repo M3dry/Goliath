@@ -54,11 +54,12 @@ namespace scene {
     }
 
     void Instance::update_transform(glm::mat4& transform) const {
-        transform = glm::translate(glm::identity<glm::mat4>(), translate) *
-                    glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), rotate.x, glm::vec3{0, 1, 0}),
-                                            rotate.y, glm::vec3{1, 0, 0}),
-                                rotate.z, glm::vec3{0, 0, 1}) *
-                    glm::scale(glm::identity<glm::mat4>(), scale);
+        transform =
+            glm::translate(glm::identity<glm::mat4>(), translate) *
+            glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotate.x), glm::vec3{0, 1, 0}),
+                                    glm::radians(rotate.y), glm::vec3{1, 0, 0}),
+                        glm::radians(rotate.z), glm::vec3{0, 0, 1}) *
+            glm::scale(glm::identity<glm::mat4>(), scale);
     }
 
     void Scene::acquire() {
@@ -72,7 +73,7 @@ namespace scene {
                 auto it = std::find(used_models.begin(), used_models.end(), instances[inst_ix].model_gid);
                 assert(it != used_models.end() && "Model must be in the `used_models` field of the scene");
 
-                auto ix = std::distance(it, used_models.begin());
+                auto ix = std::distance(used_models.begin(), it);
                 instances_of_used_models[ix].emplace_back(inst_ix);
             }
         }
@@ -175,6 +176,7 @@ namespace scene {
     }
 
     void save(std::filesystem::path scenes_json) {
+        printf("saving scene\n");
         std::ofstream o{scenes_json};
 
         o << nlohmann::json{

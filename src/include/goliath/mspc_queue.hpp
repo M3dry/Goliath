@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <emmintrin.h>
 #include <vector>
@@ -24,7 +25,7 @@ namespace engine {
         ReverseIx pub{};
         CommitIx com{};
         ConsumeIx con{};
-        std::array<Task, N> buffer;
+        std::array<Task, N> buffer{};
 
       public:
         void enqueue(Task task) {
@@ -48,6 +49,8 @@ namespace engine {
             uint32_t end = com.commit.load(std::memory_order_acquire);
 
             uint32_t count = end - start;
+            if (count == 0) return;
+
             tasks.resize(count);
 
             uint32_t first = start % N;

@@ -1,10 +1,10 @@
-#include "goliath/texture_registry2.hpp"
+#include "goliath/textures.hpp"
 #include "goliath/mspc_queue.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/thread_pool.hpp"
 #include "goliath/transport.hpp"
-#include "texture_registry2_.hpp"
+#include "textures_.hpp"
 
 #include "xxHash/xxhash.h"
 
@@ -23,18 +23,15 @@ namespace engine::textures {
     std::filesystem::path texture_directory{};
 
     std::filesystem::path make_texture_path(gid gid) {
-        return std::format("{:02X}{:06X}.goi", (uint8_t)gid.generation, gid.id & 0x00ffffff);
+        return std::format("{:02X}{:06X}.goi", (uint8_t)gid.gen(), gid.id());
     }
 
     void to_json(nlohmann::json& j, const gid& gid) {
-        uint32_t gid_;
-        std::memcpy(&gid_, &gid, sizeof(uint32_t));
-        j = gid_;
+        j = gid.value;
     }
 
     void from_json(const nlohmann::json& j, gid& gid) {
-        uint32_t gid_ = j;
-        std::memcpy(&gid, &gid_, sizeof(uint32_t));
+        gid.value = j;
     }
 
     TexturePool texture_pool;
@@ -48,7 +45,7 @@ namespace engine::textures {
     std::vector<VkImageView> gpu_image_views{};
     std::vector<uint32_t> samplers{};
 
-    std::vector<gid> initializing_models{};
+    std::vector<gid> initializing_textures{};
     static constexpr std::size_t initialized_queue_size = 32;
     engine::MSPCQueue<gid, initialized_queue_size> initialized_queue;
 
@@ -75,14 +72,14 @@ namespace engine::textures {
     }
 
     void set_default_texture(gid gid) {
-        if (generations[gid.id] != gid.generation) return;
+        if (generations[gid.id()] != gid.gen()) return;
 
-        texture_pool.update(gid.id, gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        texture_pool.update(gid.id(), gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             samplers::get(samplers[0]));
     }
 
     bool is_initializing(gid gid) {
-        return std::find(initializing_models.begin(), initializing_models.end(), gid) != initializing_models.end();
+        return std::find(initializing_textures.begin(), initializing_textures.end(), gid) != initializing_textures.end();
     }
 
     struct task {
@@ -99,7 +96,7 @@ namespace engine::textures {
     void load_texture_data(gid gid, uint8_t*& image_data, uint32_t& image_size, Metadata& metadata) {
         std::lock_guard locK{gid_read};
 
-        if (generations[gid.id] != gid.generation) return;
+        if (generations[gid.id()] != gid.gen()) return;
 
         auto path = texture_directory / make_texture_path(gid);
 
@@ -173,7 +170,7 @@ namespace engine::textures {
         generations.emplace_back(0);
         deleted.emplace_back(false);
 
-        ref_counts.emplace_back(0);
+        ref_counts.emplace_back(1);
         gpu_images.emplace_back();
         gpu_image_views.emplace_back();
         samplers.emplace_back(0);
@@ -213,7 +210,7 @@ namespace engine::textures {
             auto finish_timeline = engine::transport::begin();
             for (const auto& up_task : upload_tasks) {
                 auto gid = up_task.gid;
-                if (generations[gid.id] == gid.generation && ref_counts[gid.id] != 0 && !deleted[gid.id]) {
+                if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
                     auto metadata = up_task.metadata;
                     auto [image, barrier] = GPUImage::upload(GPUImageInfo{}
                                                                  .width(metadata.width)
@@ -224,8 +221,8 @@ namespace engine::textures {
                                                                  .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                                                                  .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
 
-                    gpu_images[gid.id] = image;
-                    gpu_image_views[gid.id] = GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+                    gpu_images[gid.id()] = image;
+                    gpu_image_views[gid.id()] = GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
 
                     barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
                     barrier.dstStageMask =
@@ -244,16 +241,16 @@ namespace engine::textures {
         while (finalize_queue.size() > 0 && transport::is_ready(finalize_queue.front().first)) {
             auto gid = finalize_queue.front().second;
 
-            if (generations[gid.id] == gid.generation && ref_counts[gid.id] != 0 && !deleted[gid.id]) {
-                texture_pool.update(gid.id, gpu_image_views[gid.id], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                    samplers::get(samplers[gid.id]));
+            if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
+                texture_pool.update(gid.id(), gpu_image_views[gid.id()], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                    samplers::get(samplers[gid.id()]));
             }
 
             finalize_queue.pop_front();
         }
 
-        std::erase_if(initializing_models, [&](auto gid) {
-            return std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_models.end();
+        std::erase_if(initializing_textures, [&](auto gid) {
+            return std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
         });
     }
 
@@ -293,7 +290,7 @@ namespace engine::textures {
         uint32_t id_counter = 1;
         for (auto&& entry : entries) {
             auto gid = entry.gid;
-            while (gid.id > id_counter) {
+            while (gid.id() > id_counter) {
                 names.emplace_back();
                 generations.emplace_back(0);
                 deleted.emplace_back(true);
@@ -307,7 +304,7 @@ namespace engine::textures {
             }
 
             names.emplace_back(std::move(entry.name));
-            generations.emplace_back((uint8_t)gid.generation);
+            generations.emplace_back((uint8_t)gid.gen());
             deleted.emplace_back(false);
 
             ref_counts.emplace_back(0);
@@ -341,17 +338,17 @@ namespace engine::textures {
         gid gid;
         if (auto gid_ = find_empty_gid(); gid_) {
             gid = *gid_;
-            uint8_t gid_gen = gid.generation;
-            uint8_t gid_id = gid.id;
+            uint8_t gid_gen = gid.gen();
+            uint8_t gid_id = gid.id();
 
-            names[gid.id] = std::move(name);
-            generations[gid.id]++;
-            deleted[gid.id] = false;
+            names[gid.id()] = std::move(name);
+            generations[gid.id()]++;
+            deleted[gid.id()] = false;
 
-            ref_counts[gid.id] = 0;
-            gpu_images[gid.id] = GPUImage{};
-            gpu_image_views[gid.id] = nullptr;
-            samplers[gid.id] = sampler_ix;
+            ref_counts[gid.id()] = 0;
+            gpu_images[gid.id()] = GPUImage{};
+            gpu_image_views[gid.id()] = nullptr;
+            samplers[gid.id()] = sampler_ix;
         } else {
             std::lock_guard lock{gid_read};
 
@@ -361,8 +358,7 @@ namespace engine::textures {
                 rebuild_pool();
             }
 
-            gid.generation = 0;
-            gid.id = names.size();
+            gid = {0, (uint32_t)names.size()};
 
             names.emplace_back(std::move(name));
             generations.emplace_back(0);
@@ -374,7 +370,7 @@ namespace engine::textures {
             samplers.emplace_back(sampler_ix);
         }
 
-        initializing_models.emplace_back(gid);
+        initializing_textures.emplace_back(gid);
         io_pool.enqueue({task::Add, gid, path});
 
         return gid;
@@ -387,17 +383,14 @@ namespace engine::textures {
         gid gid;
         if (auto gid_ = find_empty_gid(); gid_) {
             gid = *gid_;
-            uint8_t gid_gen = gid.generation;
-            uint8_t gid_id = gid.id;
+            names[gid.id()] = std::move(name);
+            generations[gid.id()]++;
+            deleted[gid.id()] = false;
 
-            names[gid.id] = std::move(name);
-            generations[gid.id]++;
-            deleted[gid.id] = false;
-
-            ref_counts[gid.id] = 0;
-            gpu_images[gid.id] = GPUImage{};
-            gpu_image_views[gid.id] = nullptr;
-            samplers[gid.id] = sampler_ix;
+            ref_counts[gid.id()] = 0;
+            gpu_images[gid.id()] = GPUImage{};
+            gpu_image_views[gid.id()] = nullptr;
+            samplers[gid.id()] = sampler_ix;
         } else {
             std::lock_guard lock{gid_read};
 
@@ -407,8 +400,7 @@ namespace engine::textures {
                 rebuild_pool();
             }
 
-            gid.generation = 0;
-            gid.id = names.size();
+            gid = {0, (uint32_t)names.size()};
 
             names.emplace_back(std::move(name));
             generations.emplace_back(0);
@@ -436,49 +428,49 @@ namespace engine::textures {
     }
 
     bool remove(gid gid) {
-        if (generations[gid.id] != gid.generation) return false;
-        if (ref_counts[gid.id] > 0) return false;
-        if (deleted[gid.id]) return false;
+        if (generations[gid.id()] != gid.gen()) return false;
+        if (ref_counts[gid.id()] > 0) return false;
+        if (deleted[gid.id()]) return false;
 
-        deleted[gid.id] = true;
-        generations[gid.id]++;
+        deleted[gid.id()] = true;
+        generations[gid.id()]++;
 
         std::filesystem::remove(texture_directory / make_texture_path(gid));
 
-        gpu_images[gid.id].destroy();
-        GPUImageView::destroy(gpu_image_views[gid.id]);
-        samplers::remove(samplers[gid.id]);
+        gpu_images[gid.id()].destroy();
+        GPUImageView::destroy(gpu_image_views[gid.id()]);
+        samplers::remove(samplers[gid.id()]);
 
-        names[gid.id] = "";
-        gpu_images[gid.id] = GPUImage{};
-        gpu_image_views[gid.id] = nullptr;
-        samplers[gid.id] = -1;
+        names[gid.id()] = "";
+        gpu_images[gid.id()] = GPUImage{};
+        gpu_image_views[gid.id()] = nullptr;
+        samplers[gid.id()] = -1;
 
         return true;
     }
 
     std::expected<std::string*, Err> get_name(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        return &names[gid.id];
+        return &names[gid.id()];
     }
 
     std::expected<GPUImage, Err> get_image(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        return gpu_images[gid.id];
+        return gpu_images[gid.id()];
     }
 
     std::expected<VkImageView, Err> get_image_view(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        return gpu_image_views[gid.id];
+        return gpu_image_views[gid.id()];
     }
 
     std::expected<uint32_t, Err> get_sampler(gid gid) {
-        if (generations[gid.id] != gid.generation) return std::unexpected(Err::BadGeneration);
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        return samplers[gid.id];
+        return samplers[gid.id()];
     }
 
     uint8_t get_generation(uint32_t ix) {
@@ -488,14 +480,14 @@ namespace engine::textures {
     void acquire(const gid* gids, uint32_t count) {
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (generations[gid.id] != gid.generation) continue;
+            if (generations[gid.id()] != gid.gen()) continue;
 
-            if (++ref_counts[gid.id] != 1) return;
+            if (++ref_counts[gid.id()] != 1) return;
 
             set_default_texture(gid);
 
-            gpu_images[gid.id] = GPUImage{};
-            gpu_image_views[gid.id] = nullptr;
+            gpu_images[gid.id()] = GPUImage{};
+            gpu_image_views[gid.id()] = nullptr;
             io_pool.enqueue({task::Acquire, gid});
         }
     }
@@ -503,11 +495,14 @@ namespace engine::textures {
     void release(const gid* gids, uint32_t count) {
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (generations[gid.id] != gid.generation) continue;
-            if (ref_counts[gid.id] == 0 || --ref_counts[gid.id] != 0) continue;
+            if (generations[gid.id()] != gid.gen()) continue;
+            if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
-            gpu_images[gid.id].destroy();
-            GPUImageView::destroy(gpu_image_views[gid.id]);
+            gpu_images[gid.id()].destroy();
+            GPUImageView::destroy(gpu_image_views[gid.id()]);
+
+            gpu_images[gid.id()] = GPUImage{};
+            gpu_image_views[gid.id()] = nullptr;
         }
     }
 

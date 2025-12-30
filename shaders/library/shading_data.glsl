@@ -3,6 +3,10 @@
 
 #include "library/vertex_data.glsl"
 
+layout(set = 2, binding = 0) uniform sampler2D textures[];
+
+#define get_texture(gid) textures[gid & 0x00FFFFFFu]
+
 struct BarycentricDeriv {
     vec3 lambda;
     vec3 ddx;

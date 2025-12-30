@@ -1,13 +1,14 @@
 #include "ui.hpp"
 
 #include "goliath/engine.hpp"
+#include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/samplers.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "models.hpp"
+#include "project.hpp"
 #include "scene.hpp"
 #include <limits>
 #include <vulkan/vulkan_core.h>
@@ -42,13 +43,26 @@ namespace ui {
     VkImageView game_window_image_views[engine::frames_in_flight]{};
     VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
     std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
-    VkSampler game_window_sampler;;
+    VkSampler game_window_sampler;
+    ;
 
     std::string models_query{};
     models::gid selected_model{
-        .generation = (uint8_t)-1,
-        .id = (uint32_t)-1,
+        (uint8_t)-1,
+        (uint32_t)-1,
     };
+
+    struct SelectedInstance {
+        uint32_t scene;
+        size_t instance;
+        float timer = 0.1;
+
+        void reset_timer() {
+            timer = 0.1;
+        }
+    };
+
+    std::optional<SelectedInstance> transform_value_changed{};
 
     void init() {
         game_window_sampler = engine::samplers::get(0);
@@ -67,14 +81,22 @@ namespace ui {
         }
     }
 
+    void tick(float dt) {
+        if (transform_value_changed) {
+            if ((transform_value_changed->timer -= dt) <= 0) {
+                scene::save(project::scenes_file);
+                transform_value_changed = std::nullopt;
+            }
+        }
+    }
+
     std::optional<VkImageMemoryBarrier2> game_window() {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
         auto& game_window_image = game_window_images[curr_frame];
         auto& game_window_image_view = game_window_image_views[curr_frame];
         auto& game_window_texture = game_window_textures[curr_frame];
-        auto& [game_window_barrier_applied, game_window_barrier] =
-            game_window_barriers[curr_frame];
+        auto& [game_window_barrier_applied, game_window_barrier] = game_window_barriers[curr_frame];
 
         ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         ImVec2 avail = ImGui::GetWindowSize();
@@ -208,12 +230,12 @@ namespace ui {
         if (models_query.empty()) {
             auto& scene = scene::selected_scene();
 
-            if (selected_model.generation != (uint8_t)-1 && selected_model.id != -1) {
+            if (selected_model != models::gid{(uint8_t)-1, (uint32_t)-1}) {
                 matches.emplace_back(selected_model, std::numeric_limits<int32_t>::max());
             }
 
             for (const auto& gid : scene.used_models) {
-                if (gid.id == selected_model.id && gid.generation == selected_model.generation) continue;
+                if (gid == selected_model) continue;
 
                 auto score = score_search(models_query, **models::get_name(gid));
                 if (score > std::numeric_limits<int32_t>::min()) {
@@ -242,7 +264,7 @@ namespace ui {
     }
 
     void model_entry(models::gid gid) {
-        ImGui::PushID(gid.id);
+        ImGui::PushID(gid.value);
         auto name = *models::get_name(gid);
 
         bool double_click = false;
@@ -253,8 +275,7 @@ namespace ui {
             int clicks = ImGui::GetMouseClickedCount(ImGuiMouseButton_Left);
             if (clicks == 1) {
                 if (selected_model == gid) {
-                    selected_model.generation = -1;
-                    selected_model.id = -1;
+                    selected_model = {(uint8_t)-1, (uint32_t)-1};
                 } else {
                     selected_model = gid;
                 }
@@ -268,8 +289,7 @@ namespace ui {
             printf("hello\n");
         }
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-            selected_model.generation = -1;
-            selected_model.id = -1;
+            selected_model = {(uint8_t)-1, (uint32_t)-1};
         } else if (!ImGui::IsItemActive() && double_click) {
             selected_model = gid;
             scene::selected_scene().add_instance(scene::Instance{
@@ -322,20 +342,36 @@ namespace ui {
         return ix;
     }
 
-    void transform_pane(glm::mat4* transforms) {
+    void transform_pane() {
         auto& scene = scene::selected_scene();
         if (scene.selected_instance == -1) return;
         auto& instance = scene.instances[scene.selected_instance];
 
-        ImGui::InputText("name: ", &instance.name);
+        bool value_changed = false;
+        value_changed |= ImGui::InputText("name: ", &instance.name);
 
-        ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+        value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
 
-        ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-        ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-        ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
 
-        ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+        value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+
+        if (!value_changed) return;
+
+        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() && transform_value_changed->instance == scene.selected_instance) {
+            transform_value_changed->reset_timer();
+            return;
+        } else if (transform_value_changed != std::nullopt) {
+            scene::save(project::scenes_file);
+            return;
+        }
+
+        transform_value_changed = {
+            scene::selected_scene_ix(),
+            scene.selected_instance,
+        };
     }
 
     void scene_pane() {

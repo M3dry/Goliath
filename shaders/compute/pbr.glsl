@@ -1,13 +1,13 @@
 #version 460
 
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+#extension GL_EXT_nonuniform_qualifier : require
+
 #include "library/visbuffer_data.glsl"
 #include "library/mesh_data.glsl"
 #include "library/culled_data.glsl"
 #include "library/shading_data.glsl"
-
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_buffer_reference_uvec2 : require
-#extension GL_EXT_nonuniform_qualifier : require
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -35,7 +35,6 @@ layout(set = 1, binding = 0) uniform ShadingData {
     vec3 light_intensity;
     mat4 view_proj_matrix;
 };
-layout(set = 2, binding = 0) uniform sampler2D textures[];
 
 const float PI = 3.14159265359;
 
@@ -205,13 +204,13 @@ void main() {
 
     vec3 world_pos = (view_proj_matrix * vec4(interpolated.pos.value, 1.0)).xyz;
 
-    vec3 albedo = (pbr.albedo * textureGrad(textures[pbr.albedo_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy)).rgb;
-    float metallic = pbr.metallic_factor * textureGrad(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).b;
-    float roughness = pbr.roughness_factor * textureGrad(textures[pbr.metallic_roughness_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).g;
-    vec3 normal_map_value = pbr.normal_factor * textureGrad(textures[pbr.normal_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
+    vec3 albedo = (pbr.albedo * textureGrad(get_texture(pbr.albedo_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy)).rgb;
+    float metallic = pbr.metallic_factor * textureGrad(get_texture(pbr.metallic_roughness_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).b;
+    float roughness = pbr.roughness_factor * textureGrad(get_texture(pbr.metallic_roughness_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).g;
+    vec3 normal_map_value = pbr.normal_factor * textureGrad(get_texture(pbr.normal_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
     normal_map_value = normal_map_value * 2.0 - 1.0;
-    float occlusion = pbr.occlusion_factor * textureGrad(textures[pbr.occlusion_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).r;
-    vec3 emissive = pbr.emissive_factor * textureGrad(textures[pbr.emissive_map], interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
+    float occlusion = pbr.occlusion_factor * textureGrad(get_texture(pbr.occlusion_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).r;
+    vec3 emissive = pbr.emissive_factor * textureGrad(get_texture(pbr.emissive_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
 
     mat3 TBN = reconstruct_TBN(interpolated.normal.value, interpolated.pos, interpolated.texcoord0);
     vec3 normal = normalize(TBN * normal_map_value);

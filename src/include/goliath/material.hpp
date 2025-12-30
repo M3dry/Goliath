@@ -1,6 +1,6 @@
 #pragma once
 
-#include "goliath/texture_registry2.hpp"
+#include "goliath/textures.hpp"
 #include <cstdint>
 #include <cstring>
 #include <glm/ext/matrix_float4x4.hpp>

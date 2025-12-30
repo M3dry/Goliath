@@ -9,6 +9,7 @@
 namespace ui {
     void init();
     void destroy();
+    void tick(float dt);
 
     std::optional<VkImageMemoryBarrier2> game_window();
     bool skipped_game_window();
@@ -22,7 +23,7 @@ namespace ui {
     void instances_pane(glm::mat4* transforms);
     size_t instance_entry(scene::Scene& current_scene, size_t ix, glm::mat4& transform);
 
-    void transform_pane(glm::mat4* transforms);
+    void transform_pane();
 
     void scene_pane();
 }

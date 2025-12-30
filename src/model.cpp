@@ -7,6 +7,7 @@
 #include "goliath/samplers.hpp"
 
 #include <format>
+#include <ranges>
 #include <utility>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
@@ -107,7 +108,7 @@ void* copy_buffer(uint32_t* size, uint32_t* element_size, const tinygltf::Model&
     return arr;
 }
 
-engine::textures::gid parse_texture(const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
+engine::textures::gid parse_texture(const std::string& tex_name, const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
     if (tex_id == -1) return {0, 0};
     for (const auto& [id, gid] : handled.textures) {
         if (tex_id == id) return gid;
@@ -204,12 +205,12 @@ bool resize = false;
     }
 
     auto gid = engine::textures::add({(uint8_t*)image_data, image_size}, image.width, image.height, format,
-                                             texture.name, sampler);
+                                             tex_name, sampler);
     handled.textures.emplace_back(tex_id, gid);
     return gid;
 }
 
-void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinygltf::Material& material,
+void parse_material(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model, const tinygltf::Material& material,
                     Handled& handled) {
     out->material_id = 0;
     out->material_data_size = engine::material::pbr::schema.total_size;
@@ -217,12 +218,12 @@ void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinyg
     out->material_texture_count = 5;
 
     engine::material::pbr::Data pbr_data{
-        .albedo_map = parse_texture(model, material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
+        .albedo_map = parse_texture(prim_name + ": Albedo", model, material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
         .metallic_roughness_map =
-            parse_texture(model, material.pbrMetallicRoughness.metallicRoughnessTexture.index, false, handled),
-        .normal_map = parse_texture(model, material.normalTexture.index, false, handled),
-        .occlusion_map = parse_texture(model, material.occlusionTexture.index, false, handled),
-        .emissive_map = parse_texture(model, material.emissiveTexture.index, true, handled),
+            parse_texture(prim_name + ": Metallic Roughness", model, material.pbrMetallicRoughness.metallicRoughnessTexture.index, false, handled),
+        .normal_map = parse_texture(prim_name + ": Normal", model, material.normalTexture.index, false, handled),
+        .occlusion_map = parse_texture(prim_name + ": Occlusion", model, material.occlusionTexture.index, false, handled),
+        .emissive_map = parse_texture(prim_name + ": Emissive", model, material.emissiveTexture.index, true, handled),
 
         .albedo_texcoord = (uint32_t)material.pbrMetallicRoughness.baseColorTexture.texCoord,
         .metallic_roughness_texcoord = (uint32_t)material.pbrMetallicRoughness.metallicRoughnessTexture.texCoord,
@@ -241,7 +242,7 @@ void parse_material(engine::Mesh* out, const tinygltf::Model& model, const tinyg
     engine::material::pbr::write_data_blob(pbr_data, out->material_data);
 }
 
-engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& model,
+engine::Model::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
                                    const tinygltf::Primitive& primitive, engine::collisions::AABB& model_aabb,
                                    Handled& handled) {
     auto it = primitive.attributes.find("POSITION");
@@ -339,7 +340,7 @@ engine::Model::Err parse_primitive(engine::Mesh* out, const tinygltf::Model& mod
     model_aabb.extend(aabb);
 
     assert(primitive.material >= 0 && "NOTE: if this asserts add default material creation");
-    parse_material(out, model, model.materials[primitive.material], handled);
+    parse_material(prim_name, out, model, model.materials[primitive.material], handled);
 
     return engine::Model::Ok;
 }
@@ -384,10 +385,10 @@ engine::Model::Err parse_node(const tinygltf::Model& model, int node_id, std::ve
     {
         auto& mesh = model.meshes[(uint64_t)node.mesh];
         std::vector<uint32_t> handled_meshes{};
-        for (const auto& primitive : mesh.primitives) {
+        for (const auto& [i, primitive] : mesh.primitives | std::ranges::views::enumerate) {
             meshes.emplace_back();
 
-            auto res = parse_primitive(&meshes.back(), model, primitive, model_aabb, handled);
+            auto res = parse_primitive(i == 0 ? mesh.name : std::format("{} #{}", mesh.name, i), &meshes.back(), model, primitive, model_aabb, handled);
             if (res != engine::Model::Ok) return res;
 
             mesh_indices.emplace_back(meshes.size() - 1);

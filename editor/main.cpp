@@ -10,7 +10,7 @@
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/texture_registry2.hpp"
+#include "goliath/textures.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -26,7 +26,6 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <unistd.h>
-#include <fstream>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -291,7 +290,7 @@ int main(int argc, char** argv) {
 
     glm::vec3 res_movement{0.0f};
 
-    bool lock_cam = false;
+    bool lock_cam = true;
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     engine::imgui::enable(false);
 
@@ -300,20 +299,13 @@ int main(int argc, char** argv) {
     glm::vec3 light_intensity{1.0f};
     glm::vec3 light_position{5.0f};
 
-    bool test_x = false;
-
     ui::init();
 
     double accum = 0;
     double last_time = glfwGetTime();
-
-    std::string models_query{};
-    models::gid models_selected{};
-    models_selected.generation = -1;
-    models_selected.id = -1;
+    static constexpr double dt = (1000.0 / 60.0) / 1000.0;
 
     bool done = false;
-    uint64_t update_count = 0;
     while (!glfwWindowShouldClose(engine::window)) {
         double time = glfwGetTime();
         double frame_time = time - last_time;
@@ -326,8 +318,10 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        while (accum >= (1000.0 / 60.0) / 1000.0) {
-            accum -= (1000.0 / 60.0) / 1000.0;
+        while (accum >= dt) {
+            accum -= dt;
+
+            ui::tick(dt);
 
             cam.set_projection(engine::camera::Perspective{
                 .fov = glm::radians(fov),
@@ -371,7 +365,6 @@ int main(int argc, char** argv) {
 
             cam.update_matrices();
 
-            update_count++;
             engine::event::update_tick();
         }
 
@@ -414,14 +407,6 @@ int main(int argc, char** argv) {
 
                             NFD_PathSet_FreeEnum(&enumerator);
                             NFD_PathSet_Free(paths);
-
-                            std::ofstream mf{project::models_registry};
-                            mf << models::save();
-                            mf.flush();
-
-                            std::ofstream tf{project::textures_registry};
-                            tf << engine::textures::save();
-                            tf.flush();
                         }
                     }
                     ImGui::EndMenu();
@@ -447,7 +432,7 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             if (ImGui::Begin("Transformation")) {
-                ui::transform_pane(transforms[engine::get_current_frame()]);
+                ui::transform_pane();
             }
             ImGui::End();
 

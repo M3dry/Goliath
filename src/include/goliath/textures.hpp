@@ -1,10 +1,14 @@
 #pragma once
 
-#include "goliath/gpu_group.hpp"
-#include "goliath/model.hpp"
+#include "goliath/samplers.hpp"
+#include "goliath/texture.hpp"
+#include "goliath/texture_pool.hpp"
+#include <cstdint>
+#include <expected>
+
 #include <nlohmann/json.hpp>
 
-namespace models {
+namespace engine::textures {
     enum struct Err {
         BadGeneration,
     };
@@ -35,41 +39,22 @@ namespace models {
     void to_json(nlohmann::json& j, const gid& gid);
     void from_json(const nlohmann::json& j, gid& gid);
 
-    void process_uploads();
-
-    void init(const nlohmann::json& j);
-    void destroy();
-
+    void load(nlohmann::json j);
     nlohmann::json save();
 
-    gid add(std::filesystem::path path, std::string name);
+    gid add(std::filesystem::path path, std::string name, Sampler sampler);
+    gid add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name, Sampler sampler);
     bool remove(gid gid);
 
     std::expected<std::string*, Err> get_name(gid gid);
-    std::expected<engine::Model*, Err> get_cpu_model(gid gid);
-
-    // timeline == -1 implies the model hasn't been yet uploaded to the GPU
-    std::expected<uint64_t, Err> get_timeline(gid gid);
-    std::expected<engine::Buffer, Err> get_draw_buffer(gid gid);
-    std::expected<engine::GPUModel, Err> get_gpu_model(gid gid);
-    std::expected<engine::GPUGroup, Err> get_gpu_group(gid gid);
+    std::expected<GPUImage, Err> get_image(gid gid);
+    std::expected<VkImageView, Err> get_image_view(gid gid);
+    std::expected<uint32_t, Err> get_sampler(gid gid);
 
     uint8_t get_generation(uint32_t ix);
-
-    enum struct LoadState {
-        OnDisk,
-        OnCPU,
-        OnGPU,
-    };
-
-    std::expected<LoadState, Err> is_loaded(gid gid);
 
     void acquire(const gid* gids, uint32_t count);
     void release(const gid* gids, uint32_t count);
 
-    std::span<std::string> get_names();
-}
-
-namespace engine::culling {
-    std::expected<void, models::Err> flatten(models::gid gid, uint64_t transforms_addr, uint32_t default_transform_offset);
+    const TexturePool& get_texture_pool();
 }
