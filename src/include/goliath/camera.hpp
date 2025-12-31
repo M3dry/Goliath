@@ -20,6 +20,10 @@ namespace engine {
     class Camera {
       public:
         glm::vec3 position{0.0f};
+        glm::quat _orientation;
+        glm::mat4 _projection;
+        glm::mat4 _view;
+        glm::mat4 _view_projection;
 
         Camera();
 
@@ -38,11 +42,5 @@ namespace engine {
         void rotate(float yaw_delta, float pitch_delta);
 
         void update_matrices();
-      private:
-        glm::quat _orientation;
-        glm::mat4 _projection;
-        glm::mat4 _view;
-        glm::mat4 _view_projection;
-
     };
 }

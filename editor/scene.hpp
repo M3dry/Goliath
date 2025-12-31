@@ -13,11 +13,7 @@ namespace scene {
         models::gid model_gid;
         std::string name;
 
-        glm::vec3 translate{0.0f};
-        glm::vec3 rotate{0.0f};
-        glm::vec3 scale{1.0f};
-
-        void update_transform(glm::mat4& transform) const;
+        glm::mat4 transform;
     };
 
     struct Scene {

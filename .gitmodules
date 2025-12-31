@@ -19,3 +19,9 @@
 [submodule "editor/nativefiledialog-extended"]
 	path = editor/nativefiledialog-extended
 	url = https://github.com/btzy/nativefiledialog-extended.git
+[submodule "editor/ImGuizmo"]
+	path = editor/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo
+[submodule "editor/ImViewGuizmo"]
+	path = editor/ImViewGuizmo
+	url = https://github.com/Ka1serM/ImViewGuizmo

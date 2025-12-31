@@ -10,7 +10,6 @@
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/textures.hpp"
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -292,7 +291,7 @@ int main(int argc, char** argv) {
 
     bool lock_cam = true;
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-    engine::imgui::enable(false);
+    engine::imgui::enable(lock_cam);
 
     float sensitivity = 1.0f;
 
@@ -374,9 +373,10 @@ int main(int argc, char** argv) {
 
         {
             engine::imgui::begin();
+            ui::begin();
             ImGui::DockSpaceOverViewport();
 
-            auto game_window_barrier = ui::game_window();
+            auto game_window_barrier = ui::game_window(cam);
 
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -431,9 +431,8 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if (ImGui::Begin("Transformation")) {
-                ui::transform_pane();
-            }
+            ImGui::Begin("Transformation");
+            ui::transform_pane(cam);
             ImGui::End();
 
             if (ImGui::Begin("Config")) {

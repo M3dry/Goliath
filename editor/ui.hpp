@@ -1,5 +1,6 @@
 #pragma once
 
+#include "goliath/camera.hpp"
 #include "goliath/texture.hpp"
 #include "imgui.h"
 #include "models.hpp"
@@ -10,8 +11,9 @@ namespace ui {
     void init();
     void destroy();
     void tick(float dt);
+    void begin();
 
-    std::optional<VkImageMemoryBarrier2> game_window();
+    std::optional<VkImageMemoryBarrier2> game_window(engine::Camera& cam);
     bool skipped_game_window();
     std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);
     ImVec2 game_window_size();
@@ -23,7 +25,7 @@ namespace ui {
     void instances_pane(glm::mat4* transforms);
     size_t instance_entry(scene::Scene& current_scene, size_t ix, glm::mat4& transform);
 
-    void transform_pane();
+    void transform_pane(engine::Camera& cam);
 
     void scene_pane();
 }

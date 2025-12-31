@@ -1,15 +1,23 @@
 #include "ui.hpp"
 
+#include "ImGuizmo/ImGuizmo.h"
+#include <glm/ext/quaternion_trigonometric.hpp>
+#define IMVIEWGUIZMO_IMPLEMENTATION
+#include "ImViewGuizmo/ImViewGuizmo.h"
+#undef IMVIEWGUIZMO_IMPLEMENTATION
+#include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "models.hpp"
 #include "project.hpp"
 #include "scene.hpp"
+#include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <vulkan/vulkan_core.h>
 
@@ -90,7 +98,12 @@ namespace ui {
         }
     }
 
-    std::optional<VkImageMemoryBarrier2> game_window() {
+    void begin() {
+        ImGuizmo::BeginFrame();
+        ImViewGuizmo::BeginFrame();
+    }
+
+    std::optional<VkImageMemoryBarrier2> game_window(engine::Camera& cam) {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
         auto& game_window_image = game_window_images[curr_frame];
@@ -99,6 +112,9 @@ namespace ui {
         auto& [game_window_barrier_applied, game_window_barrier] = game_window_barriers[curr_frame];
 
         ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+
+        ImVec2 win_pos = ImGui::GetWindowPos();
         ImVec2 avail = ImGui::GetWindowSize();
         skip_game_window = avail.x <= 0 || avail.y <= 0;
 
@@ -136,6 +152,27 @@ namespace ui {
         if (!skip_game_window) {
             ImGui::SetCursorPos(ImGui::GetStyle().FramePadding);
             ImGui::Image(game_window_texture, game_window_);
+        }
+
+        // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward = +Z
+        static const glm::mat4 GL_TO_GIZMO = glm::mat4{
+             1,  0,  0,  0,
+             0, -1,  0,  0,
+             0,  0, -1,  0,
+             0,  0,  0,  1
+        };
+
+        static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
+
+        glm::mat4 view_gizmo = GL_TO_GIZMO * cam.view() * GIZMO_TO_GL;
+        auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
+        auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam.position, 1.0f}};
+
+        if (ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0}, ImVec2{win_pos.x + 90, win_pos.y + 90})) {
+            cam._orientation = glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
+            cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
+
+            cam.update_matrices();
         }
         ImGui::End();
 
@@ -286,7 +323,7 @@ namespace ui {
 
         ImGui::SameLine();
         if (ImGui::InputText("##name", name)) {
-            printf("hello\n");
+            printf("TODO: rename saving\n");
         }
         if (ImGui::IsItemDeactivatedAfterEdit()) {
             selected_model = {(uint8_t)-1, (uint32_t)-1};
@@ -295,9 +332,7 @@ namespace ui {
             scene::selected_scene().add_instance(scene::Instance{
                 .model_gid = gid,
                 .name = **models::get_name(gid),
-                .translate = glm::vec3{0.0f},
-                .rotate = glm::vec3{0.0f},
-                .scale = glm::vec3{1.0f},
+                .transform = glm::identity<glm::mat4>(),
             });
         }
 
@@ -315,16 +350,14 @@ namespace ui {
         ImGui::PushID(ix);
         auto& inst = current_scene.instances[ix];
 
-        if (ImGui::Selectable("", current_scene.selected_instance == ix,
-                              ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                              ImVec2(0.0, ImGui::GetFrameHeight()))) {
-            current_scene.selected_instance = ix;
-        }
+        bool selected = ImGui::Selectable("", current_scene.selected_instance == ix,
+                ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                ImVec2(0.0, ImGui::GetFrameHeight()));
 
         ImGui::SameLine();
         ImGui::InputText("##name", &inst.name);
-        if (ImGui::IsItemClicked()) {
-            current_scene.selected_instance = ix;
+        if (ImGui::IsItemClicked() || selected) {
+            current_scene.selected_instance = current_scene.selected_instance == ix ? -1 : ix;
         }
 
         ImGui::SameLine();
@@ -336,31 +369,57 @@ namespace ui {
             return ix;
         }
 
-        inst.update_transform(transform);
+        transform = inst.transform;
 
         ImGui::PopID();
         return ix;
     }
 
-    void transform_pane() {
+    void transform_pane(engine::Camera& cam) {
         auto& scene = scene::selected_scene();
         if (scene.selected_instance == -1) return;
         auto& instance = scene.instances[scene.selected_instance];
 
+        glm::vec3 translate{};
+        glm::vec3 rotate{};
+        glm::vec3 scale{};
+        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(instance.transform), glm::value_ptr(translate), glm::value_ptr(rotate), glm::value_ptr(scale));
+
         bool value_changed = false;
+
         value_changed |= ImGui::InputText("name: ", &instance.name);
 
-        value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(instance.translate), 0.1f, 0.0f, 0.0f, "%.2f");
+        value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(translate), 0.1f, 0.0f, 0.0f, "%.2f");
 
-        value_changed |= ImGui::DragFloat("yaw", &instance.rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-        value_changed |= ImGui::DragFloat("pitch", &instance.rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-        value_changed |= ImGui::DragFloat("roll", &instance.rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("yaw", &rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("pitch", &rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+        value_changed |= ImGui::DragFloat("roll", &rotate.z, 0.1f, 0.0, 0.0, "%.2f");
 
-        value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(instance.scale), 0.1f, 0.0f, 0.0f, "%.2f");
+        value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(scale), 0.1f, 0.0f, 0.0f, "%.2f");
+
+        ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate), glm::value_ptr(scale), glm::value_ptr(instance.transform));
+
+        auto win_pos = ImGui::GetWindowPos();
+        auto win_size = ImGui::GetWindowSize();
+
+        auto win = ImGui::FindWindowByName("Game");
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::AllowAxisFlip(false);
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(win->Pos.x, win->Pos.y, engine::swapchain_extent.width, engine::swapchain_extent.height);
+        ImGuizmo::SetAlternativeWindow(win);
+
+        auto proj = cam._projection;
+        proj[1][1] *= -1;
+        value_changed |=
+            ImGuizmo::Manipulate(glm::value_ptr(cam._view), glm::value_ptr(proj),
+                                 ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z,
+                                 ImGuizmo::WORLD, glm::value_ptr(instance.transform));
 
         if (!value_changed) return;
 
-        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() && transform_value_changed->instance == scene.selected_instance) {
+        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() &&
+            transform_value_changed->instance == scene.selected_instance) {
             transform_value_changed->reset_timer();
             return;
         } else if (transform_value_changed != std::nullopt) {

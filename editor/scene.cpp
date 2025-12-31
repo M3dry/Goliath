@@ -3,6 +3,7 @@
 #include "project.hpp"
 
 #include <fstream>
+#include <glm/gtc/type_ptr.hpp>
 #include <nlohmann/json.hpp>
 
 namespace glm {
@@ -24,17 +25,16 @@ namespace glm {
 namespace scene {
     void to_json(nlohmann::json& j, const Instance& inst) {
         j = nlohmann::json{
-            {"model_gid", inst.model_gid}, {"name", inst.name},   {"translate", inst.translate},
-            {"rotate", inst.rotate},       {"scale", inst.scale},
+            {"model_gid", inst.model_gid}, {"name", inst.name}, {"transform", std::span{glm::value_ptr(inst.transform), 16}}
         };
     }
 
     void from_json(const nlohmann::json& j, Instance& inst) {
         j.at("model_gid").get_to(inst.model_gid);
         j.at("name").get_to(inst.name);
-        j.at("translate").get_to(inst.translate);
-        j.at("rotate").get_to(inst.rotate);
-        j.at("scale").get_to(inst.scale);
+        std::array<float, 16> mat{};
+        j.at("transform").get_to(mat);
+        std::memcpy(glm::value_ptr(inst.transform), mat.data(), sizeof(glm::mat4));
     }
 
     void to_json(nlohmann::json& j, const Scene& scene) {
@@ -51,15 +51,6 @@ namespace scene {
         j.at("used_models").get_to(scene.used_models);
         j.at("instances").get_to(scene.instances);
         j.at("selected_instance").get_to(scene.selected_instance);
-    }
-
-    void Instance::update_transform(glm::mat4& transform) const {
-        transform =
-            glm::translate(glm::identity<glm::mat4>(), translate) *
-            glm::rotate(glm::rotate(glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotate.x), glm::vec3{0, 1, 0}),
-                                    glm::radians(rotate.y), glm::vec3{1, 0, 0}),
-                        glm::radians(rotate.z), glm::vec3{0, 0, 1}) *
-            glm::scale(glm::identity<glm::mat4>(), scale);
     }
 
     void Scene::acquire() {
@@ -176,7 +167,6 @@ namespace scene {
     }
 
     void save(std::filesystem::path scenes_json) {
-        printf("saving scene\n");
         std::ofstream o{scenes_json};
 
         o << nlohmann::json{
