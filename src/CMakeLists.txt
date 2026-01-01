@@ -17,24 +17,24 @@ add_subdirectory(vk-bootstrap)
 
 find_package(Vulkan REQUIRED)
 
-if(WIN32 AND NOT TARGET Vulkan::volk)
-    message(STATUS "Vulkan::volk not provided by Vulkan package, creating compatibility target")
+if(WIN32 AND NOT TARGET volk::volk)
+    message(STATUS "volk::volk not provided by Vulkan package, creating compatibility target")
 
-    add_library(Vulkan::volk INTERFACE IMPORTED)
-    target_include_directories(Vulkan::volk INTERFACE
+    add_library(volk::volk INTERFACE IMPORTED)
+    target_include_directories(volk::volk INTERFACE
         "$ENV{VULKAN_SDK}/Include/volk"
     )
-    target_link_libraries(Vulkan::volk INTERFACE Vulkan::Vulkan)
+    target_link_libraries(volk::volk INTERFACE Vulkan::Vulkan)
 endif()
 
 if(UNIX)
     find_package(volk REQUIRED CONFIG)
 endif()
 
-if(WIN32 AND NOT TARGET VMA::VulkanMemoryAllocator)
-    add_library(VMA::VulkanMemoryAllocator INTERFACE IMPORTED)
+if(WIN32 AND NOT TARGET GPUOpen::VulkanMemoryAllocator)
+    add_library(GPUOpen::VulkanMemoryAllocator INTERFACE IMPORTED)
     target_include_directories(
-        VMA::VulkanMemoryAllocator
+        GPUOpen::VulkanMemoryAllocator
         INTERFACE "$ENV{VULKAN_SDK}/Include/vma"
     )
 else()
@@ -102,9 +102,9 @@ target_include_directories(goliath
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
-target_link_libraries(goliath PUBLIC glm::glm nlohmann_json::nlohmann_json glfw VMA::VulkanMemoryAllocator Vulkan::volk PRIVATE vk-bootstrap::vk-bootstrap xxHash::xxhash)
+target_link_libraries(goliath PUBLIC glm::glm nlohmann_json::nlohmann_json glfw GPUOpen::VulkanMemoryAllocator volk::volk PRIVATE vk-bootstrap::vk-bootstrap xxHash::xxhash)
 if(UNIX AND NOT APPLE)
-    target_link_libraries(goliath PRIVATE X11)
+    target_link_libraries(goliath PRIVATE X11) # needed for ImGui GLFW layer
 endif()
 
 target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)

@@ -19,7 +19,6 @@
             [
               glm
               xxHash
-              glfw
               vulkan-volk
               vulkan-headers
               vulkan-loader
@@ -42,7 +41,10 @@
               xorg.libX11
               xorg.libXrandr
               wayland
+              wayland-scanner
               gtk3
+
+              libxkbcommon
             ]
             ++ [
               llvm.clang-tools
