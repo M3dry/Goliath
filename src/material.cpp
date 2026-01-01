@@ -76,7 +76,7 @@ namespace engine::material::pbr {
         std::memcpy(blob, &data.occlusion_factor, sizeof(float));
         blob += sizeof(float);
 
-        std::memcpy(blob, &data.emissive_factor, sizeof(glm::vec4));
-        blob += sizeof(glm::vec4);
+        std::memcpy(blob, &data.emissive_factor, sizeof(glm::vec3));
+        blob += sizeof(glm::vec3);
     }
 }

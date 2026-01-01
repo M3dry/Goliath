@@ -2,10 +2,9 @@
 
 #include <utility>
 #include <vector>
-#include <volk.h>
 
+#include <volk.h>
 #include <vk_mem_alloc.h>
-#include <vulkan/vulkan_core.h>
 
 namespace engine {
     class Image {

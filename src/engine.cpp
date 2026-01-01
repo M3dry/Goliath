@@ -5,8 +5,10 @@
 #include "textures_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
+
+#define VOLK_IMPLEMENTATION 1
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
+#undef VOLK_IMPLEMENTATION
 
 #define VMA_IMPLEMENTATION 1
 #include <vk_mem_alloc.h>
@@ -230,7 +232,7 @@ namespace engine {
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-        window = glfwCreateWindow(mode->width, mode->height, window_name, monitor, nullptr);
+        window = glfwCreateWindow(mode->width, mode->height, window_name, fullscreen ? monitor : nullptr, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
         glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);

@@ -101,7 +101,7 @@ void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
             assert(file != nullptr);
 
             std::filesystem::path path{(const char*)data};
-            auto res = Model::load_glb(&out->models[i], {file, file_size}, path.parent_path());
+            auto res = Model::load_glb(&out->models[i], {file, file_size}, path.parent_path().string());
             assert(res == Model::Ok);
 
             free(file);
@@ -111,7 +111,7 @@ void engine::Scene::load(Scene* out, uint8_t* data, uint32_t size) {
             assert(file != nullptr);
 
             std::filesystem::path path{(const char*)data};
-            auto res = Model::load_gltf(&out->models[i], {file, file_size}, path.parent_path());
+            auto res = Model::load_gltf(&out->models[i], {file, file_size}, path.parent_path().string());
             assert(res == Model::Ok);
 
             free(file);

@@ -10,7 +10,6 @@
 #include <ranges>
 #include <utility>
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
 
 #define TINYGLTF_IMPLEMENTATION
 #define NO_STB_IMAGE_IMPLEMENTATION
@@ -417,10 +416,10 @@ engine::Model::Err parse_model(engine::Model* out, const tinygltf::Model& model)
         return engine::Model::NoRootScene;
     }
 
-    engine::collisions::AABB model_aabb;
-    std::vector<engine::Mesh> meshes;
-    std::vector<uint32_t> mesh_indices;
-    std::vector<glm::mat4> mesh_transforms;
+    engine::collisions::AABB model_aabb{};
+    std::vector<engine::Mesh> meshes{};
+    std::vector<uint32_t> mesh_indices{};
+    std::vector<glm::mat4> mesh_transforms{};
     mesh_indices.reserve(model.nodes.size());
     mesh_transforms.reserve(model.nodes.size());
 
@@ -439,15 +438,21 @@ engine::Model::Err parse_model(engine::Model* out, const tinygltf::Model& model)
 
     out->mesh_count = (uint32_t)meshes.size();
     out->mesh_indices_count = (uint32_t)mesh_indices.size();
+    
+    if (out->mesh_count != 0) {
+        out->meshes = (engine::Mesh*)malloc(sizeof(engine::Mesh) * out->mesh_count);
+        std::memcpy(out->meshes, meshes.data(), sizeof(engine::Mesh) * out->mesh_count);
+    }
 
-    out->meshes = (engine::Mesh*)malloc(sizeof(engine::Mesh) * out->mesh_count);
-    std::memcpy(out->meshes, meshes.data(), sizeof(engine::Mesh) * out->mesh_count);
+    if (out->mesh_indices_count != 0) {
+        out->mesh_indexes = (uint32_t*)malloc(sizeof(uint32_t) * out->mesh_indices_count);
+        std::memcpy(out->mesh_indexes, mesh_indices.data(), sizeof(uint32_t) * out->mesh_count);
+    }
 
-    out->mesh_indexes = (uint32_t*)malloc(sizeof(uint32_t) * out->mesh_indices_count);
-    std::memcpy(out->mesh_indexes, mesh_indices.data(), sizeof(uint32_t) * out->mesh_count);
-
-    out->mesh_transforms = (glm::mat4*)malloc(sizeof(glm::mat4) * out->mesh_indices_count);
-    std::memcpy(out->mesh_transforms, mesh_transforms.data(), sizeof(glm::mat4) * out->mesh_indices_count);
+    if (out->mesh_indices_count != 0) {
+        out->mesh_transforms = (glm::mat4*)malloc(sizeof(glm::mat4) * out->mesh_indices_count);
+        std::memcpy(out->mesh_transforms, mesh_transforms.data(), sizeof(glm::mat4) * out->mesh_indices_count);
+    }
 
     out->bounding_box = model_aabb;
 
@@ -823,9 +828,7 @@ namespace engine {
             return TinyGLTFErr;
         }
 
-        auto parse_res = parse_model(out, model);
-
-        return parse_res;
+        return parse_model(out, model);
     }
 
     void Model::load_optimized(Model& out, std::span<uint8_t> data) {

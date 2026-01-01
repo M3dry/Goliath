@@ -2,6 +2,7 @@
 
 #include <glm/common.hpp>
 #include <glm/ext/vector_float3.hpp>
+
 namespace engine::collisions {
     struct AABB {
         glm::vec3 min{0.0f};

@@ -3,8 +3,6 @@
 #include "goliath/util.hpp"
 
 #include <cstdint>
-
-#include <volk.h>
 #include <nlohmann/json.hpp>
 
 namespace engine {

@@ -6,22 +6,22 @@
 #include <fstream>
 
 namespace project {
-    std::filesystem::path project_root;
-    std::filesystem::path models_directory;
-    std::filesystem::path models_registry;
-    std::filesystem::path textures_directory;
-    std::filesystem::path textures_registry;
-    std::filesystem::path scenes_file;
+    std::filesystem::path project_root{};
+    std::filesystem::path models_directory{};
+    std::filesystem::path models_registry{};
+    std::filesystem::path textures_directory{};
+    std::filesystem::path textures_registry{};
+    std::filesystem::path scenes_file{};
 
     void parse(const std::filesystem::path& json_file) {
         std::ifstream i{json_file};
         nlohmann::json j = nlohmann::json::parse(i);
 
-        models_directory = std::filesystem::path{j["models_directory"]};
-        models_registry = std::filesystem::path{j["models_registry"]};
-        textures_directory = std::filesystem::path{j["textures_directory"]};
-        textures_registry = std::filesystem::path{j["textures_registry"]};
-        scenes_file = std::filesystem::path{j["scenes"]};
+        models_directory = std::filesystem::path{std::string{j["models_directory"]}};
+        models_registry = std::filesystem::path{std::string{j["models_registry"]}};
+        textures_directory = std::filesystem::path{std::string{j["textures_directory"]}};
+        textures_registry = std::filesystem::path{std::string{j["textures_registry"]}};
+        scenes_file = std::filesystem::path{std::string{j["scenes"]}};
     }
 
     bool find_project() {

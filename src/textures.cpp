@@ -120,7 +120,7 @@ namespace engine::textures {
         if (orig_path.extension() == ".goi") {
             std::filesystem::copy(orig_path, texture_directory / make_texture_path(gid));
         } else {
-            auto img = Image::load8(orig_path.c_str());
+            auto img = Image::load8((const char*)orig_path.c_str());
 
             auto path = texture_directory / make_texture_path(gid);
             Metadata metadata{

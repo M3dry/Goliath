@@ -16,3 +16,8 @@ SET(EDITOR_SOURCES
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})
 target_link_libraries(editor PRIVATE goliath nfd)
+
+if(MSVC)
+    target_compile_options(editor PRIVATE /FS)
+    set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/$<CONFIG>")
+endif()

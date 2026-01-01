@@ -1,7 +1,6 @@
 #pragma once
 
 #include "goliath/engine.hpp"
-#include <volk.h>
 
 #include <cstdint>
 #include <span>

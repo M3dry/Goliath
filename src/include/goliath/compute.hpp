@@ -4,7 +4,6 @@
 #include <array>
 #include <variant>
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
 
 namespace engine {
     struct ComputePipelineBuilder {

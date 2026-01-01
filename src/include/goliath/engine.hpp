@@ -1,8 +1,8 @@
 #pragma once
 
 #include <filesystem>
+
 #include <volk.h>
-#define VK_NO_PROTOTYPES
 #include <vk_mem_alloc.h>
 #include <vulkan/vk_enum_string_helper.h>
 

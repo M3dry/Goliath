@@ -24,7 +24,6 @@
 #include <filesystem>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <unistd.h>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -114,8 +113,10 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(project::project_root);
 
     engine::init("Goliath editor", 1000, project::textures_directory, false);
+    glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
+
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
-    if (tex_reg_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::textures_registry)) {
+    if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::textures_registry)) {
         tex_reg_json = nlohmann::json::array();
     } else if (!tex_reg_json.has_value()) {
         printf("Texture registry file is corrupted\n");
@@ -124,7 +125,7 @@ int main(int argc, char** argv) {
     engine::textures::load(*tex_reg_json);
 
     auto models_registry_json = engine::util::read_json(project::models_registry);
-    if (models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
+    if (!models_registry_json.has_value() && models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::models_registry)) {
         models_registry_json = nlohmann::json::array();
     } else if (!models_registry_json.has_value()) {
@@ -388,7 +389,7 @@ int main(int argc, char** argv) {
                         nfdopendialogu8args_t args{};
                         args.filterCount = 1;
                         args.filterList = filters;
-                        args.defaultPath = current_path.c_str();
+                        args.defaultPath = (const char*)current_path.c_str();
                         NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
 
                         const nfdpathset_t* paths;

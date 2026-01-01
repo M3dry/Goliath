@@ -3,6 +3,7 @@
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/util.hpp"
+
 #include <array>
 #include <cstring>
 #include <optional>
@@ -13,7 +14,6 @@
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/vec4.hpp>
-#include <vulkan/vulkan_core.h>
 
 namespace engine {
     enum struct LoadOp {

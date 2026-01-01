@@ -14,7 +14,6 @@
 #include <fstream>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <unistd.h>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 

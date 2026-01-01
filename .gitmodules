@@ -25,3 +25,6 @@
 [submodule "editor/ImViewGuizmo"]
 	path = editor/ImViewGuizmo
 	url = https://github.com/Ka1serM/ImViewGuizmo
+[submodule "src/glfw"]
+	path = src/glfw
+	url = https://github.com/glfw/glfw

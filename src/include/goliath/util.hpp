@@ -2,9 +2,10 @@
 
 #include <cmath>
 #include <expected>
-#include <volk.h>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+
+#include <volk.h>
 
 namespace engine {
     enum struct CompareOp {

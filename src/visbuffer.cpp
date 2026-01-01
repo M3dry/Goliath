@@ -12,21 +12,6 @@
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
-uint8_t material_count_spv[] = {
-#embed "material_count.spv"
-};
-std::size_t material_count_spv_size = sizeof(material_count_spv);
-
-uint8_t offsets_spv[] = {
-#embed "offsets.spv"
-};
-std::size_t offsets_spv_size = sizeof(offsets_spv);
-
-uint8_t fragment_id_spv[] = {
-#embed "fragment_id.spv"
-};
-std::size_t fragment_id_spv_size = sizeof(fragment_id_spv);
-
 namespace engine::visbuffer {
     GPUImage* vis_buffers;
     VkImageView* vis_buffer_views;
@@ -122,24 +107,33 @@ namespace engine::visbuffer {
             .stages = VK_SHADER_STAGE_COMPUTE_BIT,
         }>::create();
 
-        auto material_count_module = engine::create_shader({material_count_spv, material_count_spv_size});
+        uint32_t material_count_size;
+        auto* material_count_spv = util::read_file("./material_count.spv", &material_count_size);
+        auto material_count_module = engine::create_shader({material_count_spv, material_count_size});
         material_count_pipeline = ComputePipeline{ComputePipelineBuilder{}
                                                       .shader(material_count_module)
                                                       .descriptor_layout(0, storage_image_set_layout)
                                                       .push_constant(MaterialCount::size)};
         engine::destroy_shader(material_count_module);
+        free(material_count_spv);
 
-        auto offsets_module = engine::create_shader({offsets_spv, offsets_spv_size});
+        uint32_t offsets_size;
+        auto* offsets_spv = util::read_file("./offsets.spv", &offsets_size);
+        auto offsets_module = engine::create_shader({offsets_spv, offsets_size});
         offsets_pipeline = engine::ComputePipeline(
             engine::ComputePipelineBuilder{}.shader(offsets_module).push_constant(Offsets::size));
         engine::destroy_shader(offsets_module);
+        free(offsets_spv);
 
-        auto fragment_id_module = engine::create_shader({fragment_id_spv, fragment_id_spv_size});
+        uint32_t fragment_id_size;
+        auto* fragment_id_spv = util::read_file("./fragment_id.spv", &fragment_id_size);
+        auto fragment_id_module = engine::create_shader({fragment_id_spv, fragment_id_size});
         fragment_id_pipeline = engine::ComputePipeline(engine::ComputePipelineBuilder{}
                                                            .shader(fragment_id_module)
                                                            .descriptor_layout(0, storage_image_set_layout)
                                                            .push_constant(FragmentID::size));
         engine::destroy_shader(fragment_id_module);
+        free(fragment_id_spv);
 
         shading_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
                                                        .count = 1,

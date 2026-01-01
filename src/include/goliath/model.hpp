@@ -9,7 +9,7 @@
 #include <glm/ext/vector_float3.hpp>
 #include <glm/ext/vector_float4.hpp>
 #include <string>
-#include <vulkan/vulkan_core.h>
+#include <volk.h>
 
 namespace engine::model {
     struct GPUOffset {
@@ -49,7 +49,7 @@ namespace engine {
     using material_id = uint16_t;
 
     struct Mesh {
-        material_id material_id = -1;
+        material_id material_id = (uint16_t)-1;
         uint32_t material_texture_count = 0;
         uint32_t material_data_size = 0;
         void* material_data = nullptr;

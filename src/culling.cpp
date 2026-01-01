@@ -7,16 +7,6 @@
 #include "goliath/synchronization.hpp"
 #include <vulkan/vulkan_core.h>
 
-uint8_t flatten_draw_spv[] = {
-#embed "flatten_draw.spv"
-};
-std::size_t flatten_draw_spv_size = sizeof(flatten_draw_spv);
-
-uint8_t culling_spv[] = {
-#embed "culling.spv"
-};
-std::size_t culling_spv_size = sizeof(culling_spv);
-
 namespace engine::culling {
     using FlattenDrawPC =
         engine::PushConstant<uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t, uint32_t>;
@@ -36,13 +26,19 @@ namespace engine::culling {
     void init(uint32_t max_tasks) {
         resize(max_tasks);
 
-        auto flatten_draw_module = engine::create_shader({flatten_draw_spv, flatten_draw_spv_size});
+        uint32_t flatten_draw_size;
+        auto* flatten_draw_spv = util::read_file("./flatten_draw.spv", &flatten_draw_size);
+        auto flatten_draw_module = engine::create_shader({flatten_draw_spv, flatten_draw_size});
         flatten_draw_pipeline =
             ComputePipeline{ComputePipelineBuilder{}.shader(flatten_draw_module).push_constant(FlattenDrawPC::size)};
+        free(flatten_draw_spv);
 
-        auto culling_module = engine::create_shader({culling_spv, culling_spv_size});
+        uint32_t culling_size;
+        auto* culling_spv = util::read_file("./culling.spv", &culling_size);
+        auto culling_module = engine::create_shader({culling_spv, culling_size});
         culling_pipeline =
             ComputePipeline{ComputePipelineBuilder{}.shader(culling_module).push_constant(CullingPC::size)};
+        free(culling_spv);
 
         engine::destroy_shader(flatten_draw_module);
         engine::destroy_shader(culling_module);

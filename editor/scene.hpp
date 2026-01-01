@@ -23,7 +23,7 @@ namespace scene {
         std::vector<std::vector<size_t>> instances_of_used_models;
 
         std::vector<Instance> instances{};
-        size_t selected_instance = -1;
+        size_t selected_instance = (size_t)-1;
         uint32_t ref_count = 0;
 
         void acquire();

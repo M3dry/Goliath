@@ -2,8 +2,8 @@
 
 #include <optional>
 #include <utility>
-#include <volk.h>
 
+#include <volk.h>
 #include <vk_mem_alloc.h>
 
 namespace engine {

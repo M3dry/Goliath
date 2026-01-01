@@ -3,7 +3,6 @@
 #include "goliath/buffer.hpp"
 #include "goliath/rendering.hpp"
 #include <volk.h>
-#include <vulkan/vulkan_core.h>
 
 namespace engine::visbuffer {
     static constexpr VkFormat format = VK_FORMAT_R32_UINT;

@@ -16,7 +16,6 @@
 #include <string>
 #include <vector>
 #include <fstream>
-#include <vulkan/vulkan_core.h>
 
 namespace models {
     void to_json(nlohmann::json& j, const gid& gid) {
@@ -28,7 +27,7 @@ namespace models {
     }
 
     struct UploadedModelData {
-        uint64_t timeline = -1;
+        uint64_t timeline = (uint64_t)-1;
         engine::Buffer draw_buffer{};
         engine::GPUModel gpu{};
         engine::GPUGroup group{};
@@ -119,9 +118,9 @@ namespace models {
         {
             const auto& ext = orig_path.extension();
             if (ext == ".glb") {
-                engine::Model::load_glb(&model, {model_data, model_size}, orig_path.parent_path());
+                engine::Model::load_glb(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else if (ext == ".gltf") {
-                engine::Model::load_gltf(&model, {model_data, model_size}, orig_path.parent_path());
+                engine::Model::load_gltf(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else {
                 std::filesystem::copy(orig_path, project::models_directory / paths[gid.id()]);
                 return;

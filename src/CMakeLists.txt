@@ -1,7 +1,45 @@
-find_package(glm REQUIRED CONFIG)
-find_package(glfw3 REQUIRED CONFIG)
+if(DEFINED ENV{VULKAN_SDK})
+    add_library(glm::glm INTERFACE IMPORTED)
+    target_include_directories(glm::glm INTERFACE
+        "$ENV{VULKAN_SDK}/Include"
+    )
+else()
+    find_package(glm REQUIRED CONFIG)
+endif()
+
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(glfw)
 
 add_subdirectory(vk-bootstrap)
+
+find_package(Vulkan REQUIRED)
+
+if(WIN32 AND NOT TARGET Vulkan::volk)
+    message(STATUS "Vulkan::volk not provided by Vulkan package, creating compatibility target")
+
+    add_library(Vulkan::volk INTERFACE IMPORTED)
+    target_include_directories(Vulkan::volk INTERFACE
+        "$ENV{VULKAN_SDK}/Include/volk"
+    )
+    target_link_libraries(Vulkan::volk INTERFACE Vulkan::Vulkan)
+endif()
+
+if(UNIX)
+    find_package(volk REQUIRED CONFIG)
+endif()
+
+if(WIN32 AND NOT TARGET VMA::VulkanMemoryAllocator)
+    add_library(VMA::VulkanMemoryAllocator INTERFACE IMPORTED)
+    target_include_directories(
+        VMA::VulkanMemoryAllocator
+        INTERFACE "$ENV{VULKAN_SDK}/Include/vma"
+    )
+else()
+    find_package(VulkanMemoryAllocator REQUIRED CONFIG)
+endif()
 
 set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
 set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
@@ -54,6 +92,7 @@ SET(ENGINE_SOURCES
     ${MIKKTSPACE_SOURCES}
 )
 
+
 add_library(goliath ${ENGINE_SOURCES})
 target_include_directories(goliath
     PUBLIC
@@ -62,6 +101,15 @@ target_include_directories(goliath
         "${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends"
     PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-target_link_libraries(goliath PUBLIC glm::glm  nlohmann_json::nlohmann_json PRIVATE volk vulkan vk-bootstrap::vk-bootstrap glfw xxHash::xxhash X11)
+)
+target_link_libraries(goliath PUBLIC glm::glm nlohmann_json::nlohmann_json glfw VMA::VulkanMemoryAllocator Vulkan::volk PRIVATE vk-bootstrap::vk-bootstrap xxHash::xxhash)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(goliath PRIVATE X11)
+endif()
+
 target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
+
+if(MSVC)
+    target_compile_options(goliath PRIVATE /FS)
+    set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/$<CONFIG>")
+endif()

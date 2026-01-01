@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <array>
 
 struct FormatInfo {
     uint32_t blockWidth;
