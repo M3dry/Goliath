@@ -15,6 +15,10 @@ SET(EDITOR_SOURCES
 )
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})
+if(WIN32)
+    set_target_properties(editor PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
 target_link_libraries(editor PRIVATE goliath nfd)
 
 if(MSVC)

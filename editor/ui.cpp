@@ -101,6 +101,16 @@ namespace ui {
     void begin() {
         ImGuizmo::BeginFrame();
         ImViewGuizmo::BeginFrame();
+
+        auto& style = ImViewGuizmo::GetStyle();
+        style.scale = 0.8;
+        
+        style.labelSize = 1.5;
+        style.labelColor = IM_COL32(0, 0, 0, 255);
+
+        style.toolButtonColor = IM_COL32(0, 0, 0, 130);
+        style.toolButtonHoveredColor = IM_COL32(75, 75, 75, 230);
+        style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
     std::optional<VkImageMemoryBarrier2> game_window(engine::Camera& cam) {
@@ -111,8 +121,11 @@ namespace ui {
         auto& game_window_texture = game_window_textures[curr_frame];
         auto& [game_window_barrier_applied, game_window_barrier] = game_window_barriers[curr_frame];
 
-        ImGui::Begin("Game", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
+            node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode | ImGuiDockNodeFlags_NoTabBar;
+        }
 
         ImVec2 win_pos = ImGui::GetWindowPos();
         ImVec2 avail = ImGui::GetWindowSize();
@@ -150,31 +163,39 @@ namespace ui {
         }
 
         if (!skip_game_window) {
-            ImGui::SetCursorPos(ImGui::GetStyle().FramePadding);
+            ImVec2 cursor = ImGui::GetCursorPos();
             ImGui::Image(game_window_texture, game_window_);
-        }
 
-        // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward = +Z
-        static const glm::mat4 GL_TO_GIZMO = glm::mat4{
-             1,  0,  0,  0,
-             0, -1,  0,  0,
-             0,  0, -1,  0,
-             0,  0,  0,  1
-        };
+            ImVec2 gizmo_offset{win_pos.x + cursor.x, win_pos.y + cursor.y};
+            avail.x -= cursor.x;
+            avail.y -= cursor.y;
+            auto scale = ImViewGuizmo::GetStyle().scale;
 
-        static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
+            // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward = +Z
+            static const glm::mat4 GL_TO_GIZMO = glm::mat4{1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
 
-        glm::mat4 view_gizmo = GL_TO_GIZMO * cam.view() * GIZMO_TO_GL;
-        auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
-        auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam.position, 1.0f}};
+            static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
 
-        if (ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0}, ImVec2{win_pos.x + 90, win_pos.y + 90})) {
-            cam._orientation = glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
-            cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
+            glm::mat4 view_gizmo = GL_TO_GIZMO * cam.view() * GIZMO_TO_GL;
+            auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
+            auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam.position, 1.0f}};
 
-            cam.update_matrices();
+            bool changed = ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
+                                                ImVec2{gizmo_offset.x + (avail.x - scale*90), gizmo_offset.y + scale*90});
+            changed |= ImViewGuizmo::Pan(gizmo_pos, gizmo_quat,
+                                         ImVec2{gizmo_offset.x + (avail.x - scale*50 - 10), gizmo_offset.y + (avail.y - scale*50 - 10)});
+            changed |= ImViewGuizmo::Dolly(gizmo_pos, gizmo_quat,
+                                           ImVec2{gizmo_offset.x + (avail.x - scale*50 - 10), gizmo_offset.y + (avail.y - scale*50 - 10 - scale*50 - 10)});
+
+            if (changed) {
+                cam._orientation = glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
+                cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
+
+                cam.update_matrices();
+            }
         }
         ImGui::End();
+        ImGui::PopStyleVar();
 
         return new_barrier ? std::make_optional(game_window_barrier) : std::nullopt;
     }
@@ -402,7 +423,7 @@ namespace ui {
         auto win_pos = ImGui::GetWindowPos();
         auto win_size = ImGui::GetWindowSize();
 
-        auto win = ImGui::FindWindowByName("Game");
+        auto win = ImGui::FindWindowByName("Viewport");
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::AllowAxisFlip(false);
         ImGuizmo::SetDrawlist();

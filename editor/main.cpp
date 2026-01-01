@@ -44,6 +44,9 @@
 
 #include <nfd_glfw3.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
                   uint32_t frames_in_flight) {
@@ -114,6 +117,8 @@ int main(int argc, char** argv) {
 
     engine::init("Goliath editor", 1000, project::textures_directory, false);
     glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
     if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::textures_registry)) {
@@ -523,9 +528,9 @@ int main(int argc, char** argv) {
             transform_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
             VkClearColorValue target_clear_color{};
-            target_clear_color.float32[0] = 1.0f;
-            target_clear_color.float32[1] = 1.0f;
-            target_clear_color.float32[2] = 1.0f;
+            target_clear_color.float32[0] = 104.0f/255.0f;
+            target_clear_color.float32[1] = 105.0f/255.0f;
+            target_clear_color.float32[2] = 104.0f/255.0f;
             target_clear_color.float32[3] = 1.0f;
 
             VkImageSubresourceRange clear_range{};
@@ -842,3 +847,9 @@ int main(int argc, char** argv) {
     engine::destroy();
     return 0;
 }
+
+#ifdef _WIN32
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
+    return main(__argc, __argv);
+}
+#endif
