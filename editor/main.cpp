@@ -442,7 +442,7 @@ int main(int argc, char** argv) {
                             std::size_t i = 0;
 
                             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                                models::add(path, std::filesystem::path{path}.filename().string());
+                                models::add(path, std::filesystem::path{path}.stem());
                                 NFD_PathSet_FreePath(path);
                             }
 
