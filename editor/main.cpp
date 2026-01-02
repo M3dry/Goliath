@@ -29,7 +29,6 @@
 
 #include <nfd.h>
 
-
 #ifdef __linux__
 #define GLFW_EXPOSE_NATIVE_X11
 #define GLFW_EXPOSE_NATIVE_GLX
@@ -90,6 +89,7 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
 using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
+using GridPC = engine::PushConstant<glm::mat4, glm::mat4, glm::vec3, engine::util::padding32, glm::vec2>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
 struct PBRShadingSet {
@@ -120,7 +120,8 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
-    if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::textures_registry)) {
+    if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr &&
+        !std::filesystem::exists(project::textures_registry)) {
         tex_reg_json = nlohmann::json::array();
     } else if (!tex_reg_json.has_value()) {
         printf("Texture registry file is corrupted\n");
@@ -192,7 +193,7 @@ int main(int argc, char** argv) {
                                          .depth_test(true)
                                          .depth_write(true)
                                          .depth_compare_op(engine::CompareOp::Less)
-                                         .cull_mode(engine::CullMode::NoCull);
+                                         .cull_mode(engine::CullMode::Back);
 
     uint32_t pbr_spv_size;
     auto pbr_spv_data = engine::util::read_file("pbr.spv", &pbr_spv_size);
@@ -211,6 +212,39 @@ int main(int argc, char** argv) {
                                     .descriptor_layout(1, pbr_shading_set_layout)
                                     .descriptor_layout(2, engine::textures::get_texture_pool().set_layout)
                                     .push_constant(PBRPC::size));
+
+    uint32_t fullscreen_triangle_spv_size;
+    auto fullscreen_triangle_spv_data =
+        engine::util::read_file("fullscreen_triangle.spv", &fullscreen_triangle_spv_size);
+    auto fullscreen_triangle_module =
+        engine::create_shader({fullscreen_triangle_spv_data, fullscreen_triangle_spv_size});
+    free(fullscreen_triangle_spv_data);
+
+    uint32_t grid_spv_size;
+    auto grid_spv_data = engine::util::read_file("grid.spv", &grid_spv_size);
+    auto grid_module = engine::create_shader({grid_spv_data, grid_spv_size});
+    free(grid_spv_data);
+
+    auto grid_pipeline =
+        engine::GraphicsPipeline{
+            engine::GraphicsPipelineBuilder{}
+                .vertex(fullscreen_triangle_module)
+                .fragment(grid_module)
+                .push_constant_size(GridPC::size)
+                .add_color_attachment(VK_FORMAT_R32G32B32A32_SFLOAT,
+                                      engine::BlendState{}
+                                          .blend(true)
+                                          .src_color_blend_factor(VK_BLEND_FACTOR_ONE)
+                                          .src_alpha_blend_factor(VK_BLEND_FACTOR_ONE)
+                                          .dst_color_blend_factor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+                                          .dst_alpha_blend_factor(VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+                                          .color_blend_op(VK_BLEND_OP_ADD)
+                                          .alpha_blend_op(VK_BLEND_OP_ADD))
+                .depth_format(VK_FORMAT_D16_UNORM)}
+            .depth_test(true)
+            .depth_write(false)
+            .depth_compare_op(engine::CompareOp::Less)
+            .cull_mode(engine::CullMode::NoCull);
 
     uint32_t postprocessing_spv_size;
     auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
@@ -252,7 +286,8 @@ int main(int argc, char** argv) {
     engine::Buffer draw_id_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
         draw_id_buffers[i] =
-            engine::Buffer::create(std::format("draw id buffer #{}", i).c_str(), sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
+            engine::Buffer::create(std::format("draw id buffer #{}", i).c_str(),
+                                   sizeof(glm::vec4) + max_draw_size * (sizeof(glm::mat4) + sizeof(glm::vec4)),
                                    VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT |
                                        VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
                                    std::nullopt);
@@ -260,7 +295,8 @@ int main(int argc, char** argv) {
 
     engine::Buffer indirect_draw_buffers[engine::frames_in_flight];
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        indirect_draw_buffers[i] = engine::Buffer::create(std::format("indirect draw buffer #{}", i).c_str(),
+        indirect_draw_buffers[i] = engine::Buffer::create(
+            std::format("indirect draw buffer #{}", i).c_str(),
             sizeof(engine::culling::CulledDrawCommand) * max_draw_size,
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
@@ -273,9 +309,9 @@ int main(int argc, char** argv) {
         (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
     };
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        transform_buffers[i] = engine::Buffer::create(std::format("transforms buffer #{}", i).c_str(),
-            sizeof(glm::mat4) * 1024, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT,
-            std::nullopt);
+        transform_buffers[i] = engine::Buffer::create(
+            std::format("transforms buffer #{}", i).c_str(), sizeof(glm::mat4) * 1024,
+            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
     VkBufferMemoryBarrier2 model_barrier{};
@@ -464,8 +500,7 @@ int main(int argc, char** argv) {
             models::process_uploads();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
-                !model_barrier_applied ||
-                game_window_barrier) {
+                !model_barrier_applied || game_window_barrier) {
                 engine::synchronization::begin_barriers();
                 if (!visbuffer_barriers_applied) {
                     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
@@ -510,7 +545,8 @@ int main(int argc, char** argv) {
             if (scene::selected_scene().instances.size() != 0) {
                 engine::transport::begin();
                 engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()],
-                                          scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer.data(), 0);
+                                          scene::selected_scene().instances.size() * sizeof(glm::mat4),
+                                          transform_buffer.data(), 0);
                 auto timeline_wait = engine::transport::end();
 
                 engine::synchronization::begin_barriers();
@@ -527,9 +563,9 @@ int main(int argc, char** argv) {
             transform_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
             VkClearColorValue target_clear_color{};
-            target_clear_color.float32[0] = 104.0f/255.0f;
-            target_clear_color.float32[1] = 105.0f/255.0f;
-            target_clear_color.float32[2] = 104.0f/255.0f;
+            target_clear_color.float32[0] = 36.0f / 255.0f;
+            target_clear_color.float32[1] = 36.0f / 255.0f;
+            target_clear_color.float32[2] = 36.0f / 255.0f;
             target_clear_color.float32[3] = 1.0f;
 
             VkImageSubresourceRange clear_range{};
@@ -550,7 +586,8 @@ int main(int argc, char** argv) {
                 if (*models::is_loaded(mgid) != models::LoadState::OnGPU) continue;
 
                 for (const auto& _ : curr_scene.instances_of_used_models[i]) {
-                    auto res = engine::culling::flatten(mgid, transform_buffer.address(), transform_ix * sizeof(glm::mat4));
+                    auto res =
+                        engine::culling::flatten(mgid, transform_buffer.address(), transform_ix * sizeof(glm::mat4));
 
                     transform_ix++;
                 }
@@ -656,9 +693,44 @@ int main(int argc, char** argv) {
             }
 
             target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
             target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            target_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::end_barriers();
+
+            engine::rendering::begin(
+                engine::RenderPass{}
+                    .add_color_attachment(engine::RenderingAttachement{}
+                                              .set_image(target_image_views[engine::get_current_frame()],
+                                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                                              .set_load_op(engine::LoadOp::Load)
+                                              .set_store_op(engine::StoreOp::Store))
+                    .depth_attachment(engine::RenderingAttachement{}
+                                          .set_image(depth_image_views[engine::get_current_frame()],
+                                                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+                                          .set_load_op(engine::LoadOp::Load)
+                                          .set_store_op(engine::StoreOp::NoStore)));
+            uint8_t grid_pc[GridPC::size]{};
+            auto vp = cam.view_projection();
+            GridPC::write(grid_pc, glm::inverse(vp), vp, cam.position,
+                          glm::vec2{engine::swapchain_extent.width, engine::swapchain_extent.height});
+
+            grid_pipeline.bind();
+            grid_pipeline.draw(engine::GraphicsPipeline::DrawParams{
+                .push_constant = grid_pc,
+                .vertex_count = 3,
+            });
+            engine::rendering::end();
+
+            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 
@@ -809,6 +881,10 @@ int main(int argc, char** argv) {
     engine::destroy_descriptor_set_layout(pbr_shading_set_layout);
     pbr_pipeline.destroy();
     engine::destroy_shader(pbr_module);
+
+    engine::destroy_shader(fullscreen_triangle_module);
+    engine::destroy_shader(grid_module);
+    grid_pipeline.destroy();
 
     engine::destroy_descriptor_set_layout(postprocessing_set_layout);
     postprocessing_pipeline.destroy();

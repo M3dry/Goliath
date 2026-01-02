@@ -23,6 +23,7 @@ namespace engine {
     };
 
     enum struct StoreOp {
+        NoStore = VK_ATTACHMENT_STORE_OP_NONE,
         Store = VK_ATTACHMENT_STORE_OP_STORE,
         DontCare = VK_ATTACHMENT_STORE_OP_DONT_CARE,
     };
