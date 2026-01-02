@@ -224,7 +224,11 @@ namespace engine {
         debug_messenger = vkb_inst.debug_messenger;
         volkLoadInstance(instance);
 
-        glfwInit();
+        glfwSetErrorCallback([](int err, const char* desc) {
+            fprintf(stderr, "GLFW error %d: %s\n", err, desc);
+        });
+        assert(glfwInit() == GLFW_TRUE);
+
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
 

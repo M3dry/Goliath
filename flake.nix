@@ -42,6 +42,7 @@
               xorg.libXrandr
               wayland
               wayland-scanner
+              libdecor
               gtk3
 
               libxkbcommon
@@ -57,7 +58,7 @@
             export CXX=clang++
 
             # needed for stupid renderdoc to work
-            export LD_LIBRARY_PATH="${pkgs.xorg.libX11}/lib:${pkgs.xorg.libXext}/lib:${pkgs.xorg.libXi}/lib:${pkgs.xorg.libXrandr}/lib:${pkgs.vulkan-loader}/lib"
+            export LD_LIBRARY_PATH="${pkgs.xorg.libX11}/lib:${pkgs.xorg.libXext}/lib:${pkgs.xorg.libXi}/lib:${pkgs.xorg.libXrandr}/lib:${pkgs.vulkan-loader}/lib:${pkgs.lib.makeLibraryPath [pkgs.wayland pkgs.libxkbcommon pkgs.libdecor]}"
           '';
         };
       }
