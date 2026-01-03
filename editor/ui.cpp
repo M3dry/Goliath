@@ -72,6 +72,22 @@ namespace ui {
 
     std::optional<SelectedInstance> transform_value_changed{};
 
+    void update_instance_transform(scene::Scene& scene) {
+        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() &&
+            transform_value_changed->instance == scene.selected_instance) {
+            transform_value_changed->reset_timer();
+            return;
+        } else if (transform_value_changed != std::nullopt) {
+            scene::save(project::scenes_file);
+            return;
+        }
+
+        transform_value_changed = {
+            scene::selected_scene_ix(),
+            scene.selected_instance,
+        };
+    }
+
     void init() {
         game_window_sampler = engine::samplers::get(0);
 
@@ -192,6 +208,28 @@ namespace ui {
                 cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
 
                 cam.update_matrices();
+            }
+
+
+            auto& scene = scene::selected_scene();
+            if (scene.selected_instance != -1) {
+                auto win_size = ImGui::GetWindowSize();
+
+                changed = false;
+                ImGuizmo::SetOrthographic(false);
+                ImGuizmo::AllowAxisFlip(false);
+                // TODO: letterboxing to make the gizmo not show over other stuff
+                ImGuizmo::SetRect(win_pos.x, win_pos.y, engine::swapchain_extent.width, engine::swapchain_extent.height);
+                ImGuizmo::SetDrawlist();
+
+                auto proj = cam._projection;
+                proj[1][1] *= -1;
+                changed |=
+                    ImGuizmo::Manipulate(glm::value_ptr(cam._view), glm::value_ptr(proj),
+                                         ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z,
+                                         ImGuizmo::WORLD, glm::value_ptr(scene.instances[scene.selected_instance].transform));
+
+                if (changed) update_instance_transform(scene);
             }
         }
         ImGui::End();
@@ -420,38 +458,9 @@ namespace ui {
 
         ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate), glm::value_ptr(scale), glm::value_ptr(instance.transform));
 
-        auto win_pos = ImGui::GetWindowPos();
-        auto win_size = ImGui::GetWindowSize();
-
-        auto win = ImGui::FindWindowByName("Viewport");
-        ImGuizmo::SetOrthographic(false);
-        ImGuizmo::AllowAxisFlip(false);
-        ImGuizmo::SetDrawlist();
-        ImGuizmo::SetRect(win->Pos.x, win->Pos.y, engine::swapchain_extent.width, engine::swapchain_extent.height);
-        ImGuizmo::SetAlternativeWindow(win);
-
-        auto proj = cam._projection;
-        proj[1][1] *= -1;
-        value_changed |=
-            ImGuizmo::Manipulate(glm::value_ptr(cam._view), glm::value_ptr(proj),
-                                 ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z,
-                                 ImGuizmo::WORLD, glm::value_ptr(instance.transform));
-
         if (!value_changed) return;
 
-        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() &&
-            transform_value_changed->instance == scene.selected_instance) {
-            transform_value_changed->reset_timer();
-            return;
-        } else if (transform_value_changed != std::nullopt) {
-            scene::save(project::scenes_file);
-            return;
-        }
-
-        transform_value_changed = {
-            scene::selected_scene_ix(),
-            scene.selected_instance,
-        };
+        update_instance_transform(scene);
     }
 
     void scene_pane() {

@@ -851,6 +851,8 @@ int main(int argc, char** argv) {
             update_depth(depth_images, depth_image_views, depth_barriers, engine::frames_in_flight);
             depth_barriers_applied = false;
 
+            // NOTE: wayland doesn't seem to send restore swapchain events when the window size changes. Check on X11 what happens there => possible option is to also resize target to the windows size and check those events
+            printf("updating target to: [%d, %d]\n", engine::swapchain_extent.width, engine::swapchain_extent.height);
             update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
             target_barriers_applied = false;
 
