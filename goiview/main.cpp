@@ -45,6 +45,9 @@ using ImagePC = engine::PushConstant<glm::uvec2, glm::uvec2>;
 
 int main(int argc, char** argv) {
     engine::init("GoiView", 0, "", false);
+    glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
     if (argc != 2) {
         printf("USAGE: %s [file].goi\n", argv[0]);

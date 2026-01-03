@@ -52,7 +52,8 @@ namespace ui {
     VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
     std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
     VkSampler game_window_sampler;
-    ;
+    glm::vec2 game_image_offset{0.0f};
+    glm::vec2 game_image_dims{0.0f};
 
     std::string models_query{};
     models::gid selected_model{
@@ -120,7 +121,7 @@ namespace ui {
 
         auto& style = ImViewGuizmo::GetStyle();
         style.scale = 0.8;
-        
+
         style.labelSize = 1.5;
         style.labelColor = IM_COL32(0, 0, 0, 255);
 
@@ -187,7 +188,8 @@ namespace ui {
             avail.y -= cursor.y;
             auto scale = ImViewGuizmo::GetStyle().scale;
 
-            // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward = +Z
+            // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward =
+            // +Z
             static const glm::mat4 GL_TO_GIZMO = glm::mat4{1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
 
             static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
@@ -196,20 +198,23 @@ namespace ui {
             auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
             auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam.position, 1.0f}};
 
-            bool changed = ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
-                                                ImVec2{gizmo_offset.x + (avail.x - scale*90), gizmo_offset.y + scale*90});
-            changed |= ImViewGuizmo::Pan(gizmo_pos, gizmo_quat,
-                                         ImVec2{gizmo_offset.x + (avail.x - scale*50 - 10), gizmo_offset.y + (avail.y - scale*50 - 10)});
+            bool changed =
+                ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
+                                     ImVec2{gizmo_offset.x + (avail.x - scale * 90), gizmo_offset.y + scale * 90});
+            changed |= ImViewGuizmo::Pan(
+                gizmo_pos, gizmo_quat,
+                ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10), gizmo_offset.y + (avail.y - scale * 50 - 10)});
             changed |= ImViewGuizmo::Dolly(gizmo_pos, gizmo_quat,
-                                           ImVec2{gizmo_offset.x + (avail.x - scale*50 - 10), gizmo_offset.y + (avail.y - scale*50 - 10 - scale*50 - 10)});
+                                           ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10),
+                                                  gizmo_offset.y + (avail.y - scale * 50 - 10 - scale * 50 - 10)});
 
             if (changed) {
-                cam._orientation = glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
+                cam._orientation =
+                    glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
                 cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
 
                 cam.update_matrices();
             }
-
 
             auto& scene = scene::selected_scene();
             if (scene.selected_instance != -1) {
@@ -218,16 +223,17 @@ namespace ui {
                 changed = false;
                 ImGuizmo::SetOrthographic(false);
                 ImGuizmo::AllowAxisFlip(false);
-                // TODO: letterboxing to make the gizmo not show over other stuff
-                ImGuizmo::SetRect(win_pos.x, win_pos.y, engine::swapchain_extent.width, engine::swapchain_extent.height);
+                // FIXME: the offsets are fucked up, need to play around with it
+                ImGuizmo::SetRect(cursor.x + game_image_offset.x, cursor.y + game_image_offset.y, game_image_dims.x,
+                                  game_image_dims.y);
                 ImGuizmo::SetDrawlist();
 
                 auto proj = cam._projection;
                 proj[1][1] *= -1;
-                changed |=
-                    ImGuizmo::Manipulate(glm::value_ptr(cam._view), glm::value_ptr(proj),
-                                         ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z,
-                                         ImGuizmo::WORLD, glm::value_ptr(scene.instances[scene.selected_instance].transform));
+                changed |= ImGuizmo::Manipulate(
+                    glm::value_ptr(cam._view), glm::value_ptr(proj),
+                    ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
+                    glm::value_ptr(scene.instances[scene.selected_instance].transform));
 
                 if (changed) update_instance_transform(scene);
             }
@@ -253,7 +259,7 @@ namespace ui {
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         barrier.pNext = nullptr;
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = game_window_image.image;
@@ -266,6 +272,26 @@ namespace ui {
         };
         barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
         barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+
+        VkClearColorValue clear_color{};
+        clear_color.float32[0] = 0.0f;
+        clear_color.float32[1] = 0.0f;
+        clear_color.float32[2] = 0.0f;
+        clear_color.float32[3] = 255.0f;
+        VkImageSubresourceRange clear_range = barrier.subresourceRange;
+        vkCmdClearColorImage(engine::get_cmd_buf(), game_window_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             &clear_color, 1, &clear_range);
+
+        engine::synchronization::begin_barriers();
+        engine::synchronization::apply_barrier(barrier);
+        engine::synchronization::end_barriers();
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 
@@ -274,17 +300,35 @@ namespace ui {
         blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         VkImageBlit2 region = blit_info.pRegions[0];
 
-        int32_t width = std::min((int32_t)game_window_.x, region.srcOffsets[1].x);
-        int32_t height = std::min((int32_t)game_window_.y, region.srcOffsets[1].y);
+        glm::vec2 last_dims = game_image_dims;
+        glm::vec2 last_offset = game_image_offset;
+
+        game_image_dims = {region.srcOffsets[1].x, region.srcOffsets[1].y};
+        glm::vec2 window = glm::make_vec2(&game_window_.x);
+
+        float scale = std::min(window.x / game_image_dims.x, window.y / game_image_dims.y);
+        if (scale > 1.0) {
+            scale = floor(scale);
+        }
+
+        game_image_dims *= scale;
+        game_image_offset = (window - game_image_dims) * 0.5f;
+
+        if (last_dims != game_image_dims) {
+            printf("game image dimension: [%f, %f]\n", game_image_dims.x, game_image_dims.y);
+        }
+        if (last_offset != game_image_offset) {
+            printf("game image offset: [%f, %f]\n", game_image_offset.x, game_image_offset.y);
+        }
 
         region.dstOffsets[0] = VkOffset3D{
-            .x = 0,
-            .y = 0,
+            .x = (int32_t)game_image_offset.x,
+            .y = (int32_t)game_image_offset.y,
             .z = 0,
         };
-        region.srcOffsets[1] = region.dstOffsets[1] = VkOffset3D{
-            .x = width,
-            .y = height,
+        region.dstOffsets[1] = VkOffset3D{
+            .x = (int32_t)game_image_dims.x,
+            .y = (int32_t)game_image_dims.y,
             .z = 1,
         };
         region.dstSubresource = VkImageSubresourceLayers{
@@ -410,8 +454,8 @@ namespace ui {
         auto& inst = current_scene.instances[ix];
 
         bool selected = ImGui::Selectable("", current_scene.selected_instance == ix,
-                ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                ImVec2(0.0, ImGui::GetFrameHeight()));
+                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                                          ImVec2(0.0, ImGui::GetFrameHeight()));
 
         ImGui::SameLine();
         ImGui::InputText("##name", &inst.name);
@@ -442,7 +486,8 @@ namespace ui {
         glm::vec3 translate{};
         glm::vec3 rotate{};
         glm::vec3 scale{};
-        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(instance.transform), glm::value_ptr(translate), glm::value_ptr(rotate), glm::value_ptr(scale));
+        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(instance.transform), glm::value_ptr(translate),
+                                              glm::value_ptr(rotate), glm::value_ptr(scale));
 
         bool value_changed = false;
 
@@ -456,7 +501,8 @@ namespace ui {
 
         value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(scale), 0.1f, 0.0f, 0.0f, "%.2f");
 
-        ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate), glm::value_ptr(scale), glm::value_ptr(instance.transform));
+        ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate),
+                                                glm::value_ptr(scale), glm::value_ptr(instance.transform));
 
         if (!value_changed) return;
 
