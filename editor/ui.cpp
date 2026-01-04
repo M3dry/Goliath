@@ -236,6 +236,10 @@ namespace ui {
                     glm::value_ptr(scene.instances[scene.selected_instance].transform));
 
                 if (changed) update_instance_transform(scene);
+
+                auto* draw_list = ImGui::GetWindowDrawList();
+                ImVec2 min{cursor.x + game_image_offset.x, cursor.y + game_image_offset.y};
+                draw_list->AddRectFilled(min, ImVec2{min.x + game_image_dims.x, min.y + game_image_dims.y}, IM_COL32(255, 0, 0, 255));
             }
         }
         ImGui::End();
@@ -300,11 +304,8 @@ namespace ui {
         blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         VkImageBlit2 region = blit_info.pRegions[0];
 
-        glm::vec2 last_dims = game_image_dims;
-        glm::vec2 last_offset = game_image_offset;
-
         game_image_dims = {region.srcOffsets[1].x, region.srcOffsets[1].y};
-        glm::vec2 window = glm::make_vec2(&game_window_.x);
+        glm::vec2 window{game_window_.x, game_window_.y};
 
         float scale = std::min(window.x / game_image_dims.x, window.y / game_image_dims.y);
         if (scale > 1.0) {
@@ -313,13 +314,6 @@ namespace ui {
 
         game_image_dims *= scale;
         game_image_offset = (window - game_image_dims) * 0.5f;
-
-        if (last_dims != game_image_dims) {
-            printf("game image dimension: [%f, %f]\n", game_image_dims.x, game_image_dims.y);
-        }
-        if (last_offset != game_image_offset) {
-            printf("game image offset: [%f, %f]\n", game_image_offset.x, game_image_offset.y);
-        }
 
         region.dstOffsets[0] = VkOffset3D{
             .x = (int32_t)game_image_offset.x,
