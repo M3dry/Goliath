@@ -218,13 +218,12 @@ namespace ui {
 
             auto& scene = scene::selected_scene();
             if (scene.selected_instance != -1) {
-                auto win_size = ImGui::GetWindowSize();
+                auto win_pos = ImGui::GetWindowPos();
 
                 changed = false;
                 ImGuizmo::SetOrthographic(false);
                 ImGuizmo::AllowAxisFlip(false);
-                // FIXME: the offsets are fucked up, need to play around with it
-                ImGuizmo::SetRect(cursor.x + game_image_offset.x, cursor.y + game_image_offset.y, game_image_dims.x,
+                ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x, win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x,
                                   game_image_dims.y);
                 ImGuizmo::SetDrawlist();
 
@@ -236,10 +235,6 @@ namespace ui {
                     glm::value_ptr(scene.instances[scene.selected_instance].transform));
 
                 if (changed) update_instance_transform(scene);
-
-                auto* draw_list = ImGui::GetWindowDrawList();
-                ImVec2 min{cursor.x + game_image_offset.x, cursor.y + game_image_offset.y};
-                draw_list->AddRectFilled(min, ImVec2{min.x + game_image_dims.x, min.y + game_image_dims.y}, IM_COL32(255, 0, 0, 255));
             }
         }
         ImGui::End();
@@ -321,8 +316,8 @@ namespace ui {
             .z = 0,
         };
         region.dstOffsets[1] = VkOffset3D{
-            .x = (int32_t)game_image_dims.x,
-            .y = (int32_t)game_image_dims.y,
+            .x = region.dstOffsets[0].x + (int32_t)game_image_dims.x,
+            .y = region.dstOffsets[0].y + (int32_t)game_image_dims.y,
             .z = 1,
         };
         region.dstSubresource = VkImageSubresourceLayers{
