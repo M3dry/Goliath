@@ -119,6 +119,7 @@ namespace scene {
 
     void Scene::remove_instance(size_t ix) {
         if (selected_instance == ix) selected_instance = -1;
+        auto inst = instances[ix];
         instances.erase(instances.begin() + ix);
 
         for (auto& insts : instances_of_used_models) {
@@ -130,6 +131,14 @@ namespace scene {
                     return inst_ix == ix;
                 }
             });
+        }
+
+        if (auto model_it = std::find(used_models.begin(), used_models.end(), inst.model_gid); model_it != used_models.end()) {
+            auto model_ix = std::distance(used_models.begin(), model_it);
+            if (instances_of_used_models[model_ix].size() == 0) {
+                used_models.erase(used_models.begin() + model_ix);
+                instances_of_used_models.erase(instances_of_used_models.begin() + model_ix);
+            }
         }
 
         save(project::scenes_file);

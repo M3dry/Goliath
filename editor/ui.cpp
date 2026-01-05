@@ -56,6 +56,7 @@ namespace ui {
     glm::vec2 game_image_dims{0.0f};
 
     std::string models_query{};
+    int models_search_scope{};
     models::gid selected_model{
         (uint8_t)-1,
         (uint32_t)-1,
@@ -223,8 +224,8 @@ namespace ui {
                 changed = false;
                 ImGuizmo::SetOrthographic(false);
                 ImGuizmo::AllowAxisFlip(false);
-                ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x, win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x,
-                                  game_image_dims.y);
+                ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
+                                  win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
                 ImGuizmo::SetDrawlist();
 
                 auto proj = cam._projection;
@@ -353,10 +354,30 @@ namespace ui {
     }
 
     void models_pane() {
-        ImGui::InputText("Search", &models_query);
+        ImGui::InputText("##search", &models_query);
+
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
+        std::array<const char*, 2> combo_values = {
+            "Scene models",
+            "All models",
+        };
+        if (ImGui::BeginCombo("##combo", combo_values[models_search_scope], ImGuiComboFlags_NoPreview)) {
+            for (size_t i = 0; i < combo_values.size(); i++) {
+                if (ImGui::Selectable(combo_values[i], models_search_scope == i)) {
+                    models_search_scope = i;
+                }
+
+                if (models_search_scope == i) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+
+            ImGui::EndCombo();
+        }
 
         std::vector<std::pair<models::gid, uint32_t>> matches{};
-        if (models_query.empty()) {
+        if (models_search_scope == 0) {
             auto& scene = scene::selected_scene();
 
             if (selected_model != models::gid{(uint8_t)-1, (uint32_t)-1}) {
@@ -397,9 +418,10 @@ namespace ui {
         auto name = *models::get_name(gid);
 
         bool double_click = false;
-        (ImGui::Selectable("##region", selected_model == gid,
-                           ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                           ImVec2(0.0, ImGui::GetFrameHeight())));
+        ImGui::Selectable("##region", selected_model == gid,
+                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                          ImVec2(0.0, ImGui::GetFrameHeight()));
+        auto selectable_id = ImGui::GetItemID();
         if (ImGui::IsItemClicked()) {
             int clicks = ImGui::GetMouseClickedCount(ImGuiMouseButton_Left);
             if (clicks == 1) {
@@ -417,7 +439,7 @@ namespace ui {
         if (ImGui::InputText("##name", name)) {
             printf("TODO: rename saving\n");
         }
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
+        if (ImGui::IsItemDeactivated()) {
             selected_model = {(uint8_t)-1, (uint32_t)-1};
         } else if (!ImGui::IsItemActive() && double_click) {
             selected_model = gid;
