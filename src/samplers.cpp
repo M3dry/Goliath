@@ -1,5 +1,6 @@
 #include "goliath/samplers.hpp"
 
+#include "engine_.hpp"
 #include "goliath/engine.hpp"
 #include "xxHash/xxhash.h"
 
@@ -13,7 +14,7 @@ namespace engine {
     }
 
     void Sampler::destroy(VkSampler sampler) {
-        vkDestroySampler(device, sampler, nullptr);
+        engine::destroy_sampler(sampler);
     }
 
     void to_json(nlohmann::json& j, const Sampler& sampler) {

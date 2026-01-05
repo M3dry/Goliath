@@ -32,4 +32,7 @@ namespace engine {
     void destroy_buffer(VkBuffer buf, VmaAllocation alloc);
     void destroy_image(VkImage img, VmaAllocation alloc);
     void destroy_view(VkImageView view);
+    void destroy_sampler(VkSampler sampler);
+
+    void new_window_size(uint32_t width, uint32_t height);
 }

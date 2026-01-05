@@ -1,4 +1,5 @@
 #include "goliath/event.hpp"
+#include "engine_.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/imgui.hpp"
 #include "imgui_impl_glfw.h"
@@ -62,6 +63,10 @@ void window_close_callback(GLFWwindow* window) {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
+void window_size_callback(GLFWwindow* window, int width, int height) {
+    engine::new_window_size(width, height);
+}
+
 namespace engine::event {
     void register_glfw_callbacks() {
         ImGui_ImplGlfw_SetCallbacksChainForAllWindows(true);
@@ -72,6 +77,7 @@ namespace engine::event {
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetCharCallback(window, char_callback);
         glfwSetWindowCloseCallback(window, window_close_callback);
+        glfwSetWindowSizeCallback(window, window_size_callback);
     }
 
     PollEvent poll() {

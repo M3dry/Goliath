@@ -5,6 +5,7 @@
 #include "textures_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
+#include <glm/ext/vector_uint2.hpp>
 
 #define VOLK_IMPLEMENTATION 1
 #include <volk.h>
@@ -66,6 +67,7 @@ namespace engine {
     VmaAllocator allocator;
     VkSurfaceKHR surface;
 
+    bool updated_window_size = false;
     bool swapchain_needs_rebuild = false;
     VkExtent2D swapchain_extent;
     VkSwapchainKHR swapchain = nullptr;
@@ -388,8 +390,9 @@ namespace engine {
 
         auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
                                             &swapchain_ix);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || updated_window_size) {
             swapchain_needs_rebuild = true;
+            updated_window_size = false;
             return true;
         } else {
             VK_CHECK(result);
@@ -500,6 +503,10 @@ namespace engine {
 
     void destroy_sampler(VkSampler sampler) {
         get_current_frame_data().destroy_sampler(sampler);
+    }
+
+    void new_window_size(uint32_t width, uint32_t height) {
+        updated_window_size = true;
     }
 
     uint32_t get_current_frame() {
