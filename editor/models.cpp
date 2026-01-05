@@ -17,7 +17,12 @@
 #include <vector>
 #include <fstream>
 
+
 namespace models {
+    std::filesystem::path make_model_path(gid gid) {
+        return std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff);
+    }
+
     void to_json(nlohmann::json& j, const gid& gid) {
         j = gid.value;
     }
@@ -39,8 +44,6 @@ namespace models {
     };
 
     std::vector<std::string> names{};
-    std::vector<std::filesystem::path> paths{};
-
     std::vector<uint32_t> ref_counts{};
 
     std::vector<std::optional<engine::Model>> cpu_datas{};
@@ -51,19 +54,19 @@ namespace models {
 
     struct JsonModelEntry {
         std::string name;
-        std::filesystem::path path;
+        gid gid;
     };
 
     void to_json(nlohmann::json& j, const JsonModelEntry& entry) {
         j = nlohmann::json{
             {"name", entry.name},
-            {"path", entry.path},
+            {"path", entry.gid},
         };
     }
 
     void from_json(const nlohmann::json& j, JsonModelEntry& entry) {
         j["name"].get_to(entry.name);
-        j["path"].get_to(entry.path);
+        j["path"].get_to(entry.gid);
     }
 
     struct task {
@@ -95,7 +98,7 @@ namespace models {
         if (generations[gid.id()]->load() != gid.gen()) return;
 
         uint32_t model_size;
-        auto* model_data = engine::util::read_file(project::models_directory / paths[gid.id()], &model_size);
+        auto* model_data = engine::util::read_file(project::models_directory / make_model_path(gid), &model_size);
 
         cpu_datas[gid.id()] = engine::Model{};
         engine::Model::load_optimized(cpu_datas[gid.id()].value(), {model_data, model_size});
@@ -117,12 +120,13 @@ namespace models {
 
         {
             const auto& ext = orig_path.extension();
+            auto path = project::models_directory / make_model_path(gid);
             if (ext == ".glb") {
                 engine::Model::load_glb(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else if (ext == ".gltf") {
                 engine::Model::load_gltf(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else {
-                std::filesystem::copy(orig_path, project::models_directory / paths[gid.id()]);
+                std::filesystem::copy(orig_path, path);
                 return;
             }
 
@@ -133,7 +137,7 @@ namespace models {
 
             model.save_optimized({save_data, save_size});
 
-            engine::util::save_file(project::models_directory / paths[gid.id()], save_data, save_size);
+            engine::util::save_file(path, save_data, save_size);
 
             free(save_data);
         }
@@ -234,12 +238,9 @@ namespace models {
 
         uint32_t id_counter = 0;
         for (auto&& entry : entries) {
-            auto stem = entry.path.stem().string();
-            auto gen = (uint8_t)std::stoi(stem.substr(0, 2), 0, 16);
-            auto id = (uint32_t)std::stoi(stem.substr(2, 8), 0, 16);
-            while (id > id_counter) {
+            auto gid = entry.gid;
+            while (gid.id() > id_counter) {
                 names.emplace_back();
-                paths.emplace_back();
 
                 ref_counts.emplace_back(0);
 
@@ -253,14 +254,13 @@ namespace models {
             }
 
             names.emplace_back(std::move(entry.name));
-            paths.emplace_back(std::move(entry.path));
 
             ref_counts.emplace_back(0);
 
             cpu_datas.emplace_back();
             gpu_datas.emplace_back();
 
-            generations.emplace_back(std::make_unique<std::atomic<uint8_t>>(gen));
+            generations.emplace_back(std::make_unique<std::atomic<uint8_t>>(gid.gen()));
             deleted.emplace_back(false);
 
             id_counter++;
@@ -280,10 +280,10 @@ namespace models {
     nlohmann::json save() {
         std::vector<JsonModelEntry> entries{};
 
-        for (size_t i = 0; i < names.size(); i++) {
+        for (uint32_t i = 0; i < names.size(); i++) {
             if (deleted[i]) continue;
 
-            entries.emplace_back(names[i], paths[i]);
+            entries.emplace_back(names[i], gid{generations[i]->load(), i});
         }
 
         return nlohmann::json(entries);
@@ -296,7 +296,6 @@ namespace models {
             uint8_t gid_gen = gid.gen();
 
             names[gid.id()] = std::move(name);
-            paths[gid.id()] = std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff);
 
             ref_counts[gid.id()] = 0;
 
@@ -313,7 +312,6 @@ namespace models {
             gid = {0, (uint32_t)names.size()};
 
             names.emplace_back(std::move(name));
-            paths.emplace_back(std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff));
 
             ref_counts.emplace_back(0);
 
@@ -340,13 +338,12 @@ namespace models {
         deleted[gid.id()] = true;
         generations[gid.id()]->fetch_add(1, std::memory_order_release);
 
-        std::filesystem::remove(project::models_directory / paths[gid.id()]);
+        std::filesystem::remove(project::models_directory / make_model_path(gid));
 
         if (cpu_datas[gid.id()]) cpu_datas[gid.id()]->destroy();
         gpu_datas[gid.id()].destroy();
 
         names[gid.id()] = "";
-        paths[gid.id()] = "";
 
         cpu_datas[gid.id()] = std::nullopt;
         gpu_datas[gid.id()] = UploadedModelData{
