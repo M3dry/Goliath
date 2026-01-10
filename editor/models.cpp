@@ -1,4 +1,5 @@
 #include "models.hpp"
+#include "gltf.hpp"
 #include "goliath/culling.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/gpu_group.hpp"
@@ -122,9 +123,9 @@ namespace models {
             const auto& ext = orig_path.extension();
             auto path = project::models_directory / make_model_path(gid);
             if (ext == ".glb") {
-                engine::Model::load_glb(&model, {model_data, model_size}, orig_path.parent_path().string());
+                gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else if (ext == ".gltf") {
-                engine::Model::load_gltf(&model, {model_data, model_size}, orig_path.parent_path().string());
+                gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string());
             } else {
                 std::filesystem::copy(orig_path, path);
                 return;
@@ -218,7 +219,10 @@ namespace models {
         mf.flush();
 
         std::ofstream tf{project::textures_registry};
-        tf << engine::textures::save();
+        tf << nlohmann::json{
+            {"textures", engine::textures::save()},
+                {"samplers", engine::samplers::save()},
+        };
         tf.flush();
     }
 

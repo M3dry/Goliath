@@ -287,6 +287,15 @@ namespace engine::textures {
     void load(nlohmann::json j) {
         std::vector<JsonTextureEntry> entries = j;
 
+        names.clear();
+        generations.clear();
+        deleted.clear();
+
+        ref_counts.clear();
+        gpu_images.clear();
+        gpu_image_views.clear();
+        samplers.clear();
+
         uint32_t id_counter = 1;
         for (auto&& entry : entries) {
             auto gid = entry.gid;

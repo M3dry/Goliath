@@ -4,9 +4,6 @@
 [submodule "src/vk-bootstrap"]
 	path = src/vk-bootstrap
 	url = https://github.com/charles-lunarg/vk-bootstrap.git
-[submodule "src/tinygltf"]
-	path = src/tinygltf
-	url = https://github.com/syoyo/tinygltf.git
 [submodule "src/MikkTSpace"]
 	path = src/MikkTSpace
 	url = https://github.com/mmikk/MikkTSpace.git
@@ -28,3 +25,6 @@
 [submodule "src/glfw"]
 	path = src/glfw
 	url = https://github.com/glfw/glfw
+[submodule "editor/tinygltf"]
+	path = editor/tinygltf
+	url = https://github.com/syoyo/tinygltf.git

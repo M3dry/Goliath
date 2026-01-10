@@ -41,10 +41,6 @@ else()
     find_package(VulkanMemoryAllocator REQUIRED CONFIG)
 endif()
 
-set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
-set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
-add_subdirectory(./tinygltf)
-
 set(XXHASH_BUNDLED_MODE ON CACHE BOOL "" FORCE)
 add_subdirectory(xxHash/cmake_unofficial)
 
@@ -79,7 +75,6 @@ SET(ENGINE_SOURCES
     camera.cpp
     model.cpp
     util.cpp
-    scene.cpp
     gpu_group.cpp
     visbuffer.cpp
     compute.cpp

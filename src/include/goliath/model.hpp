@@ -8,7 +8,6 @@
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/ext/vector_float4.hpp>
-#include <string>
 #include <volk.h>
 
 namespace engine::model {
@@ -123,29 +122,10 @@ namespace engine {
         uint32_t* mesh_indexes = nullptr;
         glm::mat4* mesh_transforms = nullptr;
 
-        enum Err {
-            Ok,
-            TinyGLTFErr,
-            NoRootScene,
-            PositionAttributeMissing,
-            UnsupportedMeshTopology,
-            UnsupportedIndexSize,
-            InvalidPositionElementSize,
-            InvalidNormalElementSize,
-            InvalidTangentElementSize,
-            InvalidTexcoordElementSize,
-            VertexCountDiffersBetweenAttributes,
-            InvalidFormat,
-        };
-
         uint32_t get_optimized_size() const;
         // [`data`, `data` + `get_optimized_size()`) must be a valid range
         void save_optimized(std::span<uint8_t> data) const;
 
-        static Err load_gltf(Model* out, std::span<uint8_t> data, const std::string& base_dir,
-                             std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
-        static Err load_glb(Model* out, std::span<uint8_t> data, const std::string& base_dir,
-                            std::string* tinygltf_err = nullptr, std::string* tinygltf_warning = nullptr);
         static void load_optimized(Model& out, std::span<uint8_t> data);
 
         void destroy() {
@@ -180,6 +160,7 @@ namespace engine::model {
         collisions::AABB bounding_box;
     };
 
-    std::pair<GPUModel, Buffer> upload(const Model* model);
+    std::pair<GPUModel, Buffer>
+    upload(const Model* model);
     GPUModel upload_raw(const Model* model);
 }

@@ -1,6 +1,7 @@
 #include "ui.hpp"
 
 #include "ImGuizmo/ImGuizmo.h"
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #define IMVIEWGUIZMO_IMPLEMENTATION
 #include "ImViewGuizmo/ImViewGuizmo.h"
@@ -57,10 +58,6 @@ namespace ui {
 
     std::string models_query{};
     int models_search_scope{};
-    models::gid selected_model{
-        (uint8_t)-1,
-        (uint32_t)-1,
-    };
 
     struct SelectedInstance {
         uint32_t scene;
@@ -380,13 +377,7 @@ namespace ui {
         if (models_search_scope == 0) {
             auto& scene = scene::selected_scene();
 
-            if (selected_model != models::gid{(uint8_t)-1, (uint32_t)-1}) {
-                matches.emplace_back(selected_model, std::numeric_limits<int32_t>::max());
-            }
-
             for (const auto& gid : scene.used_models) {
-                if (gid == selected_model) continue;
-
                 auto score = score_search(models_query, **models::get_name(gid));
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(gid, score);
@@ -396,10 +387,6 @@ namespace ui {
             const auto& names = models::get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
                 auto score = score_search(models_query, names[i]);
-                if (selected_model == models::gid{models::get_generation(i), i}) {
-                    score = std::numeric_limits<int32_t>::max();
-                }
-
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(models::gid{models::get_generation(i), i}, score);
                 }
@@ -417,38 +404,19 @@ namespace ui {
         ImGui::PushID(gid.value);
         auto name = *models::get_name(gid);
 
-        bool double_click = false;
-        ImGui::Selectable("##region", selected_model == gid,
-                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                          ImVec2(0.0, ImGui::GetFrameHeight()));
-        auto selectable_id = ImGui::GetItemID();
-        if (ImGui::IsItemClicked()) {
-            int clicks = ImGui::GetMouseClickedCount(ImGuiMouseButton_Left);
-            if (clicks == 1) {
-                if (selected_model == gid) {
-                    selected_model = {(uint8_t)-1, (uint32_t)-1};
-                } else {
-                    selected_model = gid;
-                }
-            } else if (clicks == 2) {
-                double_click = true;
-            }
-        }
-
-        ImGui::SameLine();
         if (ImGui::InputText("##name", name)) {
             printf("TODO: rename saving\n");
         }
-        if (ImGui::IsItemDeactivated()) {
-            selected_model = {(uint8_t)-1, (uint32_t)-1};
-        } else if (!ImGui::IsItemActive() && double_click) {
-            selected_model = gid;
+
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
+        if (ImGui::Button("+")) {
             scene::selected_scene().add_instance(scene::Instance{
                 .model_gid = gid,
                 .name = **models::get_name(gid),
                 .transform = glm::identity<glm::mat4>(),
             });
-        }
+        } 
 
         ImGui::PopID();
     }
@@ -464,17 +432,20 @@ namespace ui {
         ImGui::PushID(ix);
         auto& inst = current_scene.instances[ix];
 
-        bool selected = ImGui::Selectable("", current_scene.selected_instance == ix,
+        if(ImGui::Selectable("", current_scene.selected_instance == ix,
                                           ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                                          ImVec2(0.0, ImGui::GetFrameHeight()));
-
-        ImGui::SameLine();
-        ImGui::InputText("##name", &inst.name);
-        if (ImGui::IsItemClicked() || selected) {
+                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
             current_scene.selected_instance = current_scene.selected_instance == ix ? -1 : ix;
         }
 
         ImGui::SameLine();
+        ImGui::InputText("##name", &inst.name);
+        if (ImGui::IsItemClicked()) {
+            current_scene.selected_instance = ix;
+        }
+
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
         if (ImGui::Button("X")) {
             current_scene.remove_instance(ix);
 
@@ -551,6 +522,7 @@ namespace ui {
             }
 
             ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
             ImGui::InputText("##name", &scenes[i].name);
 
             ImGui::PopID();

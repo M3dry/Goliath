@@ -1,6 +1,10 @@
 set(NFD_PORTAL ON CACHE BOOL "Use XDG portal backend" FORCE)
 add_subdirectory(./nativefiledialog-extended)
 
+set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
+set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
+add_subdirectory(./tinygltf)
+
 SET(IMGUIZMO_SOURCES
     ImGuizmo/ImGuizmo.h
     ImGuizmo/ImGuizmo.cpp
@@ -12,6 +16,7 @@ SET(EDITOR_SOURCES
     scene.cpp
     project.cpp
     ui.cpp
+    gltf.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})

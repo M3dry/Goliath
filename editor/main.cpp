@@ -109,12 +109,12 @@ int main(int argc, char** argv) {
     }
 
     if (!project::find_project()) {
-        printf("Project root couldn't be find. To initialize a project use `%s init`\n", argv[0]);
+        printf("Project root couldn't be found. To initialize a project use `%s init`\n", argv[0]);
         return 0;
     }
     std::filesystem::current_path(project::project_root);
 
-    engine::init("Goliath editor", 1000, project::textures_directory, false);
+    engine::init("Goliath editor", 1000, project::textures_directory, true);
     glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
@@ -122,12 +122,17 @@ int main(int argc, char** argv) {
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
     if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::textures_registry)) {
-        tex_reg_json = nlohmann::json::array();
+        tex_reg_json = nlohmann::json{
+            {"textures", nlohmann::json::array()},
+            {"samplers", nlohmann::json::array()},
+        };
     } else if (!tex_reg_json.has_value()) {
         printf("Texture registry file is corrupted\n");
         return 0;
     }
-    engine::textures::load(*tex_reg_json);
+
+    engine::samplers::load((*tex_reg_json)["samplers"]);
+    engine::textures::load((*tex_reg_json)["textures"]);
 
     auto models_registry_json = engine::util::read_json(project::models_registry);
     if (!models_registry_json.has_value() && models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -839,35 +844,36 @@ int main(int argc, char** argv) {
         }
 
     end_of_frame:
-        if (engine::next_frame()) {
-            for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
-                engine::GPUImageView::destroy(depth_image_views[i]);
-                depth_images[i].destroy();
+        if (!engine::next_frame()) continue;
 
-                engine::GPUImageView::destroy(target_image_views[i]);
-                target_images[i].destroy();
-            }
+        for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
+            engine::GPUImageView::destroy(depth_image_views[i]);
+            depth_images[i].destroy();
 
-            update_depth(depth_images, depth_image_views, depth_barriers, engine::frames_in_flight);
-            depth_barriers_applied = false;
-
-            // NOTE: wayland doesn't seem to send restore swapchain events when the window size changes. Check on X11 what happens there => possible option is to also resize target to the windows size and check those events
-            printf("updating target to: [%d, %d]\n", engine::swapchain_extent.width, engine::swapchain_extent.height);
-            update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
-            target_barriers_applied = false;
-
-            visbuffer_raster_pipeline.update_viewport_to_swapchain();
-            visbuffer_raster_pipeline.update_scissor_to_viewport();
-
-            engine::visbuffer::resize(visbuffer_barriers, true, false);
-            for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
-                visbuffer_barriers[i].srcAccessMask = 0;
-                visbuffer_barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                visbuffer_barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-                visbuffer_barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            }
-            visbuffer_barriers_applied = false;
+            engine::GPUImageView::destroy(target_image_views[i]);
+            target_images[i].destroy();
         }
+
+        update_depth(depth_images, depth_image_views, depth_barriers, engine::frames_in_flight);
+        depth_barriers_applied = false;
+
+        update_target(target_images, target_image_views, target_barriers, engine::frames_in_flight);
+        target_barriers_applied = false;
+
+        visbuffer_raster_pipeline.update_viewport_to_swapchain();
+        visbuffer_raster_pipeline.update_scissor_to_viewport();
+
+        grid_pipeline.update_viewport_to_swapchain();
+        grid_pipeline.update_scissor_to_viewport();
+
+        engine::visbuffer::resize(visbuffer_barriers, true, false);
+        for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
+            visbuffer_barriers[i].srcAccessMask = 0;
+            visbuffer_barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            visbuffer_barriers[i].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            visbuffer_barriers[i].dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        }
+        visbuffer_barriers_applied = false;
     }
 
     vkDeviceWaitIdle(engine::device);
