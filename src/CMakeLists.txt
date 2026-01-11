@@ -82,6 +82,7 @@ SET(ENGINE_SOURCES
     textures.cpp
     material.cpp
     culling.cpp
+    exvar.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

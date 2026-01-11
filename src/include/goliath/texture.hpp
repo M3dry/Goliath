@@ -41,7 +41,7 @@ namespace engine {
         uint32_t _height = 0;
         uint32_t _size = 0;
         VkImageLayout _new_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VkImageAspectFlags _aspect_mask;
+        VkImageAspectFlags _aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
 
         GPUImageInfo() {
             _image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
