@@ -1,7 +1,7 @@
 #pragma once
 
-#include <nlohmann/json.hpp>
 #include <glm/glm.hpp>
+#include <nlohmann/json.hpp>
 
 namespace engine::exvar {
     enum ComponentType {
@@ -20,15 +20,16 @@ namespace engine::exvar {
     };
 
     struct Type {
-        ComponentType component_type;
-        size_t component_count;
+        ComponentType type;
+        size_t count;
 
         constexpr bool operator==(const Type& other) const = default;
 
         template <typename F> decltype(auto) visit(F&& f, void* address) const {
 #define HELPER(component_type, type)                                                                                   \
-    case component_type: return f(*(type*)address)
-            switch (component_type) {
+    case component_type: return f((type*)address)
+
+            switch (type) {
                 HELPER(Int8, int8_t);
                 HELPER(Int16, int16_t);
                 HELPER(Int32, int32_t);
@@ -53,8 +54,8 @@ namespace engine::exvar {
     namespace __ {
         template <typename T> struct to_ComponentType;
 #define TO_COMPONENTTYPE_HELPER(type, component_type)                                                                  \
-    template <> struct to_ComponentType<type> { \
-        static constexpr ComponentType value = component_type; \
+    template <> struct to_ComponentType<type> {                                                                        \
+        static constexpr ComponentType value = component_type;                                                         \
     }
 
         TO_COMPONENTTYPE_HELPER(int8_t, Int8);
@@ -82,6 +83,9 @@ namespace engine::exvar {
         template <typename T, size_t N> struct to_Type<glm::vec<N, T>> {
             static constexpr Type value = Type{to_ComponentType_v<T>, N};
         };
+        template <typename T, size_t N> struct to_Type<std::array<T, N>> {
+            static constexpr Type value = Type{to_ComponentType_v<T>, N};
+        };
 
         template <typename T> constexpr Type to_Type_v = to_Type<T>::value;
     }
@@ -92,34 +96,45 @@ namespace engine::exvar {
 
         path() {}
         path(std::string str);
+        path(const char*);
     };
 
-    void to_json(nlohmann::json& j, const path& sampler);
-    void from_json(const nlohmann::json& j, path& sampler);
+    void to_json(nlohmann::json& j, const path& p);
+    void from_json(const nlohmann::json& j, path& p);
+
+    enum Flags {
+        ReadOnly = 1 << 0,
+    };
 
     class Registry {
       public:
-        void add_reference(path path, Type type, void* address);
-        template <typename T> void add_reference(path path, void* address) {
-            add_reference(path, __::to_Type_v<T>, address);
+        struct Var {
+            path path;
+            Type type;
+            uint32_t flags;
+            void* address;
+        };
+
+        Registry();
+
+        void add_reference(path path, Type type, void* address, uint32_t flags = 0);
+        template <typename T> void add_reference(path path, T* address, uint32_t flags = 0) {
+            add_reference(path, __::to_Type_v<T>, address, flags);
         }
 
         void override(nlohmann::json j);
         nlohmann::json save() const;
 
         void imgui_ui();
-        std::span<path> get_paths();
-        std::span<Type> get_types();
-        std::span<void*> get_addresses();
+        std::span<Var> get_variables();
+
       private:
-        std::vector<path> paths;
-        std::vector<Type> types;
-        std::vector<void*> addresses;
+        std::vector<Var> variables;
     };
+
+    void to_json(nlohmann::json& j, const Registry::Var& var);
 }
 
-
-#define EXVAR(path, type, var_name, default_value) do { \
-        static type var_name{default_value}; \
-        ::engine::exvar::add_reference<type>(path, &var_name)  \
-    } while (0)
+#define EXVAR(registry, path, type, var_name, default_value, ...)                                                      \
+    static type var_name default_value;                                                                                \
+    (registry).add_reference<type>(path, &var_name __VA_OPT__(, ) __VA_ARGS__)
