@@ -17,6 +17,7 @@ SET(EDITOR_SOURCES
     project.cpp
     ui.cpp
     gltf.cpp
+    exvars.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})

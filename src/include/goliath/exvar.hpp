@@ -92,7 +92,7 @@ namespace engine::exvar {
 
     struct path {
         std::string path_str;
-        std::vector<std::string_view> segments;
+        std::vector<std::string> segments;
 
         path() {}
         path(std::string str);

@@ -1,3 +1,4 @@
+#include "exvars.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
@@ -103,6 +104,12 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
+    EXVAR(exvar_reg, "Hello/test/str", std::string, hello_test_str, = "");
+    EXVAR(exvar_reg, "Hello/int", uint32_t, hello_int, = 0);
+    EXVAR(exvar_reg, "player", bool, player, = false);
+    EXVAR(exvar_reg, "player/health", glm::vec2, player_health, {0.0f});
+    EXVAR(exvar_reg, "Hello/test/extra", std::string, hello_test_extra, = "");
+
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
         return 0;
@@ -333,8 +340,6 @@ int main(int argc, char** argv) {
     cam.look_at(look_at);
     cam.update_matrices();
 
-    glm::vec3 res_movement{0.0f};
-
     bool lock_cam = true;
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     engine::imgui::enable(lock_cam);
@@ -394,7 +399,6 @@ int main(int argc, char** argv) {
             }
             bool moved = movement.x != 0.0f || movement.z != 0.0f;
 
-            res_movement = glm::vec3{0.0f};
             if (moved) {
                 auto forward = cam.forward();
                 auto right = cam.right();
@@ -421,6 +425,11 @@ int main(int argc, char** argv) {
             engine::imgui::begin();
             ui::begin();
             ImGui::DockSpaceOverViewport();
+
+            if (ImGui::Begin("Editor Inspector")) {
+                exvar_reg.imgui_ui();
+            }
+            ImGui::End();
 
             auto game_window_barrier = ui::game_window(cam);
 
