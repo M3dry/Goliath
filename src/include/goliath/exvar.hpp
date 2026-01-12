@@ -136,6 +136,26 @@ namespace engine::exvar {
             void* max;
             SliderFlags flags;
 
+            Slider(const Slider&) = delete;
+            Slider(Slider&& s) noexcept {
+                min = s.min;
+                max = s.max;
+                flags = s.flags;
+
+                s.min = nullptr;
+                s.max = nullptr;
+            }
+            Slider& operator=(Slider&& s) noexcept {
+                min = s.min;
+                max = s.max;
+                flags = s.flags;
+
+                s.min = nullptr;
+                s.max = nullptr;
+
+                return *this;
+            }
+
             template <typename T> Slider(const T& min_t, const T& max_t) {
                 min = malloc(sizeof(T));
                 max = malloc(sizeof(T));
@@ -152,6 +172,26 @@ namespace engine::exvar {
             void* min;
             void* max;
             DragFlags flags;
+
+            Drag(const Drag&) = delete;
+            Drag(Drag&& d) noexcept {
+                min = d.min;
+                max = d.max;
+                flags = d.flags;
+
+                d.min = nullptr;
+                d.max = nullptr;
+            }
+            Drag& operator=(Drag&& d) noexcept {
+                min = d.min;
+                max = d.max;
+                flags = d.flags;
+
+                d.min = nullptr;
+                d.max = nullptr;
+
+                return *this;
+            };
 
             Drag() : min(nullptr), max(nullptr) {}
             template <typename T> Drag(const T& min_t, const T& max_t) {
@@ -190,7 +230,7 @@ namespace engine::exvar {
         template <typename T>
         void add_slider_reference(path path, T* address, T min, T max, SliderFlags flags = SliderFlags::Null) {
             using T_ = std::remove_cvref_t<T>;
-            static_asssert(!std::is_same_v<std::string, T_> && !std::is_same_v<bool, T_>);
+            static_assert(!std::is_same_v<std::string, T_> && !std::is_same_v<bool, T_>);
 
             add_slider_reference(path, __::to_Type_v<T>, address, &min, &max, flags);
         }
@@ -217,7 +257,7 @@ namespace engine::exvar {
       private:
         std::vector<Var> variables;
 
-        void add_reference(path path, Type type, void* address, InputMethod input_method);
+        void add_reference(path path, Type type, void* address, InputMethod&& input_method);
         static void imgui_draw_var(Var& var);
     };
 

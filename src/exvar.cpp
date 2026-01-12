@@ -4,7 +4,7 @@
 #include <type_traits>
 
 namespace engine::exvar {
-    void imgui_input_method(Registry::Input i, ComponentType ct, void* value) {
+    void imgui_input_method(const Registry::Input& i, ComponentType ct, void* value) {
         uint32_t imgui_flags = (uint32_t)i.flags;
 
 #define HELPER(ct_type, imgui_type)                                                                                    \
@@ -38,7 +38,7 @@ namespace engine::exvar {
 #undef HELPER
     }
 
-    void imgui_input_method(Registry::Slider slider, ComponentType ct, void* value) {
+    void imgui_input_method(const Registry::Slider& slider, ComponentType ct, void* value) {
 #define HELPER(ct_type, imgui_type)                                                                                    \
     case ct_type: ImGui::SliderScalar("##input", imgui_type, value, slider.min, slider.max); break
 
@@ -60,7 +60,7 @@ namespace engine::exvar {
 #undef HELPER
     }
 
-    void imgui_input_method(Registry::Drag drag, ComponentType ct, void* value) {
+    void imgui_input_method(const Registry::Drag& drag, ComponentType ct, void* value) {
 #define HELPER(ct_type, imgui_type)                                                                                    \
     case ct_type: ImGui::DragScalar("##input", imgui_type, value, 1.0f, drag.min, drag.max); break
 
@@ -159,7 +159,7 @@ namespace engine::exvar {
                 auto slider = Slider{*(T)min, *(T)max};
                 slider.flags = flags;
 
-                add_reference(path, type, address, slider);
+                add_reference(path, type, address, std::move(slider));
             },
             nullptr);
     }
@@ -180,7 +180,7 @@ namespace engine::exvar {
                 }
                 drag.flags = flags;
 
-                add_reference(path, type, address, drag);
+                add_reference(path, type, address, std::move(drag));
             },
             nullptr);
     }
@@ -264,8 +264,8 @@ namespace engine::exvar {
         return variables;
     }
 
-    void Registry::add_reference(path path, Type type, void* address, InputMethod input_method) {
-        Var var{std::move(path), type, address, input_method};
+    void Registry::add_reference(path path, Type type, void* address, InputMethod&& input_method) {
+        Var var{std::move(path), type, address, std::move(input_method)};
 
         auto it = std::lower_bound(variables.begin(), variables.end(), var,
                                    [](const Var& a, const Var& b) { return a.path.segments < b.path.segments; });

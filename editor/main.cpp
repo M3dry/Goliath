@@ -105,12 +105,6 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
-    EXVAR_INPUT(exvar_reg, "Hello/test/str", std::string, hello_test_str, = "");
-    EXVAR_DRAG(exvar_reg, "Hello/int", uint32_t, hello_int, = 0);
-    EXVAR_INPUT(exvar_reg, "player", bool, player, = false, engine::exvar::InputFlags::ReadOnly);
-    EXVAR_INPUT(exvar_reg, "player/health", glm::vec2, player_health, {0.0f});
-    EXVAR_INPUT(exvar_reg, "Hello/test/extra", std::string, hello_test_extra, = "");
-
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
         return 0;
@@ -330,7 +324,8 @@ int main(int argc, char** argv) {
     VkBufferMemoryBarrier2 model_barrier{};
     bool model_barrier_applied = true;
 
-    float fov = 90.0f;
+    EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
+
     glm::vec3 look_at{0.0f};
     engine::Camera cam{};
     cam.set_projection(engine::camera::Perspective{
@@ -341,14 +336,17 @@ int main(int argc, char** argv) {
     cam.look_at(look_at);
     cam.update_matrices();
 
-    bool lock_cam = true;
+    exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
+
+    EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::exvar::InputFlags::ReadOnly);
+
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     engine::imgui::enable(lock_cam);
 
-    float sensitivity = 1.0f;
+    EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
 
-    glm::vec3 light_intensity{1.0f};
-    glm::vec3 light_position{5.0f};
+    EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
+    EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
 
     ui::init();
 
@@ -491,24 +489,18 @@ int main(int argc, char** argv) {
             ui::transform_pane(cam);
             ImGui::End();
 
-            if (ImGui::Begin("Config")) {
-                ImGui::SeparatorText("Camera");
-                ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
-                ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
-                ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
-                ImGui::DragFloat3("look at", glm::value_ptr(look_at), 0.1f);
-                if (ImGui::Button("update look at")) {
-                    cam.look_at(look_at);
-                    cam.update_matrices();
-                }
-                ImGui::Text("lock cam: %b", lock_cam);
+            // if (ImGui::Begin("Config")) {
+            //     ImGui::SeparatorText("Camera");
+            //     // ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
+            //     // ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
+            //     // ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
+            //
+            //     // ImGui::SeparatorText("Lighting");
+            //     // ImGui::DragFloat3("intensity", glm::value_ptr(light_intensity), 0.1f);
+            //     // ImGui::DragFloat3("position##sybau", glm::value_ptr(light_position), 0.1f);
+            // }
+            // ImGui::End();
 
-                ImGui::SeparatorText("Lighting");
-                ImGui::DragFloat3("intensity", glm::value_ptr(light_intensity), 0.1f);
-                ImGui::DragFloat3("position##sybau", glm::value_ptr(light_position), 0.1f);
-            }
-
-            ImGui::End();
             engine::imgui::end();
 
             engine::prepare_draw();
