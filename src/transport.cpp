@@ -89,7 +89,8 @@ namespace engine::transport {
         alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo out_alloc_info;
-        vmaCreateBuffer(allocator, &create_info, &alloc_info, &ring_buffer, &ring_buffer_allocation, &out_alloc_info);
+        VK_CHECK(vmaCreateBuffer(allocator, &create_info, &alloc_info, &ring_buffer, &ring_buffer_allocation, &out_alloc_info));
+        vmaSetAllocationName(allocator, ring_buffer_allocation, "Transport ring buffer");
 
         ring_buffer_data = (uint8_t*)out_alloc_info.pMappedData;
 

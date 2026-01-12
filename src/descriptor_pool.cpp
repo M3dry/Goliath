@@ -39,6 +39,7 @@ namespace engine {
 
         VmaAllocationInfo out_alloc_info;
         VK_CHECK(vmaCreateBuffer(allocator, &buf_info, &alloc_info, &ubo_buffer, &ubo_alloc, &out_alloc_info));
+        vmaSetAllocationName(allocator, ubo_alloc, "Descriptor Pool: UBO allocation");
 
         VkMemoryPropertyFlags alloc_props;
         vmaGetMemoryTypeProperties(allocator, out_alloc_info.memoryType, &alloc_props);

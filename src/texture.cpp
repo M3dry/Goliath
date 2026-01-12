@@ -108,6 +108,9 @@ namespace engine {
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         VK_CHECK(vmaCreateImage(allocator, &info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
+        vmaSetAllocationName(
+            allocator, gpu_img.allocation,
+            std::format("Image {}x{} of format {}", img.width, img.height, (uint32_t)img.format).c_str());
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -128,6 +131,10 @@ namespace engine {
 
         VK_CHECK(
             vmaCreateImage(allocator, &builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
+        vmaSetAllocationName(allocator, gpu_img.allocation,
+                             std::format("Image {}x{} of format {}", builder._width, builder._height,
+                                         (uint32_t)builder._image_info.format)
+                                 .c_str());
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -136,7 +143,7 @@ namespace engine {
             transport::upload(&barrier, builder._img_data, builder._size, builder._width, builder._height,
                               builder._image_info.format, gpu_img.image);
             // barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // NOTE: idk if this should be here, but validation errors
-                                                           // disappear thanks to this
+            // disappear thanks to this
         } else {
             barrier.image = gpu_img.image;
             barrier.dstQueueFamilyIndex = graphics_queue_family;

@@ -316,7 +316,7 @@ namespace engine {
         vma_allocator_info.instance = instance;
         vma_allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         vma_allocator_info.pVulkanFunctions = &vma_vulkan_funcs;
-        vmaCreateAllocator(&vma_allocator_info, &allocator);
+        VK_CHECK(vmaCreateAllocator(&vma_allocator_info, &allocator));
 
         rebuild_swapchain((uint32_t)mode->width, (uint32_t)mode->height);
 
@@ -346,6 +346,13 @@ namespace engine {
         transport::destroy();
 
         delete[] frames;
+
+        // NOTE: VMA debug print
+        // char* stats = nullptr;
+        // vmaBuildStatsString(allocator, &stats, VK_TRUE);
+        // printf("%s\n", stats);
+        // fflush(stdout);
+        // vmaFreeStatsString(allocator, stats);
 
         vmaDestroyAllocator(allocator);
 

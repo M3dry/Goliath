@@ -6,6 +6,7 @@
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
+#include "goliath/exvar.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
@@ -104,11 +105,11 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
-    EXVAR(exvar_reg, "Hello/test/str", std::string, hello_test_str, = "");
-    EXVAR(exvar_reg, "Hello/int", uint32_t, hello_int, = 0);
-    EXVAR(exvar_reg, "player", bool, player, = false);
-    EXVAR(exvar_reg, "player/health", glm::vec2, player_health, {0.0f});
-    EXVAR(exvar_reg, "Hello/test/extra", std::string, hello_test_extra, = "");
+    EXVAR_INPUT(exvar_reg, "Hello/test/str", std::string, hello_test_str, = "");
+    EXVAR_DRAG(exvar_reg, "Hello/int", uint32_t, hello_int, = 0);
+    EXVAR_INPUT(exvar_reg, "player", bool, player, = false, engine::exvar::InputFlags::ReadOnly);
+    EXVAR_INPUT(exvar_reg, "player/health", glm::vec2, player_health, {0.0f});
+    EXVAR_INPUT(exvar_reg, "Hello/test/extra", std::string, hello_test_extra, = "");
 
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();

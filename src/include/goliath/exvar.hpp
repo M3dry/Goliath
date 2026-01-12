@@ -1,7 +1,9 @@
 #pragma once
 
+#include "imgui.h"
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
+#include <variant>
 
 namespace engine::exvar {
     enum ComponentType {
@@ -49,6 +51,15 @@ namespace engine::exvar {
             }
         }
 #undef HELPER
+
+        size_t size() {
+            return visit(
+                [&](auto&& t) {
+                    using T = std::remove_pointer_t<std::decay_t<decltype(t)>>;
+                    return sizeof(T) * count;
+                },
+                nullptr);
+        }
     };
 
     namespace __ {
@@ -102,24 +113,99 @@ namespace engine::exvar {
     void to_json(nlohmann::json& j, const path& p);
     void from_json(const nlohmann::json& j, path& p);
 
-    enum Flags {
-        ReadOnly = 1 << 0,
+    enum struct InputFlags {
+        Null = 0,
+        ReadOnly = ImGuiInputTextFlags_ReadOnly,
+    };
+
+    enum struct SliderFlags {
+        Null = 0,
+    };
+
+    enum struct DragFlags {
+        Null = 0,
     };
 
     class Registry {
       public:
+        struct Input {
+            InputFlags flags;
+        };
+        struct Slider {
+            void* min;
+            void* max;
+            SliderFlags flags;
+
+            template <typename T> Slider(const T& min_t, const T& max_t) {
+                min = malloc(sizeof(T));
+                max = malloc(sizeof(T));
+
+                std::memcpy(min, &min_t, sizeof(T));
+                std::memcpy(max, &max_t, sizeof(T));
+            }
+            ~Slider() {
+                free(min);
+                free(max);
+            }
+        };
+        struct Drag {
+            void* min;
+            void* max;
+            DragFlags flags;
+
+            Drag() : min(nullptr), max(nullptr) {}
+            template <typename T> Drag(const T& min_t, const T& max_t) {
+                min = malloc(sizeof(T));
+                max = malloc(sizeof(T));
+
+                std::memcpy(min, &min_t, sizeof(T));
+                std::memcpy(max, &max_t, sizeof(T));
+            }
+
+            ~Drag() {
+                free(min);
+                free(max);
+            }
+        };
+
+        using InputMethod = std::variant<Input, Slider, Drag>;
+
         struct Var {
             path path;
             Type type;
-            uint32_t flags;
             void* address;
+            InputMethod input_method;
         };
 
         Registry();
 
-        void add_reference(path path, Type type, void* address, uint32_t flags = 0);
-        template <typename T> void add_reference(path path, T* address, uint32_t flags = 0) {
-            add_reference(path, __::to_Type_v<T>, address, flags);
+        void add_input_reference(path path, Type type, void* address, InputFlags flags = InputFlags::Null);
+        template <typename T> void add_input_reference(path path, T* address, InputFlags flags = InputFlags::Null) {
+            add_input_reference(path, __::to_Type_v<T>, address, flags);
+        }
+
+        // min and max has the same type as address, allocates own copy of min and max
+        void add_slider_reference(path path, Type type, void* address, void* min, void* max,
+                                  SliderFlags flags = SliderFlags::Null);
+        template <typename T>
+        void add_slider_reference(path path, T* address, T min, T max, SliderFlags flags = SliderFlags::Null) {
+            using T_ = std::remove_cvref_t<T>;
+            static_asssert(!std::is_same_v<std::string, T_> && !std::is_same_v<bool, T_>);
+
+            add_slider_reference(path, __::to_Type_v<T>, address, &min, &max, flags);
+        }
+
+        // min and max has the same type as address, allocates own copy of min and max, can be nullptr
+        void add_drag_reference(path path, Type type, void* address, void* min, void* max,
+                                DragFlags flags = DragFlags::Null);
+        template <typename T>
+        void add_drag_reference(path path, T* address, std::optional<T> min = std::nullopt,
+                                std::optional<T> max = std::nullopt, DragFlags flags = DragFlags::Null) {
+            if (max && min) {
+                add_drag_reference(path, __::to_Type_v<T>, address, &*min, &*max, flags);
+            } else {
+                add_drag_reference(path, __::to_Type_v<T>, address, nullptr, nullptr, flags);
+            }
         }
 
         void override(nlohmann::json j);
@@ -130,11 +216,22 @@ namespace engine::exvar {
 
       private:
         std::vector<Var> variables;
+
+        void add_reference(path path, Type type, void* address, InputMethod input_method);
+        static void imgui_draw_var(Var& var);
     };
 
     void to_json(nlohmann::json& j, const Registry::Var& var);
 }
 
-#define EXVAR(registry, path, type, var_name, default_value, ...)                                                      \
+#define EXVAR_INPUT(registry, path, type, var_name, default_value, ...)                                                \
     static type var_name default_value;                                                                                \
-    (registry).add_reference<type>(path, &var_name __VA_OPT__(, ) __VA_ARGS__)
+    (registry).add_input_reference<type>(path, &var_name __VA_OPT__(, ) __VA_ARGS__)
+
+#define EXVAR_SLIDER(registry, path, type, var_name, default_value, min, max, ...)                                     \
+    static type var_name default_value;                                                                                \
+    (registry).add_slider_reference<type>(path, &var_name, min, max __VA_OPT__(, ) __VA_ARGS__)
+
+#define EXVAR_DRAG(registry, path, type, var_name, default_value, ...)                                                 \
+    static type var_name default_value;                                                                                \
+    (registry).add_drag_reference<type>(path, &var_name __VA_OPT__(, ) __VA_ARGS__)
