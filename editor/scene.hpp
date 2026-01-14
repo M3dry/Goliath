@@ -1,6 +1,6 @@
 #pragma once
 
-#include "models.hpp"
+#include "goliath/models.hpp"
 #include <filesystem>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -10,7 +10,7 @@
 
 namespace scene {
     struct Instance {
-        models::gid model_gid;
+        engine::models::gid model_gid;
         std::string name;
 
         glm::mat4 transform;
@@ -19,7 +19,7 @@ namespace scene {
     struct Scene {
         std::string name;
 
-        std::vector<models::gid> used_models;
+        std::vector<engine::models::gid> used_models;
         std::vector<std::vector<size_t>> instances_of_used_models;
 
         std::vector<Instance> instances{};
@@ -31,7 +31,7 @@ namespace scene {
 
         void destroy();
 
-        void add_model(models::gid gid);
+        void add_model(engine::models::gid gid);
         void add_instance(Instance instance);
 
         void remove_instance(size_t ix);

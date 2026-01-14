@@ -1,4 +1,4 @@
-#include "gltf.hpp"
+#include "goliath/gltf.hpp"
 #include "goliath/textures.hpp"
 #include "goliath/material.hpp"
 
@@ -232,11 +232,11 @@ void parse_material(const std::string& prim_name, engine::Mesh* out, const tinyg
     engine::material::pbr::write_data_blob(pbr_data, out->material_data);
 }
 
-gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
+engine::gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
                                    const tinygltf::Primitive& primitive, engine::collisions::AABB& model_aabb,
                                    Handled& handled) {
     auto it = primitive.attributes.find("POSITION");
-    if (it == primitive.attributes.end()) return gltf::PositionAttributeMissing;
+    if (it == primitive.attributes.end()) return engine::gltf::PositionAttributeMissing;
 
     auto position_accesor_id = it->second;
     auto normal_accessor_id = -1;
@@ -262,7 +262,7 @@ gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const
         case TINYGLTF_MODE_TRIANGLES: out->vertex_topology = engine::Topology::TriangleList; break;
         case TINYGLTF_MODE_TRIANGLE_STRIP: out->vertex_topology = engine::Topology::TriangleStrip; break;
         case TINYGLTF_MODE_TRIANGLE_FAN: out->vertex_topology = engine::Topology::TriangleFan; break;
-        default: return gltf::UnsupportedMeshTopology;
+        default: return engine::gltf::UnsupportedMeshTopology;
     }
 
     if (primitive.indices != -1) {
@@ -279,7 +279,7 @@ gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const
                 } else if (index_size == sizeof(uint8_t)) {
                     tmp_buf[i] = ((uint8_t*)out->indices)[i];
                 } else {
-                    return gltf::UnsupportedIndexSize;
+                    return engine::gltf::UnsupportedIndexSize;
                 }
             }
 
@@ -295,20 +295,20 @@ gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const
 
     out->positions =
         (glm::vec3*)copy_buffer(&out->vertex_count, &elem_size, model, model.accessors[(uint64_t)position_accesor_id]);
-    if (elem_size != sizeof(glm::vec3)) return gltf::InvalidPositionElementSize;
+    if (elem_size != sizeof(glm::vec3)) return engine::gltf::InvalidPositionElementSize;
 
     if (normal_accessor_id != -1) {
         out->normals =
             (glm::vec3*)copy_buffer(&vertex_count, &elem_size, model, model.accessors[(uint64_t)normal_accessor_id]);
-        if (elem_size != sizeof(glm::vec3)) return gltf::InvalidNormalElementSize;
-        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec3)) return engine::gltf::InvalidNormalElementSize;
+        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
     }
 
     if (tangent_accessor_id != -1) {
         out->tangents =
             (glm::vec4*)copy_buffer(&vertex_count, &elem_size, model, model.accessors[(uint64_t)tangent_accessor_id]);
-        if (elem_size != sizeof(glm::vec4)) return gltf::InvalidNormalElementSize;
-        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec4)) return engine::gltf::InvalidNormalElementSize;
+        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
     }
 
     for (std::size_t i = 0; i < out->texcoords.size(); i++) {
@@ -316,8 +316,8 @@ gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const
 
         out->texcoords[i] = (glm::vec2*)copy_buffer(&vertex_count, &elem_size, model,
                                                     model.accessors[(uint64_t)texcoord_accessor_ids[i]], true);
-        if (elem_size != sizeof(glm::vec2)) return gltf::InvalidTexcoordElementSize;
-        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec2)) return engine::gltf::InvalidTexcoordElementSize;
+        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
     }
 
     auto& accessor = model.accessors[(uint64_t)position_accesor_id];
@@ -332,10 +332,10 @@ gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const
     assert(primitive.material >= 0 && "NOTE: if this asserts add default material creation");
     parse_material(prim_name, out, model, model.materials[primitive.material], handled);
 
-    return gltf::Ok;
+    return engine::gltf::Ok;
 }
 
-gltf::Err parse_node(const tinygltf::Model& model, int node_id, std::vector<engine::Mesh>& meshes,
+engine::gltf::Err parse_node(const tinygltf::Model& model, int node_id, std::vector<engine::Mesh>& meshes,
                               std::vector<glm::mat4>& mesh_transforms, std::vector<uint32_t>& mesh_indices,
                               glm::mat4 current_transform, engine::collisions::AABB& model_aabb, Handled& handled) {
     auto& node = model.nodes[(uint64_t)node_id];
@@ -379,7 +379,7 @@ gltf::Err parse_node(const tinygltf::Model& model, int node_id, std::vector<engi
             meshes.emplace_back();
 
             auto res = parse_primitive(i == 0 ? mesh.name : std::format("{} #{}", mesh.name, i), &meshes.back(), model, primitive, model_aabb, handled);
-            if (res != gltf::Ok) return res;
+            if (res != engine::gltf::Ok) return res;
 
             mesh_indices.emplace_back(meshes.size() - 1);
             mesh_transforms.emplace_back(mat);
@@ -391,20 +391,20 @@ gltf::Err parse_node(const tinygltf::Model& model, int node_id, std::vector<engi
 mesh_loaded:
     for (auto children_id : node.children) {
         auto res = parse_node(model, children_id, meshes, mesh_transforms, mesh_indices, mat, model_aabb, handled);
-        if (res != gltf::Ok) return res;
+        if (res != engine::gltf::Ok) return res;
     }
 
-    return gltf::Ok;
+    return engine::gltf::Ok;
 }
 
-gltf::Err parse_model(engine::Model* out, const tinygltf::Model& model) {
+engine::gltf::Err parse_model(engine::Model* out, const tinygltf::Model& model) {
     auto scene_id = model.defaultScene;
     if (scene_id == -1 && model.scenes.size() > 0) {
         scene_id = 0;
     }
 
     if (scene_id == -1) {
-        return gltf::NoRootScene;
+        return engine::gltf::NoRootScene;
     }
 
     engine::collisions::AABB model_aabb{};
@@ -422,7 +422,7 @@ gltf::Err parse_model(engine::Model* out, const tinygltf::Model& model) {
 
         auto err = parse_node(model, node_id, meshes, mesh_transforms, mesh_indices, glm::identity<glm::mat4>(),
                               model_aabb, handled);
-        if (err != gltf::Ok) return err;
+        if (err != engine::gltf::Ok) return err;
     }
     assert(mesh_indices.size() == mesh_transforms.size());
     assert(meshes.size() <= mesh_indices.size());
@@ -447,10 +447,10 @@ gltf::Err parse_model(engine::Model* out, const tinygltf::Model& model) {
 
     out->bounding_box = model_aabb;
 
-    return gltf::Ok;
+    return engine::gltf::Ok;
 }
 
-namespace gltf {
+namespace engine::gltf {
     tinygltf::TinyGLTF loader{};
 
     Err load_json(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, std::string* tinygltf_error,

@@ -4,7 +4,7 @@
 #include "goliath/model.hpp"
 #include <nlohmann/json.hpp>
 
-namespace models {
+namespace engine::models {
     enum struct Err {
         BadGeneration,
     };
@@ -35,11 +35,7 @@ namespace models {
     void to_json(nlohmann::json& j, const gid& gid);
     void from_json(const nlohmann::json& j, gid& gid);
 
-    void process_uploads();
-
-    void init(const nlohmann::json& j);
-    void destroy();
-
+    void load(const nlohmann::json& j);
     nlohmann::json save();
 
     gid add(std::filesystem::path path, std::string name);

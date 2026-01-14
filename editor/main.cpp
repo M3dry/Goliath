@@ -15,8 +15,8 @@
 #include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
+#include "goliath/models.hpp"
 #include "imgui.h"
-#include "models.hpp"
 #include "project.hpp"
 #include "scene.hpp"
 #include "ui.hpp"
@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <volk.h>
@@ -116,7 +117,13 @@ int main(int argc, char** argv) {
     }
     std::filesystem::current_path(project::project_root);
 
-    engine::init("Goliath editor", 1000, project::textures_directory, true);
+    engine::init(engine::Init{
+            .window_name = "Goliath editor",
+            .texture_capacity = 1000,
+            .fullscreen = true,
+            .textures_directory = project::textures_directory,
+            .models_directory = project::models_directory,
+    });
     glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
@@ -144,7 +151,7 @@ int main(int argc, char** argv) {
         printf("Models registry file is corrupted\n");
         return 0;
     }
-    models::init(*models_registry_json);
+    engine::models::load(*models_registry_json);
 
     bool scene_parse_error = false;
     scene::load(project::scenes_file, &scene_parse_error);
@@ -413,6 +420,16 @@ int main(int argc, char** argv) {
 
             cam.update_matrices();
 
+            if (engine::models_to_save()) {
+                std::ofstream o{project::models_registry};
+                o << engine::models::save();
+            }
+
+            if (engine::textures_to_save()) {
+                std::ofstream o{project::textures_registry};
+                o << engine::textures::save();
+            }
+
             engine::event::update_tick();
         }
 
@@ -455,7 +472,7 @@ int main(int argc, char** argv) {
                             std::size_t i = 0;
 
                             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                                models::add(path, std::filesystem::path{path}.stem().string());
+                                engine::models::add(path, std::filesystem::path{path}.stem().string());
                                 NFD_PathSet_FreePath(path);
                             }
 
@@ -489,22 +506,9 @@ int main(int argc, char** argv) {
             ui::transform_pane(cam);
             ImGui::End();
 
-            // if (ImGui::Begin("Config")) {
-            //     ImGui::SeparatorText("Camera");
-            //     // ImGui::SliderFloat("sensitivity", &sensitivity, 0.0f, 1.0f, "%.3f");
-            //     // ImGui::SliderFloat("fov", &fov, 0.0f, 360.0f, "%.0f");
-            //     // ImGui::DragFloat3("position", glm::value_ptr(cam.position), 0.1f);
-            //
-            //     // ImGui::SeparatorText("Lighting");
-            //     // ImGui::DragFloat3("intensity", glm::value_ptr(light_intensity), 0.1f);
-            //     // ImGui::DragFloat3("position##sybau", glm::value_ptr(light_position), 0.1f);
-            // }
-            // ImGui::End();
-
             engine::imgui::end();
 
             engine::prepare_draw();
-            models::process_uploads();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
                 !model_barrier_applied || game_window_barrier) {
@@ -590,7 +594,7 @@ int main(int argc, char** argv) {
             uint32_t transform_ix = 0;
             for (auto i = 0; i < curr_scene.used_models.size(); i++) {
                 auto mgid = curr_scene.used_models[i];
-                if (*models::is_loaded(mgid) != models::LoadState::OnGPU) continue;
+                if (*engine::models::is_loaded(mgid) != engine::models::LoadState::OnGPU) continue;
 
                 for (const auto& _ : curr_scene.instances_of_used_models[i]) {
                     auto res =
@@ -925,7 +929,6 @@ int main(int argc, char** argv) {
 
     scene::selected_scene().release();
     scene::destroy();
-    models::destroy();
 
     engine::culling::destroy();
     engine::visbuffer::destroy();

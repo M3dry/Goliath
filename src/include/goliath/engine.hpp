@@ -45,8 +45,16 @@ namespace engine {
     extern VkQueue transport_queue;
     extern uint32_t transport_queue_family;
 
-    void init(const char* window_name, uint32_t init_texture_capacity, std::filesystem::path texture_registry_directory,
-              bool fullscreen);
+    struct Init{
+        const char* window_name;
+        uint32_t texture_capacity = 1000;
+        bool fullscreen = true;
+
+        std::optional<std::filesystem::path> textures_directory{};
+        std::optional<std::filesystem::path> models_directory{};
+    };
+
+    void init(Init opts);
     void destroy();
 
     VkCommandBuffer get_cmd_buf();
@@ -57,4 +65,7 @@ namespace engine {
     bool next_frame();
 
     uint32_t get_current_frame();
+
+    bool models_to_save();
+    bool textures_to_save();
 }

@@ -1,6 +1,7 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
+#include "models_.hpp"
 #include "goliath/samplers.hpp"
 #include "textures_.hpp"
 #include <GLFW/glfw3.h>
@@ -84,6 +85,9 @@ namespace engine {
     uint8_t current_frame = 0;
 
     uint32_t swapchain_ix;
+
+    bool models_to_save_{false};
+    bool textures_to_save_{false};
 
     void rebuild_swapchain(uint32_t width, uint32_t height) {
         vkDeviceWaitIdle(device);
@@ -207,7 +211,7 @@ namespace engine {
         cleanup_resources();
     }
 
-    void init(const char* window_name, uint32_t init_texture_capacity, std::filesystem::path texture_registry_directory, bool fullscreen) {
+    void init(Init opts) {
         VK_CHECK(volkInitialize());
 
         vkb::InstanceBuilder instance_builder;
@@ -239,7 +243,7 @@ namespace engine {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
         glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-        window = glfwCreateWindow(mode->width, mode->height, window_name, fullscreen ? monitor : nullptr, nullptr);
+        window = glfwCreateWindow(mode->width, mode->height, opts.window_name, opts.fullscreen ? monitor : nullptr, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
         glfwFocusWindow(window);
@@ -331,7 +335,8 @@ namespace engine {
         imgui::init();
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
-        textures::init(init_texture_capacity, texture_registry_directory);
+        if (opts.textures_directory) textures::init(opts.texture_capacity, *opts.textures_directory);
+        if (opts.models_directory) models::init(*opts.models_directory);
 
         glfwShowWindow(window);
     };
@@ -339,8 +344,9 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
-        samplers::destroy();
+        models::destroy();
         textures::destroy();
+        samplers::destroy();
         descriptor::destroy_empty_set();
         imgui::destroy();
         transport::destroy();
@@ -425,7 +431,8 @@ namespace engine {
         transition_image(cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        textures::process_uploads();
+        textures_to_save_ = textures::process_uploads();
+        models_to_save_ = models::process_uploads();
     }
 
     bool next_frame() {
@@ -518,5 +525,17 @@ namespace engine {
 
     uint32_t get_current_frame() {
         return current_frame;
+    }
+
+    bool models_to_save() {
+        auto res =  models_to_save_;
+        models_to_save_ = false;
+        return res;
+    }
+
+    bool textures_to_save() {
+        auto res = textures_to_save_;
+        textures_to_save_ = false;
+        return res;
     }
 }

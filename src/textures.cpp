@@ -20,6 +20,7 @@ struct Metadata {
 };
 
 namespace engine::textures {
+    bool init_called = false;
     std::filesystem::path texture_directory{};
 
     std::filesystem::path make_texture_path(gid gid) {
@@ -160,6 +161,7 @@ namespace engine::textures {
     });
 
     void init(uint32_t init_texture_capacity, std::filesystem::path texture_dir) {
+        init_called = true;
         texture_directory = texture_dir;
         texture_pool = TexturePool{std::max<uint32_t>(init_texture_capacity, 1)};
 
@@ -189,6 +191,8 @@ namespace engine::textures {
     }
 
     void destroy() {
+        assert(init_called);
+
         for (std::size_t i = 0; i < names.size(); i++) {
             gpu_images[i].destroy();
             GPUImageView::destroy(gpu_image_views[i]);
@@ -197,7 +201,9 @@ namespace engine::textures {
         texture_pool.destroy();
     }
 
-    void process_uploads() {
+    bool process_uploads() {
+        assert(init_called);
+
         std::vector<upload_task> upload_tasks{};
         upload_queue.drain(upload_tasks);
 
@@ -249,12 +255,19 @@ namespace engine::textures {
             finalize_queue.pop_front();
         }
 
+        bool initialized = false;
         std::erase_if(initializing_textures, [&](auto gid) {
-            return std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
+            auto found = std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
+            initialized |= found;
+            return found;
         });
+
+        return initialized;
     }
 
     void rebuild_pool() {
+        assert(init_called);
+
         for (uint32_t gid = 0; gid < names.size(); gid++) {
             if (deleted[gid]) continue;
             if (ref_counts[gid] == 0) continue;
@@ -285,6 +298,8 @@ namespace engine::textures {
     }
 
     void load(nlohmann::json j) {
+        assert(init_called);
+
         std::vector<JsonTextureEntry> entries = j;
 
         names.resize(1);
@@ -326,6 +341,8 @@ namespace engine::textures {
     }
 
     nlohmann::json save() {
+        assert(init_called);
+
         std::vector<JsonTextureEntry> entries{};
 
         for (uint32_t i = 1; i < names.size(); i++) {
@@ -342,6 +359,8 @@ namespace engine::textures {
     }
 
     gid add(std::filesystem::path path, std::string name, Sampler sampler) {
+        assert(init_called);
+
         auto sampler_ix = samplers::add(sampler);
 
         gid gid;
@@ -387,6 +406,8 @@ namespace engine::textures {
 
     gid add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name,
             Sampler sampler) {
+        assert(init_called);
+
         auto sampler_ix = samplers::add(sampler);
 
         gid gid;
@@ -437,6 +458,8 @@ namespace engine::textures {
     }
 
     bool remove(gid gid) {
+        assert(init_called);
+
         if (generations[gid.id()] != gid.gen()) return false;
         if (ref_counts[gid.id()] > 0) return false;
         if (deleted[gid.id()]) return false;
@@ -459,34 +482,46 @@ namespace engine::textures {
     }
 
     std::expected<std::string*, Err> get_name(gid gid) {
+        assert(init_called);
+
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
         return &names[gid.id()];
     }
 
     std::expected<GPUImage, Err> get_image(gid gid) {
+        assert(init_called);
+
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
         return gpu_images[gid.id()];
     }
 
     std::expected<VkImageView, Err> get_image_view(gid gid) {
+        assert(init_called);
+
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
         return gpu_image_views[gid.id()];
     }
 
     std::expected<uint32_t, Err> get_sampler(gid gid) {
+        assert(init_called);
+
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
         return samplers[gid.id()];
     }
 
     uint8_t get_generation(uint32_t ix) {
+        assert(init_called);
+
         return generations[ix];
     }
 
     void acquire(const gid* gids, uint32_t count) {
+        assert(init_called);
+
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
             if (generations[gid.id()] != gid.gen()) continue;
@@ -502,6 +537,8 @@ namespace engine::textures {
     }
 
     void release(const gid* gids, uint32_t count) {
+        assert(init_called);
+
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
             if (generations[gid.id()] != gid.gen()) continue;
@@ -516,6 +553,8 @@ namespace engine::textures {
     }
 
     const TexturePool& get_texture_pool() {
+        assert(init_called);
+
         return texture_pool;
     }
 }

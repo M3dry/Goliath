@@ -44,7 +44,11 @@ std::pair<std::span<uint8_t>, Metadata> read_goi(std::filesystem::path path) {
 using ImagePC = engine::PushConstant<glm::uvec2, glm::uvec2>;
 
 int main(int argc, char** argv) {
-    engine::init("GoiView", 0, "", false);
+    engine::init(engine::Init{
+            .window_name = "GoiView",
+            .texture_capacity = 0,
+            .fullscreen = false,
+    });
     glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);

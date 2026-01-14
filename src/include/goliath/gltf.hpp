@@ -2,7 +2,7 @@
 
 #include "goliath/model.hpp"
 
-namespace gltf {
+namespace engine::gltf {
     enum Err {
         Ok,
         TinyGLTFErr,

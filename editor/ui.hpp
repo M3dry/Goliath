@@ -3,7 +3,7 @@
 #include "goliath/camera.hpp"
 #include "goliath/texture.hpp"
 #include "imgui.h"
-#include "models.hpp"
+#include "goliath/models.hpp"
 #include "scene.hpp"
 #include <vulkan/vulkan_core.h>
 
@@ -20,7 +20,7 @@ namespace ui {
     engine::GPUImage get_window_image();
 
     void models_pane();
-    void model_entry(models::gid gid);
+    void model_entry(engine::models::gid gid);
 
     void instances_pane(glm::mat4* transforms);
     size_t instance_entry(scene::Scene& current_scene, size_t ix, glm::mat4& transform);

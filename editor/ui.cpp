@@ -8,6 +8,7 @@
 #undef IMVIEWGUIZMO_IMPLEMENTATION
 #include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/models.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
@@ -15,7 +16,6 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
-#include "models.hpp"
 #include "project.hpp"
 #include "scene.hpp"
 #include <glm/gtc/type_ptr.hpp>
@@ -373,22 +373,22 @@ namespace ui {
             ImGui::EndCombo();
         }
 
-        std::vector<std::pair<models::gid, uint32_t>> matches{};
+        std::vector<std::pair<engine::models::gid, uint32_t>> matches{};
         if (models_search_scope == 0) {
             auto& scene = scene::selected_scene();
 
             for (const auto& gid : scene.used_models) {
-                auto score = score_search(models_query, **models::get_name(gid));
+                auto score = score_search(models_query, **engine::models::get_name(gid));
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(gid, score);
                 }
             }
         } else {
-            const auto& names = models::get_names();
+            const auto& names = engine::models::get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
                 auto score = score_search(models_query, names[i]);
                 if (score > std::numeric_limits<int32_t>::min()) {
-                    matches.emplace_back(models::gid{models::get_generation(i), i}, score);
+                    matches.emplace_back(engine::models::gid{engine::models::get_generation(i), i}, score);
                 }
             }
         }
@@ -400,9 +400,9 @@ namespace ui {
         }
     }
 
-    void model_entry(models::gid gid) {
+    void model_entry(engine::models::gid gid) {
         ImGui::PushID(gid.value);
-        auto name = *models::get_name(gid);
+        auto name = *engine::models::get_name(gid);
 
         if (ImGui::InputText("##name", name)) {
             printf("TODO: rename saving\n");
@@ -413,10 +413,10 @@ namespace ui {
         if (ImGui::Button("+")) {
             scene::selected_scene().add_instance(scene::Instance{
                 .model_gid = gid,
-                .name = **models::get_name(gid),
+                .name = **engine::models::get_name(gid),
                 .transform = glm::identity<glm::mat4>(),
             });
-        } 
+        }
 
         ImGui::PopID();
     }
@@ -432,9 +432,9 @@ namespace ui {
         ImGui::PushID(ix);
         auto& inst = current_scene.instances[ix];
 
-        if(ImGui::Selectable("", current_scene.selected_instance == ix,
-                                          ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                                          ImVec2(0.0, ImGui::GetFrameHeight()))) {
+        if (ImGui::Selectable("", current_scene.selected_instance == ix,
+                              ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+                              ImVec2(0.0, ImGui::GetFrameHeight()))) {
             current_scene.selected_instance = current_scene.selected_instance == ix ? -1 : ix;
         }
 

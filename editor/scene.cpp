@@ -54,7 +54,7 @@ namespace scene {
     }
 
     void Scene::acquire() {
-        models::acquire(used_models.data(), used_models.size());
+        engine::models::acquire(used_models.data(), used_models.size());
         ref_count++;
 
         if (instances_of_used_models.size() != used_models.size()) {
@@ -71,7 +71,7 @@ namespace scene {
     }
 
     void Scene::release() {
-        models::release(used_models.data(), used_models.size());
+        engine::models::release(used_models.data(), used_models.size());
         ref_count--;
     }
 
@@ -81,7 +81,7 @@ namespace scene {
         }
     }
 
-    void Scene::add_model(models::gid gid) {
+    void Scene::add_model(engine::models::gid gid) {
         for (const auto used_gid : used_models) {
             if (gid == used_gid) {
                 return;
@@ -92,7 +92,7 @@ namespace scene {
 
         auto rc = ref_count;
         while (rc-- != 0) {
-            models::acquire(&gid, 1);
+            engine::models::acquire(&gid, 1);
         }
     }
 
