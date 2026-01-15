@@ -1,5 +1,21 @@
 #include "goliath/material.hpp"
 
+namespace engine {
+    void to_json(nlohmann::json& j, const Material& mat) {
+        j = nlohmann::json{
+            {"attrib_names", mat.names},
+                {"attribs", mat.attributes},
+        };
+    }
+
+    void from_json(const nlohmann::json& j, Material& mat) {
+        j["attrib_names"].get_to(mat.names);
+        j["attribs"].get_to(mat.attributes);
+
+        mat.rebuild_offsets();
+    }
+}
+
 namespace engine::material::pbr {
     Material make_schema() {
         Material mat{};

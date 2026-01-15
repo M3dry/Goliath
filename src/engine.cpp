@@ -1,7 +1,9 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
+#include "goliath/synchronization.hpp"
 #include "models_.hpp"
+#include "materials_.hpp"
 #include "goliath/samplers.hpp"
 #include "textures_.hpp"
 #include <GLFW/glfw3.h>
@@ -336,7 +338,10 @@ namespace engine {
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
         if (opts.textures_directory) textures::init(opts.texture_capacity, *opts.textures_directory);
-        if (opts.models_directory) models::init(*opts.models_directory);
+        if (opts.models_directory) {
+            materials::init();
+            models::init(*opts.models_directory);
+        }
 
         glfwShowWindow(window);
     };
@@ -344,6 +349,7 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
+        materials::destroy();
         models::destroy();
         textures::destroy();
         samplers::destroy();
@@ -433,6 +439,15 @@ namespace engine {
 
         textures_to_save_ = textures::process_uploads();
         models_to_save_ = models::process_uploads();
+
+        VkBufferMemoryBarrier2 material_barrier{};
+        auto apply_material_barrier = materials::update_gpu_buffer(material_barrier);
+
+        if (apply_material_barrier) {
+            engine::synchronization::begin_barriers();
+            engine::synchronization::apply_barrier(material_barrier);
+            engine::synchronization::end_barriers();
+        }
     }
 
     bool next_frame() {

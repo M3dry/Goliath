@@ -8,6 +8,7 @@
 #include <glm/ext/vector_float3.hpp>
 #include <glm/ext/vector_float4.hpp>
 #include <optional>
+#include <nlohmann/json.hpp>
 
 namespace engine::material {
     enum struct attribute {
@@ -132,6 +133,9 @@ namespace engine {
             }
         }
     };
+
+    void to_json(nlohmann::json& j, const Material& mat);
+    void from_json(const nlohmann::json& j, Material& mat);
 }
 
 namespace engine::material::pbr {

@@ -191,7 +191,7 @@ namespace engine::textures {
     }
 
     void destroy() {
-        assert(init_called);
+        if (!init_called) return;
 
         for (std::size_t i = 0; i < names.size(); i++) {
             gpu_images[i].destroy();

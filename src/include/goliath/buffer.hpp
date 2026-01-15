@@ -35,9 +35,9 @@ namespace engine {
         void destroy();
 
       private:
-        VkDeviceSize _address;
+        VkDeviceSize _address = 0;
         VkBuffer _buf;
-        VkDeviceSize _size;
+        VkDeviceSize _size = 0;
         VmaAllocation _allocation;
     };
 }

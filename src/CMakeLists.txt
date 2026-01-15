@@ -87,6 +87,7 @@ SET(ENGINE_SOURCES
     samplers.cpp
     textures.cpp
     material.cpp
+    materials.cpp
     culling.cpp
     exvar.cpp
 

@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     engine::init(engine::Init{
             .window_name = "Goliath editor",
             .texture_capacity = 1000,
-            .fullscreen = true,
+            .fullscreen = false,
             .textures_directory = project::textures_directory,
             .models_directory = project::models_directory,
     });

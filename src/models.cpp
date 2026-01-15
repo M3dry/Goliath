@@ -244,7 +244,7 @@ namespace engine::models {
     }
 
     void destroy() {
-        assert(init_called);
+        if (!init_called) return;
 
         for (size_t i = 0; i < names.size(); i++) {
             if (cpu_datas[i]) {
