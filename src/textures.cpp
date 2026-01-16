@@ -80,7 +80,8 @@ namespace engine::textures {
     }
 
     bool is_initializing(gid gid) {
-        return std::find(initializing_textures.begin(), initializing_textures.end(), gid) != initializing_textures.end();
+        return std::find(initializing_textures.begin(), initializing_textures.end(), gid) !=
+               initializing_textures.end();
     }
 
     struct task {
@@ -218,7 +219,8 @@ namespace engine::textures {
                 auto gid = up_task.gid;
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
                     auto metadata = up_task.metadata;
-                    auto [image, barrier] = GPUImage::upload(GPUImageInfo{}
+                    auto [image, barrier] = GPUImage::upload(names[gid.id()].c_str(),
+                                                             GPUImageInfo{}
                                                                  .width(metadata.width)
                                                                  .height(metadata.height)
                                                                  .format(metadata.format)
@@ -257,7 +259,8 @@ namespace engine::textures {
 
         bool initialized = false;
         std::erase_if(initializing_textures, [&](auto gid) {
-            auto found = std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
+            auto found =
+                std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
             initialized |= found;
             return found;
         });

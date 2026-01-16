@@ -153,7 +153,7 @@ namespace ui {
             ImGui_ImplVulkan_RemoveTexture(game_window_texture);
 
             auto image_upload =
-                engine::GPUImage::upload(engine::GPUImageInfo{}
+                engine::GPUImage::upload(std::format("Game window texture #{}", curr_frame).c_str(), engine::GPUImageInfo{}
                                              .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                              .width(avail.x)

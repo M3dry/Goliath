@@ -1,6 +1,7 @@
 #include "goliath/buffer.hpp"
 #include "engine_.hpp"
 #include "goliath/engine.hpp"
+#include <vulkan/vulkan_core.h>
 
 namespace engine {
     void Buffer::flush_mapped(uint32_t start, uint32_t size) {
@@ -40,6 +41,18 @@ namespace engine {
         buf._size = size;
 
         vmaSetAllocationName(allocator, buf._allocation, name);
+
+        printf("%s @%p\n", name, buf._buf);
+        fflush(stdout);
+
+        // VkDebugMarkerObjectNameInfoEXT name_info{};
+        // name_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
+        // name_info.pNext = nullptr;
+        // name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT;
+        // name_info.pObjectName = name;
+        // name_info.object = (uint64_t)buf._buf;
+        //
+        // vkDebugMarkerSetObjectNameEXT(device, &name_info);
 
         return buf;
     }

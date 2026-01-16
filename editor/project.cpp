@@ -7,6 +7,7 @@
 
 namespace project {
     std::filesystem::path project_root{};
+    std::filesystem::path materials{};
     std::filesystem::path models_directory{};
     std::filesystem::path models_registry{};
     std::filesystem::path textures_directory{};
@@ -17,6 +18,7 @@ namespace project {
         std::ifstream i{json_file};
         nlohmann::json j = nlohmann::json::parse(i);
 
+        materials = std::filesystem::path{std::string{j["materials"]}};
         models_directory = std::filesystem::path{std::string{j["models_directory"]}};
         models_registry = std::filesystem::path{std::string{j["models_registry"]}};
         textures_directory = std::filesystem::path{std::string{j["textures_directory"]}};
@@ -47,6 +49,7 @@ namespace project {
     void init() {
         std::ofstream o{"./goliath.json"};
         o << nlohmann::json{
+            {"materials", "./assets/materials.json"},
             {"models_directory", "./assets/models"},
             {"models_registry", "./assets/models.reg"},
             {"textures_directory", "./assets/textures"},

@@ -132,6 +132,10 @@ namespace engine {
                 textures::release(&gid, 1);
             }
         }
+
+        constexpr bool operator==(const Material& other) const {
+            return total_size == other.total_size && names == other.names && attributes == other.attributes && texture_gid_offsets == other.texture_gid_offsets;
+        }
     };
 
     void to_json(nlohmann::json& j, const Material& mat);

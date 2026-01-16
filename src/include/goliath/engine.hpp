@@ -67,5 +67,6 @@ namespace engine {
     uint32_t get_current_frame();
 
     bool models_to_save();
+    bool materials_to_save();
     bool textures_to_save();
 }

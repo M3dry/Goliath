@@ -19,12 +19,18 @@ layout(buffer_reference, std430) readonly buffer FragIDs {
     uint id[];
 };
 
+layout(buffer_reference, std430) readonly buffer Materials {
+    uint offset_count;
+    uint[] data;
+};
+
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
     DispatchCommand dispatch;
     FragIDs frag_ids;
     DrawIDs draw_ids;
     uint mat_id;
+    Materials mats;
 };
 
 layout(set = 0, binding = 0, rgba32f) uniform image2D target;

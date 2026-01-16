@@ -72,7 +72,7 @@ namespace engine::materials {
     nlohmann::json save();
 
     const Material& get_schema(uint32_t mat_id);
-    uint32_t add_schema(Material schema);
+    uint32_t add_schema(Material schema, std::string name);
     bool remove_schema(uint32_t mat_id);
 
     std::span<uint8_t> get_instance_data(uint32_t mat_id, uint32_t instance_ix);

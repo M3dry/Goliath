@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
 
     auto [image, metadata] = read_goi(argv[1]);
     engine::transport::begin();
-    auto [gpu_image, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
+    auto [gpu_image, barrier] = engine::GPUImage::upload("GOI Image", engine::GPUImageInfo{}
                                                              .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                                              .data(image.data())

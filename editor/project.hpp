@@ -4,6 +4,7 @@
 
 namespace project {
     extern std::filesystem::path project_root;
+    extern std::filesystem::path materials;
     extern std::filesystem::path models_directory;
     extern std::filesystem::path models_registry;
     extern std::filesystem::path textures_directory;

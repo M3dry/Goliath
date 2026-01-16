@@ -89,6 +89,7 @@ namespace engine {
     uint32_t swapchain_ix;
 
     bool models_to_save_{false};
+    bool materials_to_save_{false};
     bool textures_to_save_{false};
 
     void rebuild_swapchain(uint32_t width, uint32_t height) {
@@ -441,12 +442,12 @@ namespace engine {
         models_to_save_ = models::process_uploads();
 
         VkBufferMemoryBarrier2 material_barrier{};
-        auto apply_material_barrier = materials::update_gpu_buffer(material_barrier);
+        auto apply_material_barrier = materials::update_gpu_buffer(material_barrier, materials_to_save_);
 
         if (apply_material_barrier) {
-            engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(material_barrier);
-            engine::synchronization::end_barriers();
+            synchronization::begin_barriers();
+            synchronization::apply_barrier(material_barrier);
+            synchronization::end_barriers();
         }
     }
 
@@ -545,6 +546,12 @@ namespace engine {
     bool models_to_save() {
         auto res =  models_to_save_;
         models_to_save_ = false;
+        return res;
+    }
+
+    bool materials_to_save() {
+        auto res =  materials_to_save_;
+        materials_to_save_ = false;
         return res;
     }
 

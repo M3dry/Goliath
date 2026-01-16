@@ -1,4 +1,5 @@
 #include "goliath/materials.hpp"
+#include "materials_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/transport.hpp"
 
@@ -8,6 +9,7 @@
 namespace engine::materials {
     bool init_called = false;
     bool update = false;
+    bool want_save = false;
 
     struct Instances {
         uint32_t count = 0;
@@ -16,6 +18,7 @@ namespace engine::materials {
         std::vector<uint32_t> deleted{};
     };
 
+    std::vector<std::string> names{};
     std::vector<uint32_t> offsets{};
     std::vector<Instances> instances{};
     std::vector<Material> schemas{};
@@ -29,7 +32,7 @@ namespace engine::materials {
     void init() {
         init_called = true;
 
-        assert(add_schema(material::pbr::schema) == 0);
+        assert(add_schema(material::pbr::schema, "PBR - Metallic Roughness") == 0);
     }
 
     void destroy() {
@@ -40,11 +43,15 @@ namespace engine::materials {
         }
     }
 
-    bool update_gpu_buffer(VkBufferMemoryBarrier2& barrier) {
+    bool update_gpu_buffer(VkBufferMemoryBarrier2& barrier, bool& want_to_save) {
         assert(init_called);
+
+        want_to_save = want_save;
+        want_save = false;
 
         if (transport::is_ready(next_buffer_timeline)) {
             current_buffer = (current_buffer + 1) % 2;
+            next_buffer_timeline = -1;
         }
 
         if (!update) return false;
@@ -115,25 +122,32 @@ namespace engine::materials {
 
         std::vector<JsonEntry> entries = j;
 
-        offsets.resize(1);
-        instances.resize(1);
+        offsets.clear();
+        instances.clear();
         schemas.resize(1);
 
         deleted.clear();
 
-        uint32_t mat_ix = 1;
+        uint32_t mat_ix = 0;
         for (auto&& entry : entries) {
             while (entry.ix > mat_ix) {
                 offsets.emplace_back(offsets.empty() ? 0 : offsets.back());
                 instances.emplace_back();
                 schemas.emplace_back();
 
+                deleted.emplace_back(mat_ix);
+
                 mat_ix++;
             }
 
             auto schema_size = entry.schema.total_size;
-            schemas.emplace_back(entry.schema);
+            if (mat_ix == 0) {
+                assert(entry.schema == schemas[0]);
+            } else {
+                schemas.emplace_back(entry.schema);
+            }
             instances.emplace_back(Instances{});
+
             auto& insts = instances[entry.ix];
 
             for (auto&& inst_entry : entry.instances) {
@@ -150,7 +164,7 @@ namespace engine::materials {
                 insts.count++;
             }
 
-            offsets.emplace_back(insts.count * schema_size);
+            offsets.emplace_back(mat_ix == 0 ? 0 : instances[mat_ix - 1].count*schemas[mat_ix - 1].total_size + offsets.back());
 
             mat_ix++;
         }
@@ -161,7 +175,7 @@ namespace engine::materials {
 
         auto arr = nlohmann::json::array();
 
-        for (size_t i = 1; i < offsets.size(); i++) {
+        for (size_t i = 0; i < offsets.size(); i++) {
             auto insts = instances[i];
             auto insts_j = nlohmann::json::array();
 
@@ -178,6 +192,7 @@ namespace engine::materials {
 
             arr.emplace_back(nlohmann::json{
                 {"ix", i},
+                {"name", names[i]},
                 {"schema", schemas[i]},
                 {"instances", insts_j},
             });
@@ -192,7 +207,7 @@ namespace engine::materials {
         return schemas[mat_id];
     }
 
-    uint32_t add_schema(Material schema) {
+    uint32_t add_schema(Material schema, std::string name) {
         assert(init_called);
 
         std::optional<uint32_t> free_ix{};
@@ -202,11 +217,13 @@ namespace engine::materials {
         }
 
         if (free_ix) {
+            names[*free_ix] = name;
             schemas[*free_ix] = schema;
 
             return *free_ix;
         }
 
+        names.emplace_back(name);
         if (offsets.size() == 0) {
             offsets.emplace_back(0);
         } else {
@@ -218,7 +235,7 @@ namespace engine::materials {
         auto mat_id = instances.size() - 1;
 
         update = true;
-
+        want_save = true;
         return mat_id;
     }
 
@@ -230,10 +247,13 @@ namespace engine::materials {
         if (offsets.size() != mat_id + 1) {
             offsets[mat_id + 1] = offsets[mat_id];
         }
+        names[mat_id] = "";
         instances[mat_id] = {0, {}};
         schemas[mat_id] = Material{};
 
         deleted.emplace_back(mat_id);
+
+        want_save = true;
         return true;
     }
 
@@ -253,6 +273,7 @@ namespace engine::materials {
         std::memmove(mat_data, new_data, schema_size);
 
         update = true;
+        want_save = true;
     }
 
     uint32_t add_instance(uint32_t mat_id, std::string name, uint8_t* data) {
@@ -282,8 +303,9 @@ namespace engine::materials {
         }
 
         auto instance_ix = insts.count++;
-        update = true;
 
+        update = true;
+        want_save = true;
         return instance_ix;
     }
 
@@ -291,6 +313,8 @@ namespace engine::materials {
         assert(init_called);
 
         instances[mat_id].deleted.emplace_back(instance_ix);
+
+        want_save = true;
         return true;
     }
 

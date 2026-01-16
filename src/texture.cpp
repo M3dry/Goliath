@@ -82,7 +82,7 @@ namespace engine {
         }
     }
 
-    std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const Image& img, VkImageLayout new_layout) {
+    std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const char* name, const Image& img, VkImageLayout new_layout) {
         GPUImage gpu_img;
         VkImageMemoryBarrier2 barrier{};
 
@@ -108,9 +108,20 @@ namespace engine {
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
         VK_CHECK(vmaCreateImage(allocator, &info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
-        vmaSetAllocationName(
-            allocator, gpu_img.allocation,
-            std::format("Image {}x{} of format {}", img.width, img.height, (uint32_t)img.format).c_str());
+
+        vmaSetAllocationName(allocator, gpu_img.allocation, name);
+
+        printf("%s @%p\n", name, gpu_img.image);
+        fflush(stdout);
+
+        // VkDebugMarkerObjectNameInfoEXT name_info{};
+        // name_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
+        // name_info.pNext = nullptr;
+        // name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
+        // name_info.pObjectName = name.c_str();
+        // name_info.object = (uint64_t)gpu_img.image;
+        //
+        // vkDebugMarkerSetObjectNameEXT(device, &name_info);
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -122,7 +133,7 @@ namespace engine {
         return {gpu_img, barrier};
     }
 
-    std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const GPUImageInfo& builder) {
+    std::pair<GPUImage, VkImageMemoryBarrier2> GPUImage::upload(const char* name, const GPUImageInfo& builder) {
         GPUImage gpu_img;
         VkImageMemoryBarrier2 barrier{};
 
@@ -131,10 +142,12 @@ namespace engine {
 
         VK_CHECK(
             vmaCreateImage(allocator, &builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
+
         vmaSetAllocationName(allocator, gpu_img.allocation,
-                             std::format("Image {}x{} of format {}", builder._width, builder._height,
-                                         (uint32_t)builder._image_info.format)
-                                 .c_str());
+                             name);
+
+        printf("%s @%p\n", name, gpu_img.image);
+        fflush(stdout);
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;

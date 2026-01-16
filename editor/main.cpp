@@ -8,6 +8,7 @@
 #include "goliath/event.hpp"
 #include "goliath/exvar.hpp"
 #include "goliath/imgui.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
@@ -52,7 +53,7 @@
 void update_depth(engine::GPUImage* images, VkImageView* image_views, VkImageMemoryBarrier2* barriers,
                   uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
-        auto [depth_img, barrier] = engine::GPUImage::upload(engine::GPUImageInfo{}
+        auto [depth_img, barrier] = engine::GPUImage::upload(std::format("Depth texture #{}", i).c_str(), engine::GPUImageInfo{}
                                                                  .format(VK_FORMAT_D16_UNORM)
                                                                  .width(engine::swapchain_extent.width)
                                                                  .height(engine::swapchain_extent.height)
@@ -73,7 +74,7 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
                    uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
         auto [target_img, barrier] =
-            engine::GPUImage::upload(engine::GPUImageInfo{}
+            engine::GPUImage::upload(std::format("Target texture #{}", i).c_str(), engine::GPUImageInfo{}
                                          .format(VK_FORMAT_R32G32B32A32_SFLOAT)
                                          .width(engine::swapchain_extent.width)
                                          .height(engine::swapchain_extent.height)
@@ -91,7 +92,7 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, VkImageMe
 }
 
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
-using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
+using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, engine::util::padding32, uint64_t>;
 using GridPC = engine::PushConstant<glm::mat4, glm::mat4, glm::vec3, engine::util::padding32, glm::vec2>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 
@@ -142,6 +143,18 @@ int main(int argc, char** argv) {
 
     engine::samplers::load((*tex_reg_json)["samplers"]);
     engine::textures::load((*tex_reg_json)["textures"]);
+
+
+    auto mats_json = engine::util::read_json(project::materials);
+    if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
+        !std::filesystem::exists(project::textures_registry)) {
+        mats_json = nlohmann::json::array();
+    } else if (!mats_json.has_value()) {
+        printf("materials.json file is corrupted\n");
+        return 0;
+    }
+
+    engine::materials::load(*mats_json);
 
     auto models_registry_json = engine::util::read_json(project::models_registry);
     if (!models_registry_json.has_value() && models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -425,6 +438,11 @@ int main(int argc, char** argv) {
                 o << engine::models::save();
             }
 
+            if (engine::materials_to_save()) {
+                std::ofstream o{project::materials};
+                o << engine::materials::save();
+            }
+
             if (engine::textures_to_save()) {
                 std::ofstream o{project::textures_registry};
                 o << engine::textures::save();
@@ -674,7 +692,7 @@ int main(int argc, char** argv) {
                              glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
                              engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
                              engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
-                             draw_id_buffer.address(), mat_id);
+                             draw_id_buffer.address(), mat_id, engine::materials::get_buffer().address());
 
                 PBRShadingSet shading_set_data{
                     .cam_pos = cam.position,

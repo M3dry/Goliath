@@ -159,8 +159,8 @@ namespace engine {
         // `transport::begin` must have been called before these two are called, unless the second function is supplied
         // with `builder._img_data == nulltpr`, then no upload happens the returned barrier needs `dstStageMask` and
         // `dstAccessMask` set by the caller before application
-        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const Image& img, VkImageLayout new_layout);
-        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const GPUImageInfo& builder);
+        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const char* name, const Image& img, VkImageLayout new_layout);
+        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const char* name, const GPUImageInfo& builder);
 
         void destroy();
     };

@@ -45,7 +45,8 @@ namespace engine::visbuffer {
         if (swapchain_changed) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
                 auto [img1, barrier1] =
-                    GPUImage::upload(GPUImageInfo{}
+                    GPUImage::upload(std::format("Visbuffer #{}", i).c_str(),
+                                     GPUImageInfo{}
                                          .new_layout(VK_IMAGE_LAYOUT_GENERAL)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                          .width(swapchain_extent.width)
@@ -69,7 +70,8 @@ namespace engine::visbuffer {
             fragment_id_buffer_size =
                 util::align_up(alignment, swapchain_extent.width * swapchain_extent.height * sizeof(uint32_t));
 
-            stages = Buffer::create("visbuffer stages buffer",frames_in_flight * (material_count_buffer_size + offsets_buffer_size +
+            stages = Buffer::create("visbuffer stages buffer",
+                                    frames_in_flight * (material_count_buffer_size + offsets_buffer_size +
                                                         shading_dispatch_buffer_size + fragment_id_buffer_size),
                                     VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT |
                                         VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT,

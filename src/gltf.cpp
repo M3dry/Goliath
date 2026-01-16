@@ -1,4 +1,5 @@
 #include "goliath/gltf.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/textures.hpp"
 #include "goliath/material.hpp"
 
@@ -230,6 +231,7 @@ void parse_material(const std::string& prim_name, engine::Mesh* out, const tinyg
     };
 
     engine::material::pbr::write_data_blob(pbr_data, out->material_data);
+    engine::materials::add_instance(0, prim_name.c_str(), (uint8_t*)out->material_data);
 }
 
 engine::gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
