@@ -111,17 +111,14 @@ namespace engine {
 
         vmaSetAllocationName(allocator, gpu_img.allocation, name);
 
-        printf("%s @%p\n", name, gpu_img.image);
-        fflush(stdout);
+        VkDebugUtilsObjectNameInfoEXT name_info{};
+        name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name_info.pNext = nullptr;
+        name_info.objectType = VK_OBJECT_TYPE_IMAGE;
+        name_info.objectHandle = (uint64_t)gpu_img.image;
+        name_info.pObjectName = name;
 
-        // VkDebugMarkerObjectNameInfoEXT name_info{};
-        // name_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
-        // name_info.pNext = nullptr;
-        // name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_IMAGE_EXT;
-        // name_info.pObjectName = name.c_str();
-        // name_info.object = (uint64_t)gpu_img.image;
-        //
-        // vkDebugMarkerSetObjectNameEXT(device, &name_info);
+        vkSetDebugUtilsObjectNameEXT(device, &name_info);
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -145,9 +142,6 @@ namespace engine {
 
         vmaSetAllocationName(allocator, gpu_img.allocation,
                              name);
-
-        printf("%s @%p\n", name, gpu_img.image);
-        fflush(stdout);
 
         barrier.dstQueueFamilyIndex = graphics_queue_family;
         barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;

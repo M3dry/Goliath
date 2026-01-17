@@ -173,7 +173,7 @@ namespace engine::models {
     });
 
     bool process_uploads() {
-        assert(init_called);
+        if (!init_called) return false;
 
         std::vector<gid> upload_gids{};
         gpu_queue.drain(upload_gids);

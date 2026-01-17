@@ -8,6 +8,7 @@
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
+#include "goliath/visbuffer.hpp"
 #include <GLFW/glfw3.h>
 #include <cctype>
 #include <cstring>
@@ -42,6 +43,11 @@ std::pair<std::span<uint8_t>, Metadata> read_goi(std::filesystem::path path) {
 }
 
 using ImagePC = engine::PushConstant<glm::uvec2, glm::uvec2>;
+
+void rebuild(engine::GraphicsPipeline& image_pipeline) {
+    image_pipeline.update_viewport_to_swapchain();
+    image_pipeline.update_scissor_to_viewport();
+}
 
 int main(int argc, char** argv) {
     engine::init(engine::Init{
@@ -132,7 +138,7 @@ int main(int argc, char** argv) {
         }
 
         if (engine::prepare_frame()) {
-            goto end_of_frame;
+            rebuild(image_pipeline);
         }
 
         {
@@ -180,8 +186,8 @@ int main(int argc, char** argv) {
 
     end_of_frame:
         if (engine::next_frame()) {
-            image_pipeline.update_viewport_to_swapchain();
-            image_pipeline.update_scissor_to_viewport();
+            rebuild(image_pipeline);
+            engine::increment_frame();
         }
     }
 
@@ -197,6 +203,7 @@ int main(int argc, char** argv) {
     engine::destroy_shader(image_fragment_module);
     image_pipeline.destroy();
 
+    engine::visbuffer::destroy();
     engine::destroy();
     return 0;
 }

@@ -13,6 +13,8 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::visbuffer {
+    glm::uvec2 visbuffer_size;
+
     GPUImage* vis_buffers;
     VkImageView* vis_buffer_views;
 
@@ -49,8 +51,8 @@ namespace engine::visbuffer {
                                      GPUImageInfo{}
                                          .new_layout(VK_IMAGE_LAYOUT_GENERAL)
                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                         .width(swapchain_extent.width)
-                                         .height(swapchain_extent.height)
+                                         .width(visbuffer_size.x)
+                                         .height(visbuffer_size.y)
                                          .format(format)
                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT));
@@ -68,7 +70,7 @@ namespace engine::visbuffer {
             shading_dispatch_buffer_size = util::align_up(
                 alignment, (sizeof(VkDispatchIndirectCommand) + 2 * sizeof(uint32_t)) * (max_material_id + 1));
             fragment_id_buffer_size =
-                util::align_up(alignment, swapchain_extent.width * swapchain_extent.height * sizeof(uint32_t));
+                util::align_up(alignment, visbuffer_size.x * visbuffer_size.y * sizeof(uint32_t));
 
             stages = Buffer::create("visbuffer stages buffer",
                                     frames_in_flight * (material_count_buffer_size + offsets_buffer_size +
@@ -97,7 +99,8 @@ namespace engine::visbuffer {
         }
     }
 
-    void init(VkImageMemoryBarrier2* img_barriers) {
+    void init(glm::uvec2 dims, VkImageMemoryBarrier2* img_barriers) {
+        visbuffer_size = dims;
         vis_buffers = (GPUImage*)malloc(sizeof(GPUImage) * frames_in_flight);
         vis_buffer_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
 
@@ -149,7 +152,9 @@ namespace engine::visbuffer {
                                                    }>::create();
     }
 
-    void resize(VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
+    void resize(glm::uvec2 new_dims, VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed) {
+        visbuffer_size = new_dims;
+
         if (swapchain_changed) {
             for (std::size_t i = 0; i < frames_in_flight; i++) {
                 vis_buffers[i].destroy();
@@ -290,7 +295,7 @@ namespace engine::visbuffer {
 
         uint8_t mat_count_pc[MaterialCount::size]{};
         MaterialCount::write(mat_count_pc,
-                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                             visbuffer_size,
                              stages.address() + current_material_count_offset, draw_id_addr);
 
         material_count_pipeline.bind();
@@ -303,8 +308,8 @@ namespace engine::visbuffer {
                     engine::descriptor::null_set,
                     engine::descriptor::null_set,
                 },
-            .group_count_x = (uint32_t)std::ceil(swapchain_extent.width / 16.0f),
-            .group_count_y = (uint32_t)std::ceil(swapchain_extent.width / 16.0f),
+            .group_count_x = (uint32_t)std::ceil(visbuffer_size.x / 16.0f),
+            .group_count_y = (uint32_t)std::ceil(visbuffer_size.y / 16.0f),
             .group_count_z = 1,
         });
     }
@@ -359,7 +364,7 @@ namespace engine::visbuffer {
         uint8_t offsets_pc[Offsets::size]{};
         auto stages_addr = stages.address();
         Offsets::write(offsets_pc,
-                       glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                       visbuffer_size,
                        stages_addr + current_material_count_offset, stages_addr + current_offsets_offset,
                        stages_addr + current_shading_dispatch_offset, max_material_id + 1, 1 + max_material_id / 256);
 
@@ -407,7 +412,7 @@ namespace engine::visbuffer {
         uint8_t fragment_id_pc[FragmentID::size]{};
         auto stages_addr = stages.address();
         FragmentID::write(fragment_id_pc,
-                          glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                          visbuffer_size,
                           stages_addr + current_offsets_offset, stages_addr + current_fragment_id_offset, draw_id_addr,
                           max_material_id);
 
@@ -426,8 +431,8 @@ namespace engine::visbuffer {
                     engine::descriptor::null_set,
                     engine::descriptor::null_set,
                 },
-            .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
-            .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.height / 16.0f),
+            .group_count_x = (uint32_t)std::ceil(visbuffer_size.x / 16.0f),
+            .group_count_y = (uint32_t)std::ceil(visbuffer_size.y / 16.0f),
             .group_count_z = 1,
         });
     }

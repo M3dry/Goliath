@@ -9,6 +9,7 @@
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <glm/ext/vector_uint2.hpp>
+#include <vulkan/vulkan_core.h>
 
 #define VOLK_IMPLEMENTATION 1
 #include <volk.h>
@@ -71,7 +72,6 @@ namespace engine {
     VkSurfaceKHR surface;
 
     bool updated_window_size = false;
-    bool swapchain_needs_rebuild = false;
     VkExtent2D swapchain_extent;
     VkSwapchainKHR swapchain = nullptr;
     std::vector<VkImage> swapchain_images{};
@@ -93,6 +93,11 @@ namespace engine {
     bool textures_to_save_{false};
 
     void rebuild_swapchain(uint32_t width, uint32_t height) {
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, (int*)&width, (int*)&height);
+            glfwWaitEvents();
+        }
+
         vkDeviceWaitIdle(device);
 
         if (swapchain != nullptr) vkDestroySwapchainKHR(device, swapchain, nullptr);
@@ -127,12 +132,6 @@ namespace engine {
         for (std::size_t i = 0; i < swapchain_images.size(); i++) {
             VK_CHECK(vkCreateSemaphore(device, &swapchain_semaphore_info, nullptr, &swapchain_semaphores[i]));
         }
-
-        current_frame = 0;
-        swapchain_needs_rebuild = false;
-
-        delete[] frames;
-        frames = new FrameData[frames_in_flight]{};
     }
 
     void FrameData::cleanup_resources() {
@@ -140,12 +139,12 @@ namespace engine {
             vmaDestroyBuffer(allocator, buf, alloc);
         }
 
-        for (auto [img, alloc] : images_to_free) {
-            vmaDestroyImage(allocator, img, alloc);
-        }
-
         for (auto view : views_to_free) {
             vkDestroyImageView(device, view, nullptr);
+        }
+
+        for (auto [img, alloc] : images_to_free) {
+            vmaDestroyImage(allocator, img, alloc);
         }
 
         for (auto sampler : samplers_to_free) {
@@ -220,6 +219,7 @@ namespace engine {
         vkb::InstanceBuilder instance_builder;
         auto vkb_inst_builder = instance_builder.set_app_name("Vulkan test")
                                     .enable_validation_layers()
+                                    .enable_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)
                                     .use_default_debug_messenger()
                                     .require_api_version(1, 3, 0)
                                     .build();
@@ -255,7 +255,7 @@ namespace engine {
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.dynamicRendering = true;
         features13.synchronization2 = true;
-        features13.robustImageAccess = true;
+        // features13.robustImageAccess = true;
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features12.bufferDeviceAddress = true;
@@ -274,7 +274,7 @@ namespace engine {
         VkPhysicalDeviceFeatures features{};
         features.multiDrawIndirect = true;
         features.independentBlend = true;
-        features.robustBufferAccess = true;
+        // features.robustBufferAccess = true;
 
         auto physical_device_selected = vkb::PhysicalDeviceSelector{vkb_inst}
                                             .set_minimum_version(1, 3)
@@ -299,16 +299,16 @@ namespace engine {
             .pNext = nullptr,
             .shaderObject = true,
         };
-        VkPhysicalDeviceRobustness2FeaturesEXT robustness2_extension{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
-            .pNext = &shader_object_extension,
-            .robustBufferAccess2 = true,
-            .robustImageAccess2 = true,
-            .nullDescriptor = true,
-        };
+        // VkPhysicalDeviceRobustness2FeaturesEXT robustness2_extension{
+        //     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+        //     .pNext = &shader_object_extension,
+        //     .robustBufferAccess2 = true,
+        //     .robustImageAccess2 = true,
+        //     .nullDescriptor = true,
+        // };
 
         vkb::Device vkb_device =
-            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&robustness2_extension).build().value();
+            vkb::DeviceBuilder{vkb_physical_device}.add_pNext(&shader_object_extension).build().value();
         device = vkb_device.device;
 
         volkLoadDevice(device);
@@ -325,6 +325,7 @@ namespace engine {
         vma_allocator_info.pVulkanFunctions = &vma_vulkan_funcs;
         VK_CHECK(vmaCreateAllocator(&vma_allocator_info, &allocator));
 
+        frames = new FrameData[frames_in_flight]{};
         rebuild_swapchain((uint32_t)mode->width, (uint32_t)mode->height);
 
         graphics_queue = vkb_device.get_queue(vkb::QueueType::graphics).value();
@@ -408,21 +409,43 @@ namespace engine {
 
         frame.cleanup_resources();
 
-        auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
-                                            &swapchain_ix);
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || updated_window_size) {
-            swapchain_needs_rebuild = true;
-            updated_window_size = false;
-            return true;
-        } else {
-            VK_CHECK(result);
+        bool rebuilt = false;
+        while (true) {
+            auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
+                                                &swapchain_ix);
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || updated_window_size) {
+                int width, height;
+                glfwGetFramebufferSize(window, &width, &height);
+
+                std::vector<VkFence> fences{};
+                for (size_t i = 0; i < frames_in_flight; i++) {
+                    if (i == current_frame) continue;
+                    fences.emplace_back(frames[i].render_fence);
+                }
+
+                VK_CHECK(vkWaitForFences(device, frames_in_flight - 1, fences.data(), true, UINT64_MAX));
+                rebuild_swapchain((uint32_t)width, (uint32_t)height);
+
+                vkDestroySemaphore(device, frame.swapchain_semaphore, nullptr);
+
+                VkSemaphoreCreateInfo semaphore_info{};
+                semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+                VK_CHECK(vkCreateSemaphore(device, &semaphore_info, nullptr, &frame.swapchain_semaphore));
+
+                updated_window_size = false;
+                rebuilt = true;
+                continue;
+            } else {
+                VK_CHECK(result);
+            }
+
+            break;
         }
 
         frame.render_semaphore = swapchain_ix;
         frame.descriptor_pool.clear();
 
-        swapchain_needs_rebuild = false;
-        return false;
+        return rebuilt;
     }
 
     void prepare_draw() {
@@ -452,15 +475,6 @@ namespace engine {
     }
 
     bool next_frame() {
-        if (swapchain_needs_rebuild) {
-            int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
-            rebuild_swapchain((uint32_t)width, (uint32_t)height);
-
-            current_frame = 0;
-            return true;
-        }
-
         FrameData& frame = get_current_frame_data();
 
         transition_image(frame.cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -505,14 +519,25 @@ namespace engine {
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
+
+            std::vector<VkFence> fences{};
+            for (size_t i = 0; i < frames_in_flight; i++) {
+                if (i == current_frame) continue;
+                fences.emplace_back(frames[i].render_fence);
+            }
+
+            VK_CHECK(vkWaitForFences(device, frames_in_flight - 1, fences.data(), true, UINT64_MAX));
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
 
             return true;
         }
 
-        current_frame = (current_frame + 1) % frames_in_flight;
-
+        increment_frame();
         return false;
+    }
+
+    void increment_frame() {
+        current_frame = (current_frame + 1) % frames_in_flight;
     }
 
     DescriptorPool& get_frame_descriptor_pool() {

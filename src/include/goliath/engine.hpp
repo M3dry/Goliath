@@ -63,6 +63,7 @@ namespace engine {
     bool prepare_frame();
     void prepare_draw();
     bool next_frame();
+    void increment_frame();
 
     uint32_t get_current_frame();
 

@@ -36,7 +36,7 @@ namespace engine::materials {
     }
 
     void destroy() {
-        assert(init_called);
+        if (!init_called) return;
 
         for (auto& buf : gpu_buffers) {
             buf.destroy();
@@ -44,7 +44,7 @@ namespace engine::materials {
     }
 
     bool update_gpu_buffer(VkBufferMemoryBarrier2& barrier, bool& want_to_save) {
-        assert(init_called);
+        if (!init_called) return false;
 
         want_to_save = want_save;
         want_save = false;

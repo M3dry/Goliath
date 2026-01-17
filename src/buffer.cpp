@@ -42,17 +42,14 @@ namespace engine {
 
         vmaSetAllocationName(allocator, buf._allocation, name);
 
-        printf("%s @%p\n", name, buf._buf);
-        fflush(stdout);
+        VkDebugUtilsObjectNameInfoEXT name_info{};
+        name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name_info.pNext = nullptr;
+        name_info.objectType = VK_OBJECT_TYPE_BUFFER;
+        name_info.objectHandle = (uint64_t)buf._buf;
+        name_info.pObjectName = name;
 
-        // VkDebugMarkerObjectNameInfoEXT name_info{};
-        // name_info.sType = VK_STRUCTURE_TYPE_DEBUG_MARKER_OBJECT_NAME_INFO_EXT;
-        // name_info.pNext = nullptr;
-        // name_info.objectType = VK_DEBUG_REPORT_OBJECT_TYPE_BUFFER_EXT;
-        // name_info.pObjectName = name;
-        // name_info.object = (uint64_t)buf._buf;
-        //
-        // vkDebugMarkerSetObjectNameEXT(device, &name_info);
+        vkSetDebugUtilsObjectNameEXT(device, &name_info);
 
         return buf;
     }

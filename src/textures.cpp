@@ -203,7 +203,7 @@ namespace engine::textures {
     }
 
     bool process_uploads() {
-        assert(init_called);
+        if (!init_called) return false;
 
         std::vector<upload_task> upload_tasks{};
         upload_queue.drain(upload_tasks);
