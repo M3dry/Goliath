@@ -46,7 +46,7 @@ namespace engine::materials {
     bool update_gpu_buffer(VkBufferMemoryBarrier2& barrier, bool& want_to_save) {
         if (!init_called) return false;
 
-        want_to_save = want_save;
+        want_to_save |= want_save;
         want_save = false;
 
         if (transport::is_ready(next_buffer_timeline)) {

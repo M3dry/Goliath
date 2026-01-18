@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
 
     auto mats_json = engine::util::read_json(project::materials);
     if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
-        !std::filesystem::exists(project::textures_registry)) {
+        !std::filesystem::exists(project::materials)) {
         mats_json = nlohmann::json::array();
     } else if (!mats_json.has_value()) {
         printf("materials.json file is corrupted\n");
@@ -481,6 +481,7 @@ int main(int argc, char** argv) {
             }
 
             if (engine::textures_to_save()) {
+                printf("saving textures @%s\n", project::textures_registry.c_str());
                 std::ofstream o{project::textures_registry};
                 o << engine::textures::save();
             }

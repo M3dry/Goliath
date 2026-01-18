@@ -1,10 +1,10 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
-#include "goliath/synchronization.hpp"
-#include "models_.hpp"
-#include "materials_.hpp"
 #include "goliath/samplers.hpp"
+#include "goliath/synchronization.hpp"
+#include "materials_.hpp"
+#include "models_.hpp"
 #include "textures_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -92,18 +92,24 @@ namespace engine {
     bool materials_to_save_{false};
     bool textures_to_save_{false};
 
+    uint64_t timeline_value = 0;
+    uint64_t presented_timeline_value = 0;
+    VkSemaphore timeline_semaphore{};
+
     void rebuild_swapchain(uint32_t width, uint32_t height) {
         while (width == 0 || height == 0) {
             glfwGetFramebufferSize(window, (int*)&width, (int*)&height);
             glfwWaitEvents();
         }
 
-        vkDeviceWaitIdle(device);
-
-        if (swapchain != nullptr) vkDestroySwapchainKHR(device, swapchain, nullptr);
+        auto& frame_data = get_current_frame_data();
+        frame_data.destroy_swapchain(OldSwapchain{
+            .swapchain = swapchain,
+            .semaphores = swapchain_semaphores,
+            .last_used_timeline = timeline_value,
+        });
         for (std::size_t i = 0; i < swapchain_image_views.size(); i++) {
-            vkDestroyImageView(device, swapchain_image_views[i], nullptr);
-            vkDestroySemaphore(device, swapchain_semaphores[i], nullptr);
+            frame_data.destroy_view(swapchain_image_views[i]);
         }
 
         vkb::Swapchain vkb_swapchain =
@@ -116,6 +122,7 @@ namespace engine {
                 .set_desired_extent(width, height)
                 .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
                 .set_desired_min_image_count(2)
+                .set_old_swapchain(swapchain)
                 .build()
                 .value();
 
@@ -151,10 +158,36 @@ namespace engine {
             vkDestroySampler(device, sampler, nullptr);
         }
 
+        std::erase_if(swapchains_to_free, [&](auto& swapchain) {
+            bool destroy = swapchain.last_used_timeline < presented_timeline_value;
+            if (!destroy) {
+                uint64_t v = timeline_value + 1;
+                VkSemaphoreWaitInfo info{};
+                info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+                info.semaphoreCount = 1;
+                info.pSemaphores = &timeline_semaphore;
+                info.pValues = &v;
+
+                if (vkWaitSemaphores(device, &info, 0) == VK_SUCCESS) {
+                    presented_timeline_value = v;
+                    destroy = true;
+                }
+            }
+
+            if (destroy) {
+                vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
+
+                for (auto semaphore : swapchain.semaphores) {
+                    vkDestroySemaphore(device, semaphore, nullptr);
+                }
+            }
+
+            return destroy;
+        });
+
         buffers_to_free.clear();
         images_to_free.clear();
         views_to_free.clear();
-        samplers_to_free.clear();
     }
 
     void FrameData::destroy_buffer(VkBuffer buf, VmaAllocation alloc) {
@@ -171,6 +204,10 @@ namespace engine {
 
     void FrameData::destroy_sampler(VkSampler sampler) {
         samplers_to_free.emplace_back(sampler);
+    }
+
+    void FrameData::destroy_swapchain(OldSwapchain swapchain) {
+        swapchains_to_free.emplace_back(swapchain);
     }
 
     FrameData::FrameData() {
@@ -211,6 +248,14 @@ namespace engine {
         vkDestroySemaphore(device, swapchain_semaphore, nullptr);
 
         cleanup_resources();
+
+        for (auto& swapchain : swapchains_to_free) {
+            vkDestroySwapchainKHR(device, swapchain.swapchain, nullptr);
+
+            for (auto semaphore : swapchain.semaphores) {
+                vkDestroySemaphore(device, semaphore, nullptr);
+            }
+        }
     }
 
     void init(Init opts) {
@@ -233,9 +278,7 @@ namespace engine {
         debug_messenger = vkb_inst.debug_messenger;
         volkLoadInstance(instance);
 
-        glfwSetErrorCallback([](int err, const char* desc) {
-            fprintf(stderr, "GLFW error %d: %s\n", err, desc);
-        });
+        glfwSetErrorCallback([](int err, const char* desc) { fprintf(stderr, "GLFW error %d: %s\n", err, desc); });
         assert(glfwInit() == GLFW_TRUE);
 
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
@@ -246,7 +289,8 @@ namespace engine {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
         glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-        window = glfwCreateWindow(mode->width, mode->height, opts.window_name, opts.fullscreen ? monitor : nullptr, nullptr);
+        window =
+            glfwCreateWindow(mode->width, mode->height, opts.window_name, opts.fullscreen ? monitor : nullptr, nullptr);
         VK_CHECK(glfwCreateWindowSurface(instance, window, nullptr, &surface));
 
         glfwFocusWindow(window);
@@ -334,6 +378,17 @@ namespace engine {
         transport_queue = vkb_device.get_queue(vkb::QueueType::transfer).value();
         transport_queue_family = vkb_device.get_queue_index(vkb::QueueType::transfer).value();
 
+        VkSemaphoreTypeCreateInfo timeline_semaphore_type{};
+        timeline_semaphore_type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+        timeline_semaphore_type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        timeline_semaphore_type.initialValue = presented_timeline_value = timeline_value;
+
+        VkSemaphoreCreateInfo timeline_semaphore_info{};
+        timeline_semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        timeline_semaphore_info.pNext = &timeline_semaphore_type;
+
+        VK_CHECK(vkCreateSemaphore(device, &timeline_semaphore_info, nullptr, &timeline_semaphore));
+
         samplers::init();
         transport::init();
         imgui::init();
@@ -351,6 +406,7 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
+
         materials::destroy();
         models::destroy();
         textures::destroy();
@@ -360,6 +416,8 @@ namespace engine {
         transport::destroy();
 
         delete[] frames;
+
+        vkDestroySemaphore(device, timeline_semaphore, nullptr);
 
         // NOTE: VMA debug print
         // char* stats = nullptr;
@@ -411,19 +469,11 @@ namespace engine {
 
         bool rebuilt = false;
         while (true) {
-            auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore, VK_NULL_HANDLE,
-                                                &swapchain_ix);
-            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || updated_window_size) {
+            auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore,
+                                                VK_NULL_HANDLE, &swapchain_ix);
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || updated_window_size) {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
-
-                std::vector<VkFence> fences{};
-                for (size_t i = 0; i < frames_in_flight; i++) {
-                    if (i == current_frame) continue;
-                    fences.emplace_back(frames[i].render_fence);
-                }
-
-                VK_CHECK(vkWaitForFences(device, frames_in_flight - 1, fences.data(), true, UINT64_MAX));
                 rebuild_swapchain((uint32_t)width, (uint32_t)height);
 
                 vkDestroySemaphore(device, frame.swapchain_semaphore, nullptr);
@@ -461,8 +511,8 @@ namespace engine {
         transition_image(cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        textures_to_save_ = textures::process_uploads();
-        models_to_save_ = models::process_uploads();
+        textures_to_save_ |= textures::process_uploads();
+        models_to_save_ |= models::process_uploads();
 
         VkBufferMemoryBarrier2 material_barrier{};
         auto apply_material_barrier = materials::update_gpu_buffer(material_barrier, materials_to_save_);
@@ -487,10 +537,15 @@ namespace engine {
         wait_info.semaphore = frame.swapchain_semaphore;
         wait_info.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-        VkSemaphoreSubmitInfo signal_info{};
-        signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        signal_info.semaphore = swapchain_semaphores[frame.render_semaphore];
-        signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+        VkSemaphoreSubmitInfo signal_info[2]{};
+        signal_info[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signal_info[0].semaphore = swapchain_semaphores[frame.render_semaphore];
+        signal_info[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
+        signal_info[1].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        signal_info[1].semaphore = timeline_semaphore;
+        signal_info[1].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        signal_info[1].value = ++timeline_value;
 
         VkCommandBufferSubmitInfo cmd_info{};
         cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
@@ -502,8 +557,8 @@ namespace engine {
         submit_info.pWaitSemaphoreInfos = &wait_info;
         submit_info.commandBufferInfoCount = 1;
         submit_info.pCommandBufferInfos = &cmd_info;
-        submit_info.signalSemaphoreInfoCount = 1;
-        submit_info.pSignalSemaphoreInfos = &signal_info;
+        submit_info.signalSemaphoreInfoCount = 2;
+        submit_info.pSignalSemaphoreInfos = signal_info;
 
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, frame.render_fence));
 
@@ -519,14 +574,6 @@ namespace engine {
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
-
-            std::vector<VkFence> fences{};
-            for (size_t i = 0; i < frames_in_flight; i++) {
-                if (i == current_frame) continue;
-                fences.emplace_back(frames[i].render_fence);
-            }
-
-            VK_CHECK(vkWaitForFences(device, frames_in_flight - 1, fences.data(), true, UINT64_MAX));
             rebuild_swapchain((uint32_t)width, (uint32_t)height);
 
             return true;
@@ -569,13 +616,13 @@ namespace engine {
     }
 
     bool models_to_save() {
-        auto res =  models_to_save_;
+        auto res = models_to_save_;
         models_to_save_ = false;
         return res;
     }
 
     bool materials_to_save() {
-        auto res =  materials_to_save_;
+        auto res = materials_to_save_;
         materials_to_save_ = false;
         return res;
     }

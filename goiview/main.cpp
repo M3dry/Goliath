@@ -8,7 +8,6 @@
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
-#include "goliath/visbuffer.hpp"
 #include <GLFW/glfw3.h>
 #include <cctype>
 #include <cstring>
@@ -203,7 +202,6 @@ int main(int argc, char** argv) {
     engine::destroy_shader(image_fragment_module);
     image_pipeline.destroy();
 
-    engine::visbuffer::destroy();
     engine::destroy();
     return 0;
 }
