@@ -457,6 +457,9 @@ namespace engine::textures {
         file.write((const char*)image.data(), image.size());
         file.flush();
 
+        initializing_textures.emplace_back(gid);
+        initialized_queue.enqueue(gid);
+
         return gid;
     }
 

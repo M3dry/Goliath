@@ -118,7 +118,8 @@ void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, VkI
     grid_pipeline.update_viewport_to_swapchain();
     grid_pipeline.update_scissor_to_viewport();
 
-    engine::visbuffer::resize({engine::swapchain_extent.width, engine::swapchain_extent.height}, visbuffer_barriers, true, false);
+    engine::visbuffer::resize({engine::swapchain_extent.width, engine::swapchain_extent.height}, visbuffer_barriers,
+                              true, false);
     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
         visbuffer_barriers[i].srcAccessMask = 0;
         visbuffer_barriers[i].srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -481,9 +482,11 @@ int main(int argc, char** argv) {
             }
 
             if (engine::textures_to_save()) {
-                printf("saving textures @%s\n", project::textures_registry.c_str());
                 std::ofstream o{project::textures_registry};
-                o << engine::textures::save();
+                o << nlohmann::json{
+                    {"textures", engine::textures::save()},
+                    {"samplers", engine::samplers::save()},
+                };
             }
 
             engine::event::update_tick();

@@ -471,7 +471,7 @@ namespace engine {
         while (true) {
             auto result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.swapchain_semaphore,
                                                 VK_NULL_HANDLE, &swapchain_ix);
-            if (result == VK_ERROR_OUT_OF_DATE_KHR || updated_window_size) {
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || updated_window_size) {
                 int width, height;
                 glfwGetFramebufferSize(window, &width, &height);
                 rebuild_swapchain((uint32_t)width, (uint32_t)height);
