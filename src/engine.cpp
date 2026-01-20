@@ -1,6 +1,7 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "materials_.hpp"

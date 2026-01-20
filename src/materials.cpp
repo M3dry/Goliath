@@ -29,10 +29,15 @@ namespace engine::materials {
     std::array<Buffer, 2> gpu_buffers{};
     uint64_t next_buffer_timeline = -1;
 
+    bool save_value() {
+        return want_save;
+    }
+
     void init() {
         init_called = true;
 
         assert(add_schema(material::pbr::schema, "PBR - Metallic Roughness") == 0);
+        want_save = false;
     }
 
     void destroy() {

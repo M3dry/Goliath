@@ -68,6 +68,8 @@
 //   ::
 
 namespace engine::materials {
+    bool save_value();
+
     void load(const nlohmann::json& j);
     nlohmann::json save();
 
