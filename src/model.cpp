@@ -3,6 +3,7 @@
 #include "goliath/collisions.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/material.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/rendering.hpp"
 
 #include <utility>
@@ -10,8 +11,8 @@
 
 namespace engine {
     uint32_t Mesh::get_optimized_size() const {
-        uint32_t total_size = sizeof(material_id) + sizeof(uint32_t) + material_data_size + sizeof(engine::Topology) +
-                              sizeof(uint32_t) + sizeof(uint32_t) + sizeof(bool) + sizeof(collisions::AABB) +
+        uint32_t total_size = sizeof(material_id) + sizeof(uint32_t) + sizeof(engine::Topology) + sizeof(uint32_t) +
+                              sizeof(uint32_t) + sizeof(bool) + sizeof(collisions::AABB) +
                               (2 + texcoords.size()) * sizeof(bool);
 
         if (indices != nullptr) total_size += index_count * sizeof(uint32_t);
@@ -32,12 +33,8 @@ namespace engine {
         off += sizeof(material_id);
         assert(off < data.size());
 
-        std::memcpy(data.data() + off, &material_data_size, sizeof(uint32_t));
+        std::memcpy(data.data() + off, &material_instance, sizeof(uint32_t));
         off += sizeof(uint32_t);
-        assert(off < data.size());
-
-        std::memcpy(data.data() + off, material_data, material_data_size);
-        off += material_data_size;
         assert(off < data.size());
 
         std::memcpy(data.data() + off, &vertex_topology, sizeof(Topology));
@@ -113,17 +110,9 @@ namespace engine {
         off += sizeof(material_id);
         assert(off < data.size());
 
-        std::memcpy(&out.material_data_size, data.data() + off, sizeof(uint32_t));
+        std::memcpy(&out.material_instance, data.data() + off, sizeof(uint32_t));
         off += sizeof(uint32_t);
         assert(off < data.size());
-
-        out.material_data = malloc(out.material_data_size);
-        std::memcpy(out.material_data, data.data() + off, out.material_data_size);
-        off += out.material_data_size;
-        assert(off < data.size());
-
-        // FIXME: figure out where to update the stored texture count/if to store it in the binary
-        out.material_texture_count = material::pbr::schema.texture_gid_offsets.size();
 
         std::memcpy(&out.vertex_topology, data.data() + off, sizeof(Topology));
         off += sizeof(Topology);
@@ -199,11 +188,10 @@ namespace engine {
 
     model::GPUOffset Mesh::calc_offset(uint32_t start_offset, uint32_t* total_size) const {
         uint32_t size = 0;
-        size += material_data_size;
 
         model::GPUOffset offset{
             .start = start_offset,
-            .material_offset = 0,
+            .material_offset = material_instance,
         };
         offset.set_indexed_tangetns(indexed_tangents);
 
@@ -255,8 +243,6 @@ namespace engine {
         uint32_t total_size;
         auto offset = calc_offset(0, &total_size);
 
-        std::memcpy(buf + offset.material_offset, material_data, material_data_size);
-
         if (offset.indices_offset != (uint32_t)-1) {
             std::memcpy(buf + offset.indices_offset, indices, index_count * sizeof(uint32_t));
         }
@@ -304,7 +290,7 @@ namespace engine {
         return total_size;
     }
 
-    uint32_t Model::get_optimized_size() const {
+    uint32_t Model::get_save_size() const {
         uint32_t total_size = sizeof(collisions::AABB) + sizeof(uint32_t) +
                               mesh_indices_count * (sizeof(uint32_t) + sizeof(glm::mat4)) + sizeof(uint32_t) +
                               mesh_count * sizeof(uint32_t);
@@ -316,7 +302,7 @@ namespace engine {
         return total_size;
     }
 
-    void Model::save_optimized(std::span<uint8_t> data) const {
+    void Model::save(std::span<uint8_t> data) const {
         uint32_t header_size = sizeof(collisions::AABB) + sizeof(uint32_t) +
                                mesh_indices_count * (sizeof(uint32_t) + sizeof(glm::mat4)) + sizeof(uint32_t) +
                                mesh_count * sizeof(uint32_t);
@@ -356,7 +342,7 @@ namespace engine {
         }
     }
 
-    void Model::load_optimized(Model& out, std::span<uint8_t> data) {
+    void Model::load(Model& out, std::span<uint8_t> data) {
         uint32_t off = 0;
 
         std::memcpy(&out.bounding_box, data.data() + off, sizeof(collisions::AABB));
@@ -406,11 +392,10 @@ namespace engine::model {
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             const auto& mesh = model->meshes[i];
 
-            if (mesh.material_id == 0 && mesh.material_data_size == material::pbr::schema.total_size) {
-                for (const auto& off : material::pbr::schema.texture_gid_offsets) {
-                    std::memcpy(&texture_gids[texture_count], (uint8_t*)(mesh.material_data) + off, sizeof(uint32_t));
-                    texture_count++;
-                }
+            auto mat_data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
+            for (const auto& off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
+                std::memcpy(&texture_gids[texture_count], mat_data.data() + off, sizeof(uint32_t));
+                texture_count++;
             }
         }
 
@@ -438,11 +423,6 @@ namespace engine::model {
     };
 
     std::pair<GPUModel, Buffer> upload(const Model* model) {
-        uint32_t needed_textures = 0;
-        for (std::size_t i = 0; i < model->mesh_count; i++) {
-            needed_textures += model->meshes[i].material_texture_count;
-        }
-
         auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
         std::memcpy(ctx, &model, sizeof(void*));
 
@@ -455,7 +435,8 @@ namespace engine::model {
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
             offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
-            texture_count += model->meshes[i].material_texture_count;
+            texture_count += materials::get_schema(model->meshes[i].material_id).texture_gid_offsets.size();
+            ;
         }
 
         auto data_offset = engine::gpu_group::upload(texture_count, mesh_sizes, upload_func, (void*)ctx);
@@ -491,11 +472,6 @@ namespace engine::model {
     }
 
     GPUModel upload_raw(const Model* model) {
-        uint32_t needed_textures = 0;
-        for (std::size_t i = 0; i < model->mesh_count; i++) {
-            needed_textures += model->meshes[i].material_texture_count;
-        }
-
         auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
         std::memcpy(ctx, &model, sizeof(void*));
 
@@ -508,7 +484,7 @@ namespace engine::model {
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
             offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
-            texture_count += model->meshes[i].material_texture_count;
+            texture_count += materials::get_schema(model->meshes[i].material_id).texture_gid_offsets.size();
         }
         auto data_offset = engine::gpu_group::upload(texture_count, mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {

@@ -1,6 +1,7 @@
 #include "ui.hpp"
 
 #include "ImGuizmo/ImGuizmo.h"
+#include "state.hpp"
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #define IMVIEWGUIZMO_IMPLEMENTATION
@@ -55,9 +56,6 @@ namespace ui {
     VkSampler game_window_sampler;
     glm::vec2 game_image_offset{0.0f};
     glm::vec2 game_image_dims{0.0f};
-
-    std::string models_query{};
-    int models_search_scope{};
 
     struct SelectedInstance {
         uint32_t scene;
@@ -351,7 +349,10 @@ namespace ui {
     }
 
     void models_pane() {
-        ImGui::InputText("##search", &models_query);
+        if (ImGui::InputText("##search", &state::models_query)) {
+            printf("typing\n");
+            state::modified_value();
+        }
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
@@ -359,13 +360,14 @@ namespace ui {
             "Scene models",
             "All models",
         };
-        if (ImGui::BeginCombo("##combo", combo_values[models_search_scope], ImGuiComboFlags_NoPreview)) {
+        if (ImGui::BeginCombo("##combo", combo_values[state::models_search_scope], ImGuiComboFlags_NoPreview)) {
             for (size_t i = 0; i < combo_values.size(); i++) {
-                if (ImGui::Selectable(combo_values[i], models_search_scope == i)) {
-                    models_search_scope = i;
+                if (ImGui::Selectable(combo_values[i], state::models_search_scope == i)) {
+                    state::models_search_scope = i;
+                    state::modified_value();
                 }
 
-                if (models_search_scope == i) {
+                if (state::models_search_scope == i) {
                     ImGui::SetItemDefaultFocus();
                 }
             }
@@ -374,11 +376,11 @@ namespace ui {
         }
 
         std::vector<std::pair<engine::models::gid, uint32_t>> matches{};
-        if (models_search_scope == 0) {
+        if (state::models_search_scope == 0) {
             auto& scene = scene::selected_scene();
 
             for (const auto& gid : scene.used_models) {
-                auto score = score_search(models_query, **engine::models::get_name(gid));
+                auto score = score_search(state::models_query, **engine::models::get_name(gid));
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(gid, score);
                 }
@@ -386,7 +388,7 @@ namespace ui {
         } else {
             const auto& names = engine::models::get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
-                auto score = score_search(models_query, names[i]);
+                auto score = score_search(state::models_query, names[i]);
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(engine::models::gid{engine::models::get_generation(i), i}, score);
                 }

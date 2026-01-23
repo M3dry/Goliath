@@ -1,4 +1,5 @@
 #include "goliath/models.hpp"
+#include "goliath/materials.hpp"
 #include "models_.hpp"
 #include "goliath/gltf.hpp"
 #include "goliath/thread_pool.hpp"
@@ -103,7 +104,7 @@ namespace engine::models {
         auto* model_data = engine::util::read_file(models_directory / make_model_path(gid), &model_size);
 
         cpu_datas[gid.id()] = engine::Model{};
-        engine::Model::load_optimized(cpu_datas[gid.id()].value(), {model_data, model_size});
+        engine::Model::load(cpu_datas[gid.id()].value(), {model_data, model_size});
 
         free(model_data);
     }
@@ -134,10 +135,10 @@ namespace engine::models {
 
             if (generations[gid.id()] != gid.gen()) goto cleanup;
 
-            auto save_size = model.get_optimized_size();
+            auto save_size = model.get_save_size();
             uint8_t* save_data = (uint8_t*)malloc(save_size);
 
-            model.save_optimized({save_data, save_size});
+            model.save({save_data, save_size});
 
             engine::util::save_file(path, save_data, save_size);
 
@@ -373,6 +374,23 @@ namespace engine::models {
 
         deleted[gid.id()] = true;
         generations[gid.id()] += 1;
+
+        uint32_t model_size;
+        auto* model_data = util::read_file(models_directory / make_model_path(gid), &model_size);
+
+        Model model;
+        Model::load(model, {model_data, model_size});
+
+        for (size_t i = 0; i < model.mesh_count; i++) {
+            auto& mesh = model.meshes[i];
+
+            auto mat_id = mesh.material_id;
+            auto instance_ix = mesh.material_instance;
+
+            materials::release_instance(mat_id, instance_ix);
+        }
+
+        model.destroy();
 
         std::filesystem::remove(models_directory / make_model_path(gid));
 

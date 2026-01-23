@@ -11,7 +11,7 @@ struct Offsets {
     uint start;
     uint relative_start;
     uint stride;
-    uint material_offset;
+    uint material_instance;
     uint indices_offset;
     uint position_offset;
     uint normal_offset;
@@ -34,7 +34,7 @@ Offsets read_offsets(const VertexData verts, const uint start_offset) {
     offsets.start = verts.data[start_offset];
     offsets.relative_start = verts.data[start_offset + 1];
     uint stride = verts.data[start_offset + 2];
-    offsets.material_offset = verts.data[start_offset + 3];
+    offsets.material_instance = verts.data[start_offset + 3];
     offsets.indices_offset = verts.data[start_offset + 4];
     offsets.position_offset = verts.data[start_offset + 5];
     offsets.normal_offset = verts.data[start_offset + 6];

@@ -68,10 +68,10 @@
 //   ::
 
 namespace engine::materials {
-    bool save_value();
-
     void load(const nlohmann::json& j);
     nlohmann::json save();
+
+    nlohmann::json default_json();
 
     const Material& get_schema(uint32_t mat_id);
     uint32_t add_schema(Material schema, std::string name);
@@ -81,6 +81,8 @@ namespace engine::materials {
     void update_instance_data(uint32_t mat_id, uint32_t instance_ix, uint8_t* new_data);
     uint32_t add_instance(uint32_t mat_id, std::string name, uint8_t* data);
     bool remove_instance(uint32_t mat_id, uint32_t instance_ix);
+    void acquire_instance(uint32_t mat_id, uint32_t instance_ix);
+    void release_instance(uint32_t mat_id, uint32_t instance_ix);
 
     Buffer get_buffer();
 }

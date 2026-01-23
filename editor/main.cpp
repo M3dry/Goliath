@@ -20,6 +20,7 @@
 #include "imgui.h"
 #include "project.hpp"
 #include "scene.hpp"
+#include "state.hpp"
 #include "ui.hpp"
 #include <GLFW/glfw3.h>
 #include <cctype>
@@ -168,6 +169,13 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
+    auto state_json = engine::util::read_json(project::editor_state);
+    if (!state_json.has_value()) {
+        state_json = state::default_json();
+    }
+
+    state::load(*state_json);
+
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
     if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::textures_registry)) {
@@ -186,7 +194,7 @@ int main(int argc, char** argv) {
     auto mats_json = engine::util::read_json(project::materials);
     if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::materials)) {
-        mats_json = nlohmann::json::array();
+        mats_json = engine::materials::default_json();
     } else if (!mats_json.has_value()) {
         printf("materials.json file is corrupted\n");
         return 0;
@@ -471,6 +479,11 @@ int main(int argc, char** argv) {
 
             cam.update_matrices();
 
+            if (state::want_to_save()) {
+                std::ofstream o{project::editor_state};
+                o << state::save();
+            }
+
             if (engine::models_to_save()) {
                 std::ofstream o{project::models_registry};
                 o << engine::models::save();
@@ -731,39 +744,42 @@ int main(int argc, char** argv) {
             engine::synchronization::end_barriers();
 
             auto shading = engine::visbuffer::shade(target_image_views[engine::get_current_frame()]);
-            for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
-                uint8_t pbr_pc[PBRPC::size]{};
-                PBRPC::write(pbr_pc,
-                             glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-                             engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
-                             engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
-                             draw_id_buffer.address(), mat_id, engine::materials::get_buffer().address());
+            auto mats_buffer = engine::materials::get_buffer().address();
+            if (mats_buffer != 0) {
+                for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
+                    uint8_t pbr_pc[PBRPC::size]{};
+                    PBRPC::write(pbr_pc,
+                                 glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                                 engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
+                                 engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
+                                 draw_id_buffer.address(), mat_id, mats_buffer);
 
-                PBRShadingSet shading_set_data{
-                    .cam_pos = cam.position,
-                    .light_pos = light_position,
-                    .light_intensity = light_intensity,
-                    .view_proj_matrix = cam.view_projection(),
-                };
+                    PBRShadingSet shading_set_data{
+                        .cam_pos = cam.position,
+                        .light_pos = light_position,
+                        .light_intensity = light_intensity,
+                        .view_proj_matrix = cam.view_projection(),
+                    };
 
-                auto pbr_shading_set = engine::descriptor::new_set(pbr_shading_set_layout);
-                engine::descriptor::begin_update(pbr_shading_set);
-                engine::descriptor::update_ubo(0, {(uint8_t*)&shading_set_data, sizeof(PBRShadingSet)});
-                engine::descriptor::end_update();
+                    auto pbr_shading_set = engine::descriptor::new_set(pbr_shading_set_layout);
+                    engine::descriptor::begin_update(pbr_shading_set);
+                    engine::descriptor::update_ubo(0, {(uint8_t*)&shading_set_data, sizeof(PBRShadingSet)});
+                    engine::descriptor::end_update();
 
-                pbr_pipeline.bind();
-                pbr_pipeline.dispatch_indirect(engine::ComputePipeline::IndirectDispatchParams{
-                    .push_constant = pbr_pc,
-                    .descriptor_indexes =
-                        {
-                            shading.vis_and_target_set,
-                            pbr_shading_set,
-                            engine::textures::get_texture_pool().set,
-                            engine::descriptor::null_set,
-                        },
-                    .indirect_buffer = engine::visbuffer::stages,
-                    .buffer_offset = shading.indirect_buffer_offset,
-                });
+                    pbr_pipeline.bind();
+                    pbr_pipeline.dispatch_indirect(engine::ComputePipeline::IndirectDispatchParams{
+                        .push_constant = pbr_pc,
+                        .descriptor_indexes =
+                            {
+                                shading.vis_and_target_set,
+                                pbr_shading_set,
+                                engine::textures::get_texture_pool().set,
+                                engine::descriptor::null_set,
+                            },
+                        .indirect_buffer = engine::visbuffer::stages,
+                        .buffer_offset = shading.indirect_buffer_offset,
+                    });
+                }
             }
 
             target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;

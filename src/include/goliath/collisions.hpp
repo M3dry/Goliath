@@ -18,4 +18,9 @@ namespace engine::collisions {
             }
         }
     };
+
+    struct Sphere {
+        glm::vec3 center;
+        float radius;
+    };
 }

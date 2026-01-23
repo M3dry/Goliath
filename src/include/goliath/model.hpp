@@ -49,9 +49,7 @@ namespace engine {
 
     struct Mesh {
         material_id material_id = (uint16_t)-1;
-        uint32_t material_texture_count = 0;
-        uint32_t material_data_size = 0;
-        void* material_data = nullptr;
+        uint32_t material_instance;
 
         engine::Topology vertex_topology;
 
@@ -77,9 +75,7 @@ namespace engine {
 
         void clone(Mesh* out) {
             out->material_id = material_id;
-            out->material_data_size = material_data_size;
-            out->material_data = malloc(out->material_data_size);
-            std::memcpy(out->material_data, material_data, material_data_size);
+            out->material_instance = material_instance;
 
             out->vertex_topology = vertex_topology;
             out->vertex_count = vertex_count;
@@ -102,7 +98,6 @@ namespace engine {
         }
 
         void destroy() {
-            free(material_data);
             free(positions);
             free(normals);
             free(tangents);
@@ -122,11 +117,11 @@ namespace engine {
         uint32_t* mesh_indexes = nullptr;
         glm::mat4* mesh_transforms = nullptr;
 
-        uint32_t get_optimized_size() const;
+        uint32_t get_save_size() const;
         // [`data`, `data` + `get_optimized_size()`) must be a valid range
-        void save_optimized(std::span<uint8_t> data) const;
+        void save(std::span<uint8_t> data) const;
 
-        static void load_optimized(Model& out, std::span<uint8_t> data);
+        static void load(Model& out, std::span<uint8_t> data);
 
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {

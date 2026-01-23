@@ -7,7 +7,6 @@
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
 #include <glm/ext/vector_float4.hpp>
-#include <optional>
 #include <nlohmann/json.hpp>
 
 namespace engine::material {
@@ -28,13 +27,7 @@ namespace engine::material {
         Mat2x2,
         Mat3x3,
         Mat4x4,
-        Padding32,
-        Padding64,
     };
-
-    constexpr std::optional<size_t> is_padding(const attribute& attr) {
-        return attr == attribute::Padding32 || attr == attribute::Padding64;
-    }
 
     constexpr size_t size(const attribute& attr) {
         switch (attr) {
@@ -55,8 +48,6 @@ namespace engine::material {
             case Mat2x2: return sizeof(glm::mat2);
             case Mat3x3: return sizeof(glm::mat3);
             case Mat4x4: return sizeof(glm::mat4);
-            case Padding32: return sizeof(uint32_t);
-            case Padding64: return sizeof(uint64_t);
         }
 
         assert(false);

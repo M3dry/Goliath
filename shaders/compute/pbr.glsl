@@ -150,32 +150,35 @@ struct PBR {
 PBR load_material(const VertexData verts, const Offsets offs) {
     PBR ret;
 
-    uint off = offs.start/4 + offs.material_offset/4;
-    ret.albedo_map = verts.data[off];
-    ret.metallic_roughness_map = verts.data[off + 1];
-    ret.normal_map = verts.data[off + 2];
-    ret.occlusion_map = verts.data[off + 3];
-    ret.emissive_map = verts.data[off + 4];
+    uint instance = offs.material_instance;
+    uint off = mats.offset_count;
+    off += mats.data[mat_id]/4;
 
-    ret.albedo_texcoord = verts.data[off + 5];
-    ret.metallic_roughness_texcoord = verts.data[off + 6];
-    ret.normal_texcoord = verts.data[off + 7];
-    ret.occlusion_texcoord = verts.data[off + 8];
-    ret.emissive_texcoord = verts.data[off + 9];
+    ret.albedo_map = mats.data[off];
+    ret.metallic_roughness_map = mats.data[off + 1];
+    ret.normal_map = mats.data[off + 2];
+    ret.occlusion_map = mats.data[off + 3];
+    ret.emissive_map = mats.data[off + 4];
 
-    ret.albedo.x = uintBitsToFloat(verts.data[off + 10]);
-    ret.albedo.y = uintBitsToFloat(verts.data[off + 11]);
-    ret.albedo.z = uintBitsToFloat(verts.data[off + 12]);
-    ret.albedo.w = uintBitsToFloat(verts.data[off + 13]);
+    ret.albedo_texcoord = mats.data[off + 5];
+    ret.metallic_roughness_texcoord = mats.data[off + 6];
+    ret.normal_texcoord = mats.data[off + 7];
+    ret.occlusion_texcoord = mats.data[off + 8];
+    ret.emissive_texcoord = mats.data[off + 9];
 
-    ret.metallic_factor = uintBitsToFloat(verts.data[off + 14]);
-    ret.roughness_factor = uintBitsToFloat(verts.data[off + 15]);
-    ret.normal_factor = uintBitsToFloat(verts.data[off + 16]);
-    ret.occlusion_factor = uintBitsToFloat(verts.data[off + 17]);
+    ret.albedo.x = uintBitsToFloat(mats.data[off + 10]);
+    ret.albedo.y = uintBitsToFloat(mats.data[off + 11]);
+    ret.albedo.z = uintBitsToFloat(mats.data[off + 12]);
+    ret.albedo.w = uintBitsToFloat(mats.data[off + 13]);
 
-    ret.emissive_factor.x = uintBitsToFloat(verts.data[off + 18]);
-    ret.emissive_factor.y = uintBitsToFloat(verts.data[off + 19]);
-    ret.emissive_factor.z = uintBitsToFloat(verts.data[off + 20]);
+    ret.metallic_factor = uintBitsToFloat(mats.data[off + 14]);
+    ret.roughness_factor = uintBitsToFloat(mats.data[off + 15]);
+    ret.normal_factor = uintBitsToFloat(mats.data[off + 16]);
+    ret.occlusion_factor = uintBitsToFloat(mats.data[off + 17]);
+
+    ret.emissive_factor.x = uintBitsToFloat(mats.data[off + 18]);
+    ret.emissive_factor.y = uintBitsToFloat(mats.data[off + 19]);
+    ret.emissive_factor.z = uintBitsToFloat(mats.data[off + 20]);
 
     return ret;
 }

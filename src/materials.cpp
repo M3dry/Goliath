@@ -1,7 +1,7 @@
 #include "goliath/materials.hpp"
-#include "materials_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/transport.hpp"
+#include "materials_.hpp"
 
 #include <vector>
 #include <vulkan/vulkan_core.h>
@@ -15,6 +15,8 @@ namespace engine::materials {
         uint32_t count = 0;
         std::vector<std::string> names{};
         std::vector<uint8_t> data{};
+        std::vector<uint32_t> ref_counts{};
+
         std::vector<uint32_t> deleted{};
     };
 
@@ -29,15 +31,9 @@ namespace engine::materials {
     std::array<Buffer, 2> gpu_buffers{};
     uint64_t next_buffer_timeline = -1;
 
-    bool save_value() {
-        return want_save;
-    }
-
     void init() {
         init_called = true;
-
-        assert(add_schema(material::pbr::schema, "PBR - Metallic Roughness") == 0);
-        want_save = false;
+        update = true;
     }
 
     void destroy() {
@@ -96,16 +92,16 @@ namespace engine::materials {
         return true;
     }
 
-    void from_json(const nlohmann::json& j, Instances& insts) {}
-
     struct JsonInstanceEntry {
         uint32_t ix;
         std::vector<uint8_t> data;
         std::string name;
+        uint32_t ref_count;
     };
 
     struct JsonEntry {
         uint32_t ix;
+        std::string name;
         Material schema;
         std::vector<JsonInstanceEntry> instances;
     };
@@ -114,10 +110,12 @@ namespace engine::materials {
         j["ix"].get_to(inst.ix);
         j["data"].get_to(inst.data);
         j["name"].get_to(inst.name);
+        j["ref_count"].get_to(inst.ref_count);
     }
 
     void from_json(const nlohmann::json& j, JsonEntry& e) {
         j["ix"].get_to(e.ix);
+        j["name"].get_to(e.name);
         j["schema"].get_to(e.schema);
         j["instances"].get_to(e.instances);
     }
@@ -128,8 +126,9 @@ namespace engine::materials {
         std::vector<JsonEntry> entries = j;
 
         offsets.clear();
+        names.clear();
         instances.clear();
-        schemas.resize(1);
+        schemas.clear();
 
         deleted.clear();
 
@@ -146,11 +145,8 @@ namespace engine::materials {
             }
 
             auto schema_size = entry.schema.total_size;
-            if (mat_ix == 0) {
-                assert(entry.schema == schemas[0]);
-            } else {
-                schemas.emplace_back(entry.schema);
-            }
+            schemas.emplace_back(entry.schema);
+            names.emplace_back(entry.name);
             instances.emplace_back(Instances{});
 
             auto& insts = instances[entry.ix];
@@ -160,19 +156,24 @@ namespace engine::materials {
                     insts.data.resize(insts.data.size() + schema_size);
                     insts.deleted.emplace_back(insts.count);
                     insts.names.emplace_back();
+                    insts.ref_counts.emplace_back(0);
                     insts.count++;
                 }
 
                 insts.data.resize(insts.data.size() + schema_size);
                 std::memcpy(insts.data.data(), inst_entry.data.data(), schema_size);
                 insts.names.emplace_back(inst_entry.name);
+                insts.ref_counts.emplace_back(inst_entry.ref_count);
                 insts.count++;
             }
 
-            offsets.emplace_back(mat_ix == 0 ? 0 : instances[mat_ix - 1].count*schemas[mat_ix - 1].total_size + offsets.back());
+            offsets.emplace_back(
+                mat_ix == 0 ? 0 : instances[mat_ix - 1].count * schemas[mat_ix - 1].total_size + offsets.back());
 
             mat_ix++;
         }
+
+        update = true;
     }
 
     nlohmann::json save() {
@@ -192,6 +193,7 @@ namespace engine::materials {
                     {"ix", j},
                     {"data", std::span{insts.data.data() + schema_size * j, schema_size}},
                     {"name", insts.names[j]},
+                    {"ref_count", insts.ref_counts[j]},
                 });
             }
 
@@ -204,6 +206,15 @@ namespace engine::materials {
         }
 
         return arr;
+    }
+
+    nlohmann::json default_json() {
+        return nlohmann::json{{
+            {"ix", 0},
+            {"name", "PBR - Metallic Roughness"},
+            {"schema", material::pbr::schema},
+            {"instances", nlohmann::json::array()},
+        }};
     }
 
     const Material& get_schema(uint32_t mat_id) {
@@ -247,7 +258,11 @@ namespace engine::materials {
     bool remove_schema(uint32_t mat_id) {
         assert(init_called);
 
-        if (instances[mat_id].count != 0) return false;
+        bool no_refs = true;
+        for (const auto& ref_count : instances[mat_id].ref_counts) {
+            no_refs &= ref_count == 0;
+        }
+        if (no_refs) return false;
 
         if (offsets.size() != mat_id + 1) {
             offsets[mat_id + 1] = offsets[mat_id];
@@ -301,7 +316,8 @@ namespace engine::materials {
         insts.data.resize(insts.data.size() + schema_size);
         std::memcpy(insts.data.data() + write_off, data, schema_size);
 
-        instances[mat_id].names.emplace_back(name);
+        insts.names.emplace_back(name);
+        insts.ref_counts.emplace_back(0);
 
         for (size_t i = mat_id + 1; i < offsets.size(); i++) {
             offsets[i] += schema_size;
@@ -317,10 +333,27 @@ namespace engine::materials {
     bool remove_instance(uint32_t mat_id, uint32_t instance_ix) {
         assert(init_called);
 
-        instances[mat_id].deleted.emplace_back(instance_ix);
+        auto& insts = instances[mat_id];
+        if (insts.ref_counts[instance_ix] != 0) {
+            return false;
+        }
+
+        insts.deleted.emplace_back(instance_ix);
 
         want_save = true;
         return true;
+    }
+
+    void acquire_instance(uint32_t mat_id, uint32_t instance_ix) {
+        assert(init_called);
+
+        instances[mat_id].ref_counts[instance_ix]++;
+    }
+
+    void release_instance(uint32_t mat_id, uint32_t instance_ix) {
+        assert(init_called);
+
+        instances[mat_id].ref_counts[instance_ix]--;
     }
 
     Buffer get_buffer() {

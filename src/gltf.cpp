@@ -204,9 +204,7 @@ bool resize = false;
 void parse_material(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model, const tinygltf::Material& material,
                     Handled& handled) {
     out->material_id = 0;
-    out->material_data_size = engine::material::pbr::schema.total_size;
-    out->material_data = malloc(out->material_data_size);
-    out->material_texture_count = 5;
+    uint8_t* material_data = (uint8_t*)malloc(engine::materials::get_schema(0).total_size);
 
     engine::material::pbr::Data pbr_data{
         .albedo_map = parse_texture(prim_name + ": Albedo", model, material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
@@ -229,9 +227,12 @@ void parse_material(const std::string& prim_name, engine::Mesh* out, const tinyg
         .occlusion_factor = (float)material.occlusionTexture.strength,
         .emissive_factor = glm::make_vec3(material.emissiveFactor.data()),
     };
+    engine::material::pbr::write_data_blob(pbr_data, material_data);
 
-    engine::material::pbr::write_data_blob(pbr_data, out->material_data);
-    engine::materials::add_instance(0, prim_name.c_str(), (uint8_t*)out->material_data);
+    out->material_instance = engine::materials::add_instance(0, prim_name.c_str(), material_data);
+    engine::materials::acquire_instance(0, out->material_instance);
+
+    free(material_data);
 }
 
 engine::gltf::Err parse_primitive(const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
