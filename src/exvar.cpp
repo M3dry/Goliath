@@ -248,34 +248,27 @@ namespace engine::exvar {
     }
 
     bool Registry::imgui_draw_var(Var& var) {
-        if (var.type.count == 1) ImGui::SameLine();
-        else ImGui::Indent();
+        ImGui::SameLine();
 
         bool modified = false;
         var.type.visit(
             [&](auto&& value) {
                 using T = std::remove_pointer_t<std::decay_t<decltype(value)>>;
 
-                for (size_t i = 0; i < var.type.count; i++) {
-                    ImGui::PushID(i);
-                    std::visit(
-                        [&](auto&& im) {
-                            using IM = std::decay_t<decltype(im)>;
-                            if constexpr ((std::same_as<IM, imgui_reflection::Drag> ||
-                                           std::same_as<IM, imgui_reflection::Slider>) &&
-                                          (std::same_as<T, bool> || std::same_as<T, std::string>)) {
-                                assert(false);
-                            } else {
-                                modified |= imgui_reflection::input("", im, value + i);
-                            }
-                        },
-                        var.input_method);
-                    ImGui::PopID();
-                }
+                std::visit(
+                    [&](auto&& im) {
+                        using IM = std::decay_t<decltype(im)>;
+                        if constexpr ((std::same_as<IM, imgui_reflection::Drag> ||
+                                       std::same_as<IM, imgui_reflection::Slider>) &&
+                                      (std::same_as<T, bool> || std::same_as<T, std::string>)) {
+                            assert(false);
+                        } else {
+                            modified |= imgui_reflection::input("", im, value, var.type.count);
+                        }
+                    },
+                    var.input_method);
             },
             var.address);
-
-        if (var.type.count != 1) ImGui::Unindent();
 
         return modified;
     }

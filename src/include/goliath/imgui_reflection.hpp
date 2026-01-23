@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -43,7 +44,10 @@ namespace engine::imgui_reflection {
 
     template <typename T> inline ImGuiDataType imgui_data_type();
 
-#define HELPER(t, imgui_t) template <> inline ImGuiDataType imgui_data_type<t>() { return ImGuiDataType_ ## imgui_t; }
+#define HELPER(t, imgui_t)                                                                                             \
+    template <> inline ImGuiDataType imgui_data_type<t>() {                                                            \
+        return ImGuiDataType_##imgui_t;                                                                                \
+    }
     HELPER(int8_t, S8)
     HELPER(int16_t, S16)
     HELPER(int32_t, S32)
@@ -56,50 +60,102 @@ namespace engine::imgui_reflection {
     HELPER(double, Double)
 #undef HELPER
 
-    template <typename T>
-    bool input(const char* label, const Input& i, T* value) {
+    template <typename T> bool input(const char* label, const Input& i, T* value, size_t n = 1) {
         auto data_type = imgui_data_type<T>();
 
-        return ImGui::InputScalar(label, data_type, value);
+        return ImGui::InputScalarN(label, data_type, value, n);
     }
 
-    template <>
-    inline bool input<bool>(const char* label, const Input& i, bool* value) {
+    template <> inline bool input<bool>(const char* label, const Input& i, bool* value, size_t n) {
         if (i.flags & Input_ReadOnly) {
-            ImGui::TextColored(*(bool*)value ? ImVec4(41 / 255.0f, 240 / 255.0f, 94 / 255.0f, 1.0f)
-                                             : ImVec4(230 / 255.0f, 75 / 255.0f, 55 / 255.0f, 1.0f),
-                               *(bool*)value ? "Enabled" : "Disabled");
+            for (size_t i = 0; i < n; i++) {
+                bool v = ((bool*)value)[i];
+
+                if (i != 0) ImGui::SameLine();
+                ImGui::TextColored(v ? ImVec4(41 / 255.0f, 240 / 255.0f, 94 / 255.0f, 1.0f)
+                                     : ImVec4(230 / 255.0f, 75 / 255.0f, 55 / 255.0f, 1.0f),
+                                   v ? "Enabled" : "Disabled");
+
+                ImGui::SameLine();
+                ImGui::TextUnformatted(label);
+            }
+
             return false;
         } else {
-            return ImGui::Checkbox(label, value);
+            bool modified = false;
+            for (size_t i = 0; i < n; i++) {
+                ImGui::PushID(i);
+
+                if (i != 0) ImGui::SameLine();
+                modified |= ImGui::Checkbox(i == n - 1 ? label : "##checkbox", value);
+
+                ImGui::PopID();
+            }
+
+            return modified;
         }
     }
 
-    template <>
-    inline bool input<std::string>(const char* label, const Input& i, std::string* value) {
-        return ImGui::InputText("##input", value, i.flags);
+    template <> inline bool input<std::string>(const char* label, const Input& input, std::string* value, size_t n) {
+        bool modified = false;
+
+        for (size_t i = 0; i < n; i++) {
+            ImGui::PushID(i);
+            if (i != 0) ImGui::SameLine();
+            modified |= ImGui::InputText(i == n - 1 ? label : "##checkbox", value, input.flags);
+            ImGui::PopID();
+        }
+
+        return modified;
     }
 
-    template <typename T>
-    inline bool input(const char* label, const Slider& s, T* value) {
+    template <typename T> inline bool input(const char* label, const Slider& s, T* value, size_t n = 1) {
         auto data_type = imgui_data_type<T>();
 
-        return ImGui::SliderScalar(label, data_type, value, s.min, s.max, s.format, s.flags);
+        return ImGui::SliderScalarN(label, data_type, value, n, s.min, s.max, s.format, s.flags);
     }
 
-    template <typename T>
-    inline bool input(const char* label, const Drag& d, T* value) {
+    template <typename T> inline bool input(const char* label, const Drag& d, T* value, size_t n = 1) {
         auto data_type = imgui_data_type<T>();
 
-        return ImGui::DragScalar(label, data_type, value, d.speed, d.min, d.max, d.format, d.flags);
+        return ImGui::DragScalarN(label, data_type, value, n, d.speed, d.min, d.max, d.format, d.flags);
     }
-    
+
     using InputMethod = std::variant<Input, Slider, Drag>;
 
     template <typename T>
-    inline bool input(const char* label, const InputMethod& im, T* value) {
-        std::visit([&](auto&& arg){
-            input<T>(label, arg, value);
-        }, im);
+    inline bool input(const char* label, const InputMethod& im, T* value, std::array<size_t, 2> dimension = {1, 1}, const bool& column_major = true) {
+        return std::visit(
+            [&](auto&& arg) {
+                bool modified = false;
+                if (dimension[0] != 1 && dimension[1] != 1) {
+                    ImGui::BeginGroup();
+
+                    for (size_t n = 0; n < dimension[0]; n++) {
+                        ImGui::PushID(n);
+
+                        for (size_t m = 0; m < dimension[1]; m++) {
+                            ImGui::PushID(m);
+                            auto off = column_major ? m * dimension[1] + n : n * dimension[0] + m;
+                            modified |= input<T>(n == dimension[0] - 1 && m == dimension[1] - 1 ? label : "", arg, value + off);
+                            ImGui::PopID();
+                        }
+
+                        ImGui::PopID();
+                    }
+                    ImGui::EndGroup();
+                } else if (dimension[0] == 1) {
+                    modified |= input<T>(label, arg, value, dimension[1]);
+                } else if (dimension[1] == 1) {
+                    for (size_t i = 0; i < dimension[0]; i++) {
+                        ImGui::PushID(i);
+                        modified |= input<T>(i == dimension[0] - 1 ? label : "", arg, value + i, 1);
+                        ImGui::PopID();
+                    }
+                }
+
+                return modified;
+            },
+            im);
     }
 }

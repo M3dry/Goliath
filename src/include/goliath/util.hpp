@@ -71,12 +71,12 @@ namespace engine::util {
     };
 
     template <typename T> struct is_mat : std::false_type {};
-    template <size_t N, typename T> struct is_mat<glm::vec<N, T>> : std::true_type {};
+    template <size_t N, size_t M, typename T> struct is_mat<glm::mat<N, M, T>> : std::true_type {};
     template <typename T> static constexpr bool is_mat_v = is_mat<T>::value;
 
     template <typename T> struct mat_data;
     template <size_t N, size_t M, typename T> struct mat_data<glm::mat<N, M, T>> {
         using Component = T;
-        static constexpr size_t dimension[2] = {N, M};
+        static constexpr std::array<size_t, 2> dimension = {N, M};
     };
 }

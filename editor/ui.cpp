@@ -153,7 +153,8 @@ namespace ui {
             ImGui_ImplVulkan_RemoveTexture(game_window_texture);
 
             auto image_upload =
-                engine::GPUImage::upload(std::format("Game window texture #{}", curr_frame).c_str(), engine::GPUImageInfo{}
+                engine::GPUImage::upload(std::format("Game window texture #{}", curr_frame).c_str(),
+                                         engine::GPUImageInfo{}
                                              .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                              .width(avail.x)
@@ -550,55 +551,45 @@ namespace ui {
             const auto& schema = engine::materials::get_schema(mesh.material_id);
             auto material_data = engine::materials::get_instance_data(mesh.material_id, mesh.material_instance);
 
-
             if (ImGui::CollapsingHeader(std::format("Mesh #{}", m).c_str())) {
                 modified |= material_inputs(schema, material_data);
-                ImGui::TreePop();
             }
+
+            engine::materials::update_instance_data(mesh.material_id, mesh.material_instance, material_data.data());
         }
-
-        // TODO: update materials buffer
-    }
-
-    template <typename T>
-    bool attribute_input(const std::string& name, T* value, std::array<size_t, 2> dimension) {
-        bool modified = false;
-        for (size_t m = 0; m < dimension[0]; m++) {
-            for (size_t n = 0; n < dimension[1]; n++) {
-                if (n != 0) ImGui::SameLine();
-
-                modified |= engine::imgui_reflection::input<T>(name.c_str(), engine::imgui_reflection::Input{}, value + m*dimension[0] + n);
-            }
-        }
-
-        return modified;
     }
 
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data) {
         bool modified = false;
         size_t offset = 0;
+
+        constexpr auto im = engine::imgui_reflection::Input{};
         for (size_t i = 0; i < schema.attributes.size(); i++) {
             auto& name = schema.names[i];
 
-            engine::material::visit([&]<typename Attr>() {
-                auto* data_ptr = (Attr*)(data.data() + offset);
+            engine::material::visit(
+                [&]<typename Attr>() {
+                    auto* data_ptr = (Attr*)(data.data() + offset);
 
-                if constexpr (engine::util::is_vec_v<Attr>) {
-                    using VecData = engine::util::vec_data<Attr>;
+                    if constexpr (engine::util::is_vec_v<Attr>) {
+                        using VecData = engine::util::vec_data<Attr>;
 
-                    attribute_input(name, (typename VecData::Component*)data_ptr, {VecData::dimension, 1});
-                } else if constexpr (engine::util::is_mat_v<Attr>) {
-                    using MatData = engine::util::mat_data<Attr>;
+                        engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
+                                                        {1, VecData::dimension});
+                    } else if constexpr (engine::util::is_mat_v<Attr>) {
+                        using MatData = engine::util::mat_data<Attr>;
 
-                    attribute_input(name, (typename MatData::Component*)data_ptr, MatData::dimension);
-                } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
-                    // TODO: texture picker
-                } else {
-                    attribute_input(name, data_ptr, {1, 1});
-                }
+                        engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
+                                                        MatData::dimension);
+                    } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
+                        // TODO: texture picker
+                    } else {
+                        engine::imgui_reflection::input(name.c_str(), im, data_ptr);
+                    }
 
-                offset += sizeof(Attr);
-            }, schema.attributes[i]);
+                    offset += sizeof(Attr);
+                },
+                schema.attributes[i]);
         }
 
         return modified;

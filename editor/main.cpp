@@ -524,7 +524,7 @@ int main(int argc, char** argv) {
             ui::begin();
             ImGui::DockSpaceOverViewport();
 
-            if (ImGui::Begin("Editor Inspector")) {
+            if (ImGui::Begin("Editor Inspector", nullptr, ImGuiWindowFlags_HorizontalScrollbar)) {
                 exvar_reg.imgui_ui();
             }
             ImGui::End();
@@ -586,6 +586,11 @@ int main(int argc, char** argv) {
 
             ImGui::Begin("Transformation");
             ui::transform_pane(cam);
+            ImGui::End();
+
+            if (ImGui::Begin("Materials")) {
+                ui::selected_model_materials_pane();
+            }
             ImGui::End();
 
             engine::imgui::end();
