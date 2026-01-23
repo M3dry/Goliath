@@ -1,6 +1,7 @@
 #pragma once
 
 #include "goliath/camera.hpp"
+#include "goliath/material.hpp"
 #include "goliath/texture.hpp"
 #include "imgui.h"
 #include "goliath/models.hpp"
@@ -28,4 +29,7 @@ namespace ui {
     void transform_pane(engine::Camera& cam);
 
     void scene_pane();
+
+    void selected_model_materials_pane();
+    bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);
 }

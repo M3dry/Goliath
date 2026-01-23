@@ -3,6 +3,7 @@
 #include <cmath>
 #include <expected>
 #include <filesystem>
+#include <glm/detail/qualifier.hpp>
 #include <nlohmann/json.hpp>
 
 #include <volk.h>
@@ -58,4 +59,24 @@ namespace engine::util {
     uint32_t constexpr align_up(uint32_t alignment, uint32_t size) {
         return (size + alignment - 1) & ~(alignment - 1);
     }
+
+    template <typename T> struct is_vec : std::false_type {};
+    template <size_t N, typename T> struct is_vec<glm::vec<N, T>> : std::true_type {};
+    template <typename T> static constexpr bool is_vec_v = is_vec<T>::value;
+
+    template <typename T> struct vec_data;
+    template <size_t N, typename T> struct vec_data<glm::vec<N, T>> {
+        using Component = T;
+        static constexpr size_t dimension = N;
+    };
+
+    template <typename T> struct is_mat : std::false_type {};
+    template <size_t N, typename T> struct is_mat<glm::vec<N, T>> : std::true_type {};
+    template <typename T> static constexpr bool is_mat_v = is_mat<T>::value;
+
+    template <typename T> struct mat_data;
+    template <size_t N, size_t M, typename T> struct mat_data<glm::mat<N, M, T>> {
+        using Component = T;
+        static constexpr size_t dimension[2] = {N, M};
+    };
 }

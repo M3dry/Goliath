@@ -39,18 +39,43 @@ namespace engine::material {
             case Vec2: return sizeof(glm::vec2);
             case Vec3: return sizeof(glm::vec3);
             case Vec4: return sizeof(glm::vec4);
-            case UVec2: return sizeof(glm::vec<2, uint32_t>);
-            case UVec3: return sizeof(glm::vec<3, uint32_t>);
-            case UVec4: return sizeof(glm::vec<4, uint32_t>);
-            case IVec2: return sizeof(glm::vec<2, int32_t>);
-            case IVec3: return sizeof(glm::vec<3, int32_t>);
-            case IVec4: return sizeof(glm::vec<4, int32_t>);
+            case UVec2: return sizeof(glm::uvec2);
+            case UVec3: return sizeof(glm::uvec3);
+            case UVec4: return sizeof(glm::uvec4);
+            case IVec2: return sizeof(glm::ivec2);
+            case IVec3: return sizeof(glm::ivec3);
+            case IVec4: return sizeof(glm::ivec4);
             case Mat2x2: return sizeof(glm::mat2);
             case Mat3x3: return sizeof(glm::mat3);
             case Mat4x4: return sizeof(glm::mat4);
         }
 
         assert(false);
+    }
+
+    template <typename F>
+    constexpr decltype(auto) visit(F&& f, attribute attr) {
+    #define HELPER(attr_v, t) case attr_v: return f.template operator()<t>()
+        switch (attr) {
+            using enum attribute;
+            HELPER(Texture, textures::gid);
+            HELPER(Float, float);
+            HELPER(Uint, uint32_t);
+            HELPER(Int, int32_t);
+            HELPER(Vec2, glm::vec2);
+            HELPER(Vec3, glm::vec3);
+            HELPER(Vec4, glm::vec4);
+            HELPER(UVec2, glm::uvec2);
+            HELPER(UVec3, glm::uvec3);
+            HELPER(UVec4, glm::uvec4);
+            HELPER(IVec2, glm::ivec2);
+            HELPER(IVec3, glm::ivec3);
+            HELPER(IVec4, glm::ivec4);
+            HELPER(Mat2x2, glm::mat2);
+            HELPER(Mat3x3, glm::mat3);
+            HELPER(Mat4x4, glm::mat4);
+        }
+#undef HELPER
     }
 }
 
@@ -121,36 +146,6 @@ namespace engine {
                 std::memcpy(&gid, material_data + offset, sizeof(uint32_t));
 
                 textures::release(&gid, 1);
-            }
-        }
-
-        void imgui_draw(uint8_t* data) {
-            uint32_t offset = 0;
-
-            for (size_t i = 0; i < names.size(); i++) {
-                const auto& attr = attributes[i];
-
-                switch (attr) {
-                    using enum material::attribute;
-                    case Texture:
-                    case Float:
-                    case Uint:
-                    case Int:
-                    case Vec2:
-                    case Vec3:
-                    case Vec4:
-                    case UVec2:
-                    case UVec3:
-                    case UVec4:
-                    case IVec2:
-                    case IVec3:
-                    case IVec4:
-                    case Mat2x2:
-                    case Mat3x3:
-                    case Mat4x4: break;
-                }
-
-                offset += size(attr);
             }
         }
 
