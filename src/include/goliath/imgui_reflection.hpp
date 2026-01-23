@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 
 namespace engine::imgui_reflection {
@@ -124,29 +125,33 @@ namespace engine::imgui_reflection {
     using InputMethod = std::variant<Input, Slider, Drag>;
 
     template <typename T>
-    inline bool input(const char* label, const InputMethod& im, T* value, std::array<size_t, 2> dimension = {1, 1}, const bool& column_major = true) {
+    inline bool input(const char* label, const InputMethod& im, T* value, std::array<size_t, 2> dimension = {1, 1}) {
         return std::visit(
             [&](auto&& arg) {
                 bool modified = false;
                 if (dimension[0] != 1 && dimension[1] != 1) {
                     ImGui::BeginGroup();
-
-                    for (size_t n = 0; n < dimension[0]; n++) {
+                    for (size_t n = 0; n < dimension[1]; n++) {
                         ImGui::PushID(n);
+                        ImGui::PushMultiItemsWidths(dimension[0], ImGui::CalcItemWidth());
 
-                        for (size_t m = 0; m < dimension[1]; m++) {
+                        for (size_t m = 0; m < dimension[0]; m++) {
                             ImGui::PushID(m);
-                            auto off = column_major ? m * dimension[1] + n : n * dimension[0] + m;
-                            modified |= input<T>(n == dimension[0] - 1 && m == dimension[1] - 1 ? label : "", arg, value + off);
+                            if (m != 0) ImGui::SameLine();
+
+                            auto off = m * dimension[1] + n;
+                            modified |= input<T>(n == dimension[1] - 1 && m == dimension[0] - 1 ? label : "", arg, value + off);
+
                             ImGui::PopID();
+                            ImGui::PopItemWidth();
                         }
 
                         ImGui::PopID();
                     }
                     ImGui::EndGroup();
-                } else if (dimension[0] == 1) {
-                    modified |= input<T>(label, arg, value, dimension[1]);
                 } else if (dimension[1] == 1) {
+                    modified |= input<T>(label, arg, value, dimension[1]);
+                } else if (dimension[0] == 1) {
                     for (size_t i = 0; i < dimension[0]; i++) {
                         ImGui::PushID(i);
                         modified |= input<T>(i == dimension[0] - 1 ? label : "", arg, value + i, 1);

@@ -1,7 +1,6 @@
 #include "ui.hpp"
 
 #include "ImGuizmo/ImGuizmo.h"
-#include "goliath/imgui_reflection.hpp"
 #include "goliath/materials.hpp"
 #include "state.hpp"
 #include <glm/ext/matrix_transform.hpp>
@@ -11,6 +10,7 @@
 #undef IMVIEWGUIZMO_IMPLEMENTATION
 #include "goliath/camera.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/imgui_reflection.hpp"
 #include "goliath/models.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
@@ -575,7 +575,7 @@ namespace ui {
                         using VecData = engine::util::vec_data<Attr>;
 
                         engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
-                                                        {1, VecData::dimension});
+                                                        {VecData::dimension, 1});
                     } else if constexpr (engine::util::is_mat_v<Attr>) {
                         using MatData = engine::util::mat_data<Attr>;
 
