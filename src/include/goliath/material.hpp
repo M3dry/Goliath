@@ -124,8 +124,39 @@ namespace engine {
             }
         }
 
+        void imgui_draw(uint8_t* data) {
+            uint32_t offset = 0;
+
+            for (size_t i = 0; i < names.size(); i++) {
+                const auto& attr = attributes[i];
+
+                switch (attr) {
+                    using enum material::attribute;
+                    case Texture:
+                    case Float:
+                    case Uint:
+                    case Int:
+                    case Vec2:
+                    case Vec3:
+                    case Vec4:
+                    case UVec2:
+                    case UVec3:
+                    case UVec4:
+                    case IVec2:
+                    case IVec3:
+                    case IVec4:
+                    case Mat2x2:
+                    case Mat3x3:
+                    case Mat4x4: break;
+                }
+
+                offset += size(attr);
+            }
+        }
+
         constexpr bool operator==(const Material& other) const {
-            return total_size == other.total_size && names == other.names && attributes == other.attributes && texture_gid_offsets == other.texture_gid_offsets;
+            return total_size == other.total_size && names == other.names && attributes == other.attributes &&
+                   texture_gid_offsets == other.texture_gid_offsets;
         }
     };
 

@@ -147,6 +147,25 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
+    EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
+    EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
+    EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
+
+    EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
+    EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
+
+    glm::vec3 look_at{0.0f};
+    engine::Camera cam{};
+    cam.set_projection(engine::camera::Perspective{
+        .fov = glm::radians(fov),
+        .aspect_ratio = 16.0f / 10.0f,
+    });
+    cam.position = glm::vec3{10.0f};
+    cam.look_at(look_at);
+    cam.update_matrices();
+
+    exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
+
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
         return 0;
@@ -171,10 +190,14 @@ int main(int argc, char** argv) {
 
     auto state_json = engine::util::read_json(project::editor_state);
     if (!state_json.has_value()) {
-        state_json = state::default_json();
+        state_json = nlohmann::json{
+            {"state", state::default_json()},
+            {"exvars", nlohmann::json::array()},
+        };
     }
 
-    state::load(*state_json);
+    state::load((*state_json)["state"]);
+    exvar_reg.override((*state_json)["exvars"]);
 
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
     if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -390,29 +413,8 @@ int main(int argc, char** argv) {
     VkBufferMemoryBarrier2 model_barrier{};
     bool model_barrier_applied = true;
 
-    EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
-
-    glm::vec3 look_at{0.0f};
-    engine::Camera cam{};
-    cam.set_projection(engine::camera::Perspective{
-        .fov = glm::radians(fov),
-        .aspect_ratio = 16.0f / 10.0f,
-    });
-    cam.position = glm::vec3{10.0f};
-    cam.look_at(look_at);
-    cam.update_matrices();
-
-    exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
-
-    EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::exvar::InputFlags::ReadOnly);
-
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     engine::imgui::enable(lock_cam);
-
-    EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
-
-    EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
-    EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
 
     ui::init();
 
@@ -445,6 +447,8 @@ int main(int argc, char** argv) {
 
             if (engine::event::was_released(GLFW_KEY_L)) {
                 lock_cam = !lock_cam;
+                exvar_reg.modified();
+
                 glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                 engine::imgui::enable(lock_cam);
             }
@@ -470,6 +474,7 @@ int main(int argc, char** argv) {
                 auto normalized_movement = glm::normalize(movement);
 
                 cam.position += -normalized_movement.z * forward + normalized_movement.x * right;
+                exvar_reg.modified();
             }
 
             auto mouse_delta = engine::event::get_mouse_delta();
@@ -479,9 +484,12 @@ int main(int argc, char** argv) {
 
             cam.update_matrices();
 
-            if (state::want_to_save()) {
+            if (state::want_to_save() || exvar_reg.want_to_save()) {
                 std::ofstream o{project::editor_state};
-                o << state::save();
+                o << nlohmann::json{
+                    {"state", state::save()},
+                    {"exvars", exvar_reg.save()},
+                };
             }
 
             if (engine::models_to_save()) {
@@ -989,6 +997,9 @@ int main(int argc, char** argv) {
     engine::culling::destroy();
     engine::visbuffer::destroy();
     engine::destroy();
+
+    exvar_reg.destroy();
+
     return 0;
 }
 

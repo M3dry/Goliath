@@ -1,87 +1,9 @@
 #include "goliath/exvar.hpp"
 #include "imgui.h"
-#include "misc/cpp/imgui_stdlib.h"
 #include <type_traits>
+#include <variant>
 
 namespace engine::exvar {
-    void imgui_input_method(const Registry::Input& i, ComponentType ct, void* value) {
-        uint32_t imgui_flags = (uint32_t)i.flags;
-
-#define HELPER(ct_type, imgui_type)                                                                                    \
-    case ct_type: ImGui::InputScalar("##input", imgui_type, value, NULL, NULL, NULL, imgui_flags); break
-
-        switch (ct) {
-            HELPER(Int8, ImGuiDataType_S8);
-            HELPER(Int16, ImGuiDataType_S16);
-            HELPER(Int32, ImGuiDataType_S32);
-            HELPER(Int64, ImGuiDataType_S64);
-            HELPER(UInt8, ImGuiDataType_U8);
-            HELPER(UInt16, ImGuiDataType_U16);
-            HELPER(UInt32, ImGuiDataType_U32);
-            HELPER(UInt64, ImGuiDataType_U64);
-            HELPER(Float, ImGuiDataType_Float);
-            HELPER(Double, ImGuiDataType_Double);
-            case Bool: {
-                auto read_only = imgui_flags & (uint32_t)InputFlags::ReadOnly;
-
-                if (read_only) {
-                    ImGui::TextColored(*(bool*)value ? ImVec4(41 / 255.0f, 240 / 255.0f, 94 / 255.0f, 1.0f)
-                                                     : ImVec4(230 / 255.0f, 75 / 255.0f, 55 / 255.0f, 1.0f),
-                                       *(bool*)value ? "Enabled" : "Disabled");
-                } else {
-                    ImGui::Checkbox("##input", (bool*)value);
-                }
-                break;
-            }
-            case String: ImGui::InputText("##input", (std::string*)value, imgui_flags); break;
-        }
-#undef HELPER
-    }
-
-    void imgui_input_method(const Registry::Slider& slider, ComponentType ct, void* value) {
-#define HELPER(ct_type, imgui_type)                                                                                    \
-    case ct_type: ImGui::SliderScalar("##input", imgui_type, value, slider.min, slider.max); break
-
-        switch (ct) {
-            HELPER(Int8, ImGuiDataType_S8);
-            HELPER(Int16, ImGuiDataType_S16);
-            HELPER(Int32, ImGuiDataType_S32);
-            HELPER(Int64, ImGuiDataType_S64);
-            HELPER(UInt8, ImGuiDataType_U8);
-            HELPER(UInt16, ImGuiDataType_U16);
-            HELPER(UInt32, ImGuiDataType_U32);
-            HELPER(UInt64, ImGuiDataType_U64);
-            HELPER(Float, ImGuiDataType_Float);
-            HELPER(Double, ImGuiDataType_Double);
-            case Bool:
-            case String: assert(false);
-        }
-
-#undef HELPER
-    }
-
-    void imgui_input_method(const Registry::Drag& drag, ComponentType ct, void* value) {
-#define HELPER(ct_type, imgui_type)                                                                                    \
-    case ct_type: ImGui::DragScalar("##input", imgui_type, value, 1.0f, drag.min, drag.max); break
-
-        switch (ct) {
-            HELPER(Int8, ImGuiDataType_S8);
-            HELPER(Int16, ImGuiDataType_S16);
-            HELPER(Int32, ImGuiDataType_S32);
-            HELPER(Int64, ImGuiDataType_S64);
-            HELPER(UInt8, ImGuiDataType_U8);
-            HELPER(UInt16, ImGuiDataType_U16);
-            HELPER(UInt32, ImGuiDataType_U32);
-            HELPER(UInt64, ImGuiDataType_U64);
-            HELPER(Float, ImGuiDataType_Float);
-            HELPER(Double, ImGuiDataType_Double);
-            case Bool:
-            case String: assert(false);
-        }
-
-#undef HELPER
-    }
-
     path::path(std::string str) : path_str(str) {
         size_t pos = 0;
         while (true) {
@@ -143,28 +65,49 @@ namespace engine::exvar {
             nullptr);
     }
 
-    Registry::Registry() {}
-
-    void Registry::add_input_reference(path path, Type type, void* address, InputFlags flags) {
-        add_reference(path, type, address, Input{flags});
+    void Registry::Var::destroy() {
+        std::visit(
+            [&](auto&& arg) {
+                if constexpr (std::same_as<imgui_reflection::Input, std::decay_t<decltype(arg)>>) {
+                    return;
+                } else {
+                    free(arg.min);
+                }
+            },
+            input_method);
     }
 
-    void Registry::add_slider_reference(path path, Type type, void* address, void* min, void* max, SliderFlags flags) {
+    Registry::Registry() {}
+
+    void Registry::add_input_reference(path path, Type type, void* address, uint64_t flags) {
+        add_reference(path, type, address, imgui_reflection::Input{flags});
+    }
+
+    void Registry::add_slider_reference(path path, Type type, void* address, void* min, void* max, const char* format,
+                                        uint64_t flags) {
         assert(type.type != String || type.type != Bool);
 
         type.visit(
             [&](auto&& t) {
-                using T = std::decay_t<decltype(t)>;
+                using T = std::remove_pointer_t<std::decay_t<decltype(t)>>;
 
-                auto slider = Slider{*(T)min, *(T)max};
-                slider.flags = flags;
+                auto* minmax = (uint8_t*)malloc(2 * sizeof(T));
+                std::memcpy(minmax, min, sizeof(T));
+                std::memcpy(minmax + sizeof(T), max, sizeof(T));
 
-                add_reference(path, type, address, std::move(slider));
+                add_reference(path, type, address,
+                              imgui_reflection::Slider{
+                                  .min = minmax,
+                                  .max = minmax + sizeof(T),
+                                  .format = format,
+                                  .flags = flags,
+                              });
             },
             nullptr);
     }
 
-    void Registry::add_drag_reference(path path, Type type, void* address, void* min, void* max, DragFlags flags) {
+    void Registry::add_drag_reference(path path, Type type, void* address, void* min, void* max, float speed,
+                                      const char* format, uint64_t flags) {
         assert(type.type != String || type.type != Bool);
         assert((min == nullptr && max == nullptr) || (min != nullptr && max != nullptr));
 
@@ -172,17 +115,41 @@ namespace engine::exvar {
 
         type.visit(
             [&](auto&& t) {
-                using T = std::decay_t<decltype(t)>;
+                using T = std::remove_pointer_t<std::decay_t<decltype(t)>>;
 
-                Drag drag{};
+                imgui_reflection::Drag drag{
+                    .speed = speed,
+                    .min = nullptr,
+                    .max = nullptr,
+                    .format = format,
+                    .flags = flags,
+                };
                 if (min != nullptr && max != nullptr) {
-                    drag = Drag{*(T)min, *(T)max};
-                }
-                drag.flags = flags;
+                    auto* minmax = (uint8_t*)malloc(2 * sizeof(T));
+                    std::memcpy(minmax, min, sizeof(T));
+                    std::memcpy(minmax + sizeof(T), max, sizeof(T));
 
-                add_reference(path, type, address, std::move(drag));
+                    drag.min = minmax;
+                    drag.max = minmax + sizeof(T);
+                }
+
+                add_reference(path, type, address, drag);
             },
             nullptr);
+    }
+
+    void Registry::add_reference(path path, Type type, void* address, imgui_reflection::InputMethod&& input_method) {
+        Var var{std::move(path), type, address, input_method};
+
+        auto it = std::lower_bound(variables.begin(), variables.end(), var,
+                                   [](const Var& a, const Var& b) { return a.path.segments < b.path.segments; });
+
+        if (it != variables.end() && it->path.path_str == var.path.path_str) {
+            assert(false && "Duplicate exvar path");
+            return;
+        }
+
+        variables.insert(it, std::move(var));
     }
 
     void Registry::override(nlohmann::json j) {
@@ -202,6 +169,16 @@ namespace engine::exvar {
 
     nlohmann::json Registry::save() const {
         return variables;
+    }
+
+    void Registry::modified() {
+        want_save = true;
+    }
+
+    bool Registry::want_to_save() {
+        auto res = want_save;
+        want_save = false;
+        return res;
     }
 
     void Registry::imgui_ui() {
@@ -247,7 +224,7 @@ namespace engine::exvar {
             if (blocked_depth == -1) {
                 ImGui::PushID(var.address);
                 ImGui::Text("%s:", var.path.segments.back().c_str());
-                imgui_draw_var(var);
+                if (imgui_draw_var(var)) modified();
                 ImGui::PopID();
             }
 
@@ -264,35 +241,43 @@ namespace engine::exvar {
         return variables;
     }
 
-    void Registry::add_reference(path path, Type type, void* address, InputMethod&& input_method) {
-        Var var{std::move(path), type, address, std::move(input_method)};
-
-        auto it = std::lower_bound(variables.begin(), variables.end(), var,
-                                   [](const Var& a, const Var& b) { return a.path.segments < b.path.segments; });
-
-        if (it != variables.end() && it->path.path_str == var.path.path_str) {
-            assert(false && "Duplicate exvar path");
-            return;
+    void Registry::destroy() {
+        for (auto& variable : variables) {
+            variable.destroy();
         }
-
-        variables.insert(it, std::move(var));
     }
 
-    void Registry::imgui_draw_var(Var& var) {
+    bool Registry::imgui_draw_var(Var& var) {
         if (var.type.count == 1) ImGui::SameLine();
         else ImGui::Indent();
 
+        bool modified = false;
         var.type.visit(
             [&](auto&& value) {
+                using T = std::remove_pointer_t<std::decay_t<decltype(value)>>;
+
                 for (size_t i = 0; i < var.type.count; i++) {
                     ImGui::PushID(i);
-                    std::visit([&](auto&& im) { imgui_input_method(im, var.type.type, value + i); }, var.input_method);
+                    std::visit(
+                        [&](auto&& im) {
+                            using IM = std::decay_t<decltype(im)>;
+                            if constexpr ((std::same_as<IM, imgui_reflection::Drag> ||
+                                           std::same_as<IM, imgui_reflection::Slider>) &&
+                                          (std::same_as<T, bool> || std::same_as<T, std::string>)) {
+                                assert(false);
+                            } else {
+                                modified |= imgui_reflection::input("", im, value + i);
+                            }
+                        },
+                        var.input_method);
                     ImGui::PopID();
                 }
             },
             var.address);
 
         if (var.type.count != 1) ImGui::Unindent();
+
+        return modified;
     }
 
     void to_json(nlohmann::json& j, const Registry::Var& var) {
