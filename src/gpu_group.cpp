@@ -54,7 +54,6 @@ namespace engine::gpu_group {
         };
 
         uint8_t* data = (uint8_t*)malloc(needed_data_size);
-
         uint8_t* start_of_data = data;
         auto* texture_gids = group.acquired_texture_gids;
         for (const auto& upload_func : upload_ptrs) {

@@ -105,6 +105,8 @@ namespace engine::textures {
         std::ifstream file{path, std::ios::binary | std::ios::ate};
         auto size_signed = file.tellg();
         if (size_signed < 0) {
+            printf("trying to load gid{.gen = %d, .id = %d}\n", gid.gen(), gid.id());
+            fflush(stdout);
             assert(false && "texture somehow isn't on disk");
         }
 
@@ -530,9 +532,9 @@ namespace engine::textures {
 
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-            if (generations[gid.id()] != gid.gen()) continue;
 
-            if (++ref_counts[gid.id()] != 1) return;
+            if (generations[gid.id()] != gid.gen()) continue;
+            if (++ref_counts[gid.id()] != 1) continue;
 
             set_default_texture(gid);
 
@@ -547,6 +549,7 @@ namespace engine::textures {
 
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
+
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 

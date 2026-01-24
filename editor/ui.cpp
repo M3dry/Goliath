@@ -353,7 +353,6 @@ namespace ui {
 
     void models_pane() {
         if (ImGui::InputText("##search", &state::models_query)) {
-            printf("typing\n");
             state::modified_value();
         }
 

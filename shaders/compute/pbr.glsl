@@ -152,7 +152,7 @@ PBR load_material(const VertexData verts, const Offsets offs) {
 
     uint instance = offs.material_instance;
     uint off = mats.offset_count;
-    off += mats.data[mat_id]/4;
+    off += mats.data[mat_id]/4 + 21*instance;
 
     ret.albedo_map = mats.data[off];
     ret.metallic_roughness_map = mats.data[off + 1];

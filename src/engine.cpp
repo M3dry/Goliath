@@ -407,7 +407,6 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
-
         materials::destroy();
         models::destroy();
         textures::destroy();
@@ -420,12 +419,14 @@ namespace engine {
 
         vkDestroySemaphore(device, timeline_semaphore, nullptr);
 
-        // NOTE: VMA debug print
-        // char* stats = nullptr;
-        // vmaBuildStatsString(allocator, &stats, VK_TRUE);
-        // printf("%s\n", stats);
-        // fflush(stdout);
-        // vmaFreeStatsString(allocator, stats);
+        VmaTotalStatistics stats;
+        vmaCalculateStatistics(allocator, &stats);
+        if (stats.total.statistics.allocationCount != 0) {
+            char* stats_str = nullptr;
+            vmaBuildStatsString(allocator, &stats_str, VK_TRUE);
+            printf("%s\n", stats_str);
+            vmaFreeStatsString(allocator, stats_str);
+        }
 
         vmaDestroyAllocator(allocator);
 

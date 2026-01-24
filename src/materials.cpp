@@ -79,6 +79,7 @@ namespace engine::materials {
 
         auto& buf = gpu_buffers[(current_buffer + 1) % 2];
         if (buf.size() < upload_size) {
+            buf.destroy();
             buf =
                 Buffer::create("Material buffer", upload_size,
                                VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
@@ -94,7 +95,7 @@ namespace engine::materials {
 
     struct JsonInstanceEntry {
         uint32_t ix;
-        std::vector<uint8_t> data;
+        std::vector<uint32_t> data;
         std::string name;
         uint32_t ref_count;
     };
@@ -160,8 +161,9 @@ namespace engine::materials {
                     insts.count++;
                 }
 
-                insts.data.resize(insts.data.size() + schema_size);
-                std::memcpy(insts.data.data(), inst_entry.data.data(), schema_size);
+                auto write_off = insts.data.size();
+                insts.data.resize(write_off + schema_size);
+                std::memcpy(insts.data.data() + write_off, inst_entry.data.data(), schema_size);
                 insts.names.emplace_back(inst_entry.name);
                 insts.ref_counts.emplace_back(inst_entry.ref_count);
                 insts.count++;
@@ -191,7 +193,7 @@ namespace engine::materials {
 
                 insts_j.emplace_back(nlohmann::json{
                     {"ix", j},
-                    {"data", std::span{insts.data.data() + schema_size * j, schema_size}},
+                    {"data", std::span{(uint32_t*)(insts.data.data() + schema_size * j), schema_size}},
                     {"name", insts.names[j]},
                     {"ref_count", insts.ref_counts[j]},
                 });
