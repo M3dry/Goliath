@@ -48,17 +48,41 @@ namespace engine {
         };
 
         bool operator==(const Sampler& other) const {
-            return _info.sType == other._info.sType && _info.pNext == other._info.pNext &&
-                   _info.addressModeU == other._info.addressModeU && _info.addressModeV == other._info.addressModeV &&
-                   _info.addressModeW == other._info.addressModeW && _info.mipmapMode == other._info.mipmapMode &&
-                   _info.anisotropyEnable == other._info.anisotropyEnable &&
-                   (_info.anisotropyEnable && _info.maxAnisotropy == other._info.maxAnisotropy) &&
-                   _info.compareEnable == other._info.compareEnable && (_info.compareOp == other._info.compareOp) &&
-                   _info.borderColor == other._info.borderColor && _info.minFilter == other._info.minFilter &&
-                   _info.magFilter == other._info.magFilter &&
-                   _info.unnormalizedCoordinates == other._info.unnormalizedCoordinates &&
-                   _info.maxLod == other._info.maxLod && _info.minLod == other._info.minLod &&
-                   _info.mipLodBias == other._info.mipLodBias && _info.flags == other._info.flags;
+#define CHECK(field)                                                                                                   \
+    if (_info.field != other._info.field) {                                                                            \
+        return false;                                                                                                  \
+    }
+
+            CHECK(sType);
+            CHECK(pNext);
+            CHECK(addressModeU);
+            CHECK(addressModeV);
+            CHECK(addressModeW);
+            CHECK(mipmapMode);
+            CHECK(anisotropyEnable);
+
+            if (_info.anisotropyEnable) {
+                CHECK(maxAnisotropy);
+            }
+
+            CHECK(compareEnable);
+
+            if (_info.compareEnable) {
+                CHECK(compareOp);
+            }
+
+            CHECK(borderColor);
+            CHECK(minFilter);
+            CHECK(magFilter);
+            CHECK(unnormalizedCoordinates);
+            CHECK(maxLod);
+            CHECK(minLod);
+            CHECK(mipLodBias);
+            CHECK(flags);
+
+#undef CHECK
+
+            return true;
         }
 
         Sampler&& address_u(AddressMode mode) {
