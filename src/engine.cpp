@@ -4,6 +4,7 @@
 #include "goliath/materials.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
+#include "goliath/transport2.hpp"
 #include "materials_.hpp"
 #include "models_.hpp"
 #include "textures_.hpp"
@@ -392,6 +393,7 @@ namespace engine {
 
         samplers::init();
         transport::init();
+        transport2::init();
         imgui::init();
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
@@ -414,6 +416,7 @@ namespace engine {
         descriptor::destroy_empty_set();
         imgui::destroy();
         transport::destroy();
+        transport2::destroy();
 
         delete[] frames;
 
@@ -524,6 +527,8 @@ namespace engine {
             synchronization::apply_barrier(material_barrier);
             synchronization::end_barriers();
         }
+
+        transport2::tick();
     }
 
     bool next_frame() {

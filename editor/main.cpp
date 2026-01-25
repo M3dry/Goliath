@@ -15,6 +15,7 @@
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport.hpp"
+#include "goliath/transport2.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
@@ -595,6 +596,14 @@ int main(int argc, char** argv) {
 
             engine::imgui::end();
 
+            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
+            uint64_t transform_buffer_timeline = 0;
+            if (scene::selected_scene().instances.size() != 0) {
+                // transform_buffer_timeline = engine::transport2::upload(
+                //     transforms[engine::get_current_frame()], false,
+                //     scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer.data(), 0);
+            }
+
             engine::prepare_draw();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
@@ -632,33 +641,9 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
-            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
-            VkBufferMemoryBarrier2 transform_barrier{};
-            transform_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-            transform_barrier.pNext = nullptr;
-            transform_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            transform_barrier.dstStageMask =
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
-
             if (scene::selected_scene().instances.size() != 0) {
-                engine::transport::begin();
-                engine::transport::upload(&transform_barrier, transforms[engine::get_current_frame()],
-                                          scene::selected_scene().instances.size() * sizeof(glm::mat4),
-                                          transform_buffer.data(), 0);
-                auto timeline_wait = engine::transport::end();
-
-                engine::synchronization::begin_barriers();
-                engine::synchronization::apply_barrier(transform_barrier);
-                engine::synchronization::end_barriers();
-
-                while (!engine::transport::is_ready(timeline_wait)) {}
-            } else {
-                transform_barrier.buffer = transform_buffer;
+                // while (!engine::transport2::is_ready(transform_buffer_timeline)) {}
             }
-            transform_barrier.offset = 0;
-            transform_barrier.size = transform_buffer.size();
-            transform_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            transform_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
             VkClearColorValue target_clear_color{};
             target_clear_color.float32[0] = 36.0f / 255.0f;
@@ -922,17 +907,7 @@ int main(int argc, char** argv) {
             target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
-            transform_barrier.srcAccessMask = transform_barrier.dstAccessMask;
-            transform_barrier.srcStageMask = transform_barrier.dstStageMask;
-            transform_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            transform_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
-            engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(transform_barrier);
-            engine::synchronization::end_barriers();
-
             engine::culling::clear_buffers(draw_id_buffer, indirect_draw_buffer);
-            vkCmdFillBuffer(engine::get_cmd_buf(), transform_buffer, 0, transform_buffer.size(), 0);
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);

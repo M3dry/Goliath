@@ -217,16 +217,6 @@ namespace engine::models {
         });
 
         return initialized;
-        // std::ofstream mf{models_registry};
-        // mf << models::save();
-        // mf.flush();
-        //
-        // std::ofstream tf{project::textures_registry};
-        // tf << nlohmann::json{
-        //     {"textures", engine::textures::save()},
-        //         {"samplers", engine::samplers::save()},
-        // };
-        // tf.flush();
     }
 
     std::optional<gid> find_empty_gid() {
