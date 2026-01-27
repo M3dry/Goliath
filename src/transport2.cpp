@@ -19,6 +19,23 @@ namespace engine::transport2 {
     std::vector<VkImageMemoryBarrier2> transport_queue_image_barriers{};
     std::vector<std::variant<VkBufferMemoryBarrier2, VkImageMemoryBarrier2>> graphics_queue_barriers{};
 
+    bool stop_worker = false;
+    std::thread worker;
+
+    std::vector<std::pair<uint32_t, uint64_t>> ticket_timelines{};
+    std::vector<ticket> free_tickets{};
+
+    ticket get_free_ticket() {
+        if (!free_tickets.empty()) {
+            auto ticket = free_tickets.back();
+            free_tickets.pop_back();
+            return ticket;
+        }
+
+        ticket_timelines.emplace_back(0, 0);
+        return ticket{0, (uint32_t)ticket_timelines.size() - 1};
+    }
+
     struct task {
         struct BufferDst {
             VkBuffer buffer;
@@ -48,12 +65,35 @@ namespace engine::transport2 {
         bool owning;
         bool last;
 
-        uint32_t required_size() const {
-            return src_size - src_offset;
-        }
-
         void split(uint32_t budget, task& rest) {
+            assert(budget < src_size);
 
+            rest.src = src;
+            rest.src_offset = budget;
+            rest.src_size = src_size - budget;
+            rest.ticket_id = ticket_id;
+            rest.owning = owning;
+            rest.last = last;
+
+            src_size = budget;
+            ticket_id = get_free_ticket().id();
+            owning = false;
+            last = false;
+
+            std::visit(
+                [&](auto& dst) {
+                    using Dst = std::decay_t<decltype(dst)>;
+                    if constexpr (std::same_as<BufferDst, Dst>) {
+                        rest.dst = BufferDst{
+                            .buffer = dst.buffer,
+                            .offset = dst.offset + budget,
+                            .initial_offset = dst.initial_offset,
+                        };
+                    } else {
+                        assert(false && "todo");
+                    }
+                },
+                dst);
         }
 
         void upload(VkCommandBuffer cmd_buf, VkBuffer src_buf, uint32_t src_buf_offset) {
@@ -160,12 +200,6 @@ namespace engine::transport2 {
         }
     };
 
-    bool stop_worker = false;
-    std::thread worker;
-
-    std::vector<std::pair<uint64_t, uint64_t>> ticket_timelines{};
-    std::vector<ticket> free_tickets{};
-
     uint64_t timeline_counter = 0;
     uint64_t finished_timeline = 0;
     VkSemaphore timeline_semaphore;
@@ -200,6 +234,14 @@ namespace engine::transport2 {
     }
 
     void thread() {
+        for (uint32_t i = 0; i < ticket_timelines.size(); i++) {
+            if (is_timeline_ready(ticket_timelines[i].second)) continue;
+
+            ticket_timelines[i].first++;
+            ticket_timelines[i].second = 0;
+            free_tickets.emplace_back(ticket{ticket_timelines[i].first, i});
+        }
+
         while (!stop_worker) {
             if (!is_timeline_ready(staging_buffer_finish_timeline)) {
                 _mm_pause();
@@ -236,14 +278,12 @@ namespace engine::transport2 {
 
             std::vector<task> tasks;
             uint32_t size = 0;
-            // TODO: splitting
             while (!task_queue.empty()) {
                 auto& task = task_queue.front();
 
-                // && (size + task_queue.front().required_size()) <= staging_buffer_size
                 auto budget = staging_buffer_size - size;
                 if (budget == 0) break;
-                if (budget < task.required_size()) {
+                if (budget < task.src_size) {
                     task_queue.emplace_front();
                     std::swap(task_queue[0], task_queue[1]);
 
@@ -254,7 +294,7 @@ namespace engine::transport2 {
                 std::memcpy((uint8_t*)staging_buffer_ptr + size, (uint8_t*)task.src + task.src_offset, task.src_size);
                 if (task.owning) free(task.src);
 
-                size += task.required_size();
+                size += task.src_size;
                 tasks.emplace_back(task);
                 task_queue.pop_front();
             }
@@ -264,7 +304,7 @@ namespace engine::transport2 {
             uint32_t upload_offset = 0;
             for (auto& task : tasks) {
                 task.upload(cmd_buf, staging_buffer, upload_offset);
-                upload_offset += task.required_size();
+                upload_offset += task.src_size;
             }
 
             VK_CHECK(vkEndCommandBuffer(cmd_buf));
@@ -357,7 +397,30 @@ namespace engine::transport2 {
         return is_timeline_ready(timeline);
     }
 
-    ticket upload(void* src, bool own, uint32_t size, VkBuffer dst, uint32_t dst_offset) {}
+    ticket upload(void* src, bool own, uint32_t size, VkBuffer dst, uint32_t dst_offset) {
+        auto ticket = get_free_ticket();
+
+        {
+            std::lock_guard lock{task_queue_lock};
+            auto& task_queue = task_queues[current_task_queue];
+
+            task_queue.emplace_back(task{
+                .dst = task::BufferDst{
+                    .buffer = dst,
+                    .offset = dst_offset,
+                    .initial_offset = dst_offset,
+                },
+                .src = src,
+                .src_offset = 0,
+                .src_size = size,
+                .ticket_id = ticket.id(),
+                .owning = own,
+                .last = true,
+            });
+        }
+
+        return ticket;
+    }
 
     // std::vector<VkBufferMemoryBarrier2> transport_queue_buffer_barriers{};
     // std::vector<VkImageMemoryBarrier2> transport_queue_image_barriers{};
