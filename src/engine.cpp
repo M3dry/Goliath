@@ -1,10 +1,7 @@
 #include "goliath/engine.hpp"
 #include "engine_.hpp"
 #include "event_.hpp"
-#include "goliath/materials.hpp"
 #include "goliath/samplers.hpp"
-#include "goliath/synchronization.hpp"
-#include "goliath/transport2.hpp"
 #include "materials_.hpp"
 #include "models_.hpp"
 #include "textures_.hpp"
@@ -24,6 +21,7 @@
 #include "VkBootstrap.h"
 #include "imgui_.hpp"
 #include "transport_.hpp"
+#include "transport2_.hpp"
 
 #include <print>
 
@@ -281,6 +279,7 @@ namespace engine {
         volkLoadInstance(instance);
 
         glfwSetErrorCallback([](int err, const char* desc) { fprintf(stderr, "GLFW error %d: %s\n", err, desc); });
+
         assert(glfwInit() == GLFW_TRUE);
 
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
@@ -520,29 +519,22 @@ namespace engine {
         models_to_save_ |= models::process_uploads();
 
         VkBufferMemoryBarrier2 material_barrier{};
-        auto apply_material_barrier = materials::update_gpu_buffer(material_barrier, materials_to_save_);
-
-        if (apply_material_barrier) {
-            synchronization::begin_barriers();
-            synchronization::apply_barrier(material_barrier);
-            synchronization::end_barriers();
-        }
-
-        transport2::tick();
+        materials_to_save_ |= materials::update_gpu_buffer();
     }
 
-    bool next_frame() {
+    bool next_frame(std::span<VkSemaphoreSubmitInfo> extra_waits) {
         FrameData& frame = get_current_frame_data();
+
+        transport2::tick();
 
         transition_image(frame.cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         VK_CHECK(vkEndCommandBuffer(frame.cmd_buf));
 
-        VkSemaphoreSubmitInfo wait_info{};
-        wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-        wait_info.semaphore = frame.swapchain_semaphore;
-        wait_info.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        extra_waits[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+        extra_waits[0].semaphore = frame.swapchain_semaphore;
+        extra_waits[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
 
         VkSemaphoreSubmitInfo signal_info[2]{};
         signal_info[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
@@ -560,8 +552,8 @@ namespace engine {
 
         VkSubmitInfo2 submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-        submit_info.waitSemaphoreInfoCount = 1;
-        submit_info.pWaitSemaphoreInfos = &wait_info;
+        submit_info.waitSemaphoreInfoCount = extra_waits.size();
+        submit_info.pWaitSemaphoreInfos = extra_waits.data();
         submit_info.commandBufferInfoCount = 1;
         submit_info.pCommandBufferInfos = &cmd_info;
         submit_info.signalSemaphoreInfoCount = 2;

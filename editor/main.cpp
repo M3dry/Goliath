@@ -14,7 +14,6 @@
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
-#include "goliath/transport.hpp"
 #include "goliath/transport2.hpp"
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
@@ -520,6 +519,7 @@ int main(int argc, char** argv) {
                     visbuffer_barriers, visbuffer_barriers_applied, grid_pipeline, false);
         }
 
+        engine::transport2::ticket transform_buffer_ticket{};
         {
             engine::imgui::begin();
             ui::begin();
@@ -596,14 +596,6 @@ int main(int argc, char** argv) {
 
             engine::imgui::end();
 
-            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
-            uint64_t transform_buffer_timeline = 0;
-            if (scene::selected_scene().instances.size() != 0) {
-                // transform_buffer_timeline = engine::transport2::upload(
-                //     transforms[engine::get_current_frame()], false,
-                //     scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer.data(), 0);
-            }
-
             engine::prepare_draw();
 
             if (!visbuffer_barriers_applied || !depth_barriers_applied || !target_barriers_applied ||
@@ -641,8 +633,9 @@ int main(int argc, char** argv) {
                 engine::synchronization::end_barriers();
             }
 
+            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
             if (scene::selected_scene().instances.size() != 0) {
-                // while (!engine::transport2::is_ready(transform_buffer_timeline)) {}
+                transform_buffer_ticket = engine::transport2::upload(true, transforms[engine::get_current_frame()], false, scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer, 0);
             }
 
             VkClearColorValue target_clear_color{};
@@ -915,7 +908,9 @@ int main(int argc, char** argv) {
             engine::synchronization::end_barriers();
         }
 
-        if (engine::next_frame()) {
+        std::array<VkSemaphoreSubmitInfo, 1> waits{};
+        waits[1] = engine::transport2::wait_on({&transform_buffer_ticket, 1});
+        if (engine::next_frame(waits)) {
             rebuild(depth_images, depth_image_views, depth_barriers, depth_barriers_applied, target_images,
                     target_image_views, target_barriers, target_barriers_applied, visbuffer_raster_pipeline,
                     visbuffer_barriers, visbuffer_barriers_applied, grid_pipeline, true);

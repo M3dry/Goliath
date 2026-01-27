@@ -184,7 +184,8 @@ int main(int argc, char** argv) {
         }
 
     end_of_frame:
-        if (engine::next_frame()) {
+        VkSemaphoreSubmitInfo wait{};
+        if (engine::next_frame({&wait, 1})) {
             rebuild(image_pipeline);
             engine::increment_frame();
         }

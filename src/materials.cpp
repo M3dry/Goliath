@@ -1,6 +1,6 @@
 #include "goliath/materials.hpp"
 #include "goliath/buffer.hpp"
-#include "goliath/transport.hpp"
+#include "goliath/transport2.hpp"
 #include "materials_.hpp"
 
 #include <vector>
@@ -29,7 +29,7 @@ namespace engine::materials {
 
     uint32_t current_buffer = 0;
     std::array<Buffer, 2> gpu_buffers{};
-    uint64_t next_buffer_timeline = -1;
+    transport2::ticket next_buffer_ticket{};
 
     void init() {
         init_called = true;
@@ -44,18 +44,19 @@ namespace engine::materials {
         }
     }
 
-    bool update_gpu_buffer(VkBufferMemoryBarrier2& barrier, bool& want_to_save) {
+    bool update_gpu_buffer() {
         if (!init_called) return false;
 
-        want_to_save |= want_save;
-        want_save = false;
-
-        if (transport::is_ready(next_buffer_timeline)) {
+        if (transport2::is_ready(next_buffer_ticket)) {
             current_buffer = (current_buffer + 1) % 2;
-            next_buffer_timeline = -1;
+            next_buffer_ticket = {};
         }
 
-        if (!update) return false;
+        if (!update) {
+            auto res = want_save;
+            want_save = false;
+            return res;
+        }
 
         uint32_t instances_size = 0;
         for (size_t i = 0; i < instances.size(); i++) {
@@ -85,12 +86,12 @@ namespace engine::materials {
                                VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
         }
 
-        next_buffer_timeline = transport::begin();
-        transport::upload(&barrier, upload, upload_size, gpu_buffers[(current_buffer + 1) % 2], 0);
-        transport::end();
+        next_buffer_ticket = transport2::upload(false, upload, true, upload_size, gpu_buffers[(current_buffer + 1) % 2], 0);
 
         update = false;
-        return true;
+        auto res = want_save;
+        want_save = false;
+        return res;
     }
 
     struct JsonInstanceEntry {

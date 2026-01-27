@@ -62,7 +62,7 @@ namespace engine {
     VkImageView get_swapchain_view();
     bool prepare_frame();
     void prepare_draw();
-    bool next_frame();
+    bool next_frame(std::span<VkSemaphoreSubmitInfo> extra_waits);
     void increment_frame();
 
     uint32_t get_current_frame();

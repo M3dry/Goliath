@@ -7,9 +7,9 @@
 #include <cstring>
 #include <vulkan/vulkan_core.h>
 
+#include <array>
 #include <chrono>
 #include <iostream>
-#include <array>
 
 struct FormatInfo {
     uint32_t blockWidth;
@@ -68,6 +68,7 @@ namespace engine::transport {
         transport_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         transport_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         transport_pool_info.queueFamilyIndex = transport_queue_family;
+
         vkCreateCommandPool(device, &transport_pool_info, nullptr, &pool);
 
         cmd_buf_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -89,7 +90,8 @@ namespace engine::transport {
         alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo out_alloc_info;
-        VK_CHECK(vmaCreateBuffer(allocator, &create_info, &alloc_info, &ring_buffer, &ring_buffer_allocation, &out_alloc_info));
+        VK_CHECK(vmaCreateBuffer(allocator, &create_info, &alloc_info, &ring_buffer, &ring_buffer_allocation,
+                                 &out_alloc_info));
         vmaSetAllocationName(allocator, ring_buffer_allocation, "Transport ring buffer");
 
         ring_buffer_data = (uint8_t*)out_alloc_info.pMappedData;
