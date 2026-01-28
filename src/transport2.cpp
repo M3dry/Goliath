@@ -1,7 +1,8 @@
 #include "goliath/transport2.hpp"
-#include "transport2_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/synchronization.hpp"
+#include "transport2_.hpp"
 
 #include <array>
 #include <cmath>
@@ -25,7 +26,17 @@ namespace engine::transport2 {
     std::vector<std::pair<uint32_t, uint64_t>> ticket_timelines{};
     std::vector<ticket> free_tickets{};
 
+    bool is_timeline_ready(uint64_t timeline);
+
     ticket get_free_ticket() {
+        for (uint32_t i = 0; i < ticket_timelines.size(); i++) {
+            if (ticket_timelines[i].second == 0 || !is_timeline_ready(ticket_timelines[i].second)) continue;
+
+            ticket_timelines[i].first++;
+            ticket_timelines[i].second = 0;
+            free_tickets.emplace_back(ticket{ticket_timelines[i].first, i});
+        }
+
         if (!free_tickets.empty()) {
             auto ticket = free_tickets.back();
             free_tickets.pop_back();
@@ -206,20 +217,17 @@ namespace engine::transport2 {
 
     VkCommandPool cmd_pool;
     uint32_t current_cmd_buf = 0;
-    std::array<VkCommandBuffer, 3> cmd_bufs;
-    std::array<VkFence, 3> cmd_buf_fences;
+    std::array<VkCommandBuffer, 2> cmd_bufs;
+    std::array<VkFence, 2> cmd_buf_fences;
 
     static constexpr uint32_t staging_buffer_size = 8000000;
-    Buffer staging_buffer{};
-    void* staging_buffer_ptr{};
-    uint64_t staging_buffer_finish_timeline = 0;
+    std::array<Buffer, 2> staging_buffers{};
+    std::array<void*, 2> staging_buffer_ptrs{};
     bool flush_staging_buffer = false;
 
     uint32_t current_task_queue = 0;
     std::array<std::deque<task>, 2> task_queues{};
     std::mutex task_queue_lock{};
-
-    std::mutex submit_mutex{};
 
     bool is_timeline_ready(uint64_t timeline) {
         if (finished_timeline >= timeline) return true;
@@ -241,58 +249,6 @@ namespace engine::transport2 {
 
     void thread() {
         while (!stop_worker) {
-            if (!transport_queue_buffer_barriers.empty() || !transport_queue_image_barriers.empty()) {
-                // std::lock_guard lock{submit_mutex};
-                //
-                // VK_CHECK(vkWaitForFences(device, 1, &cmd_buf_fences[2], true, UINT64_MAX));
-                // VK_CHECK(vkResetFences(device, 1, &cmd_buf_fences[2]));
-                // VK_CHECK(vkResetCommandBuffer(cmd_bufs[2], 0));
-                //
-                // VkCommandBufferBeginInfo begin_info{};
-                // begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                // begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                //
-                // VK_CHECK(vkBeginCommandBuffer(cmd_bufs[2], &begin_info));
-                //
-                // VkDependencyInfo dep_info{};
-                // dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                // dep_info.bufferMemoryBarrierCount = transport_queue_buffer_barriers.size();
-                // dep_info.pBufferMemoryBarriers = transport_queue_buffer_barriers.data();
-                // dep_info.imageMemoryBarrierCount = transport_queue_image_barriers.size();
-                // dep_info.pImageMemoryBarriers = transport_queue_image_barriers.data();
-                // vkCmdPipelineBarrier2(cmd_bufs[2], &dep_info);
-                transport_queue_buffer_barriers.clear();
-                transport_queue_image_barriers.clear();
-
-                // VK_CHECK(vkEndCommandBuffer(cmd_bufs[2]));
-                //
-                // VkCommandBufferSubmitInfo cmd_info{};
-                // cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-                // cmd_info.commandBuffer = cmd_bufs[2];
-                //
-                // VkSubmitInfo2 submit_info{};
-                // submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-                // submit_info.waitSemaphoreInfoCount = 0;
-                // submit_info.commandBufferInfoCount = 1;
-                // submit_info.pCommandBufferInfos = &cmd_info;
-                // submit_info.signalSemaphoreInfoCount = 0;
-                //
-                // VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, cmd_buf_fences[2]));
-            }
-
-            if (!is_timeline_ready(staging_buffer_finish_timeline)) {
-                _mm_pause();
-                continue;
-            }
-
-            for (uint32_t i = 0; i < ticket_timelines.size(); i++) {
-                if (ticket_timelines[i].second != 0 && is_timeline_ready(ticket_timelines[i].second)) continue;
-
-                ticket_timelines[i].first++;
-                ticket_timelines[i].second = 0;
-                free_tickets.emplace_back(ticket{ticket_timelines[i].first, i});
-            }
-
             task_queue_lock.lock();
             auto& task_queue = task_queues[current_task_queue];
             current_task_queue = (current_task_queue + 1) % task_queues.size();
@@ -305,7 +261,9 @@ namespace engine::transport2 {
 
             auto& cmd_buf = cmd_bufs[current_cmd_buf];
             auto& cmd_buf_fence = cmd_buf_fences[current_cmd_buf];
-            current_cmd_buf = (current_cmd_buf + 1) % (cmd_bufs.size() - 1);
+            auto& staging_buffer = staging_buffers[current_cmd_buf];
+            auto& staging_buffer_ptr = staging_buffer_ptrs[current_cmd_buf];
+            current_cmd_buf = (current_cmd_buf + 1) % cmd_bufs.size();
 
             VK_CHECK(vkWaitForFences(device, 1, &cmd_buf_fence, true, UINT64_MAX));
             VK_CHECK(vkResetFences(device, 1, &cmd_buf_fence));
@@ -347,6 +305,19 @@ namespace engine::transport2 {
                 upload_offset += task.src_size;
             }
 
+            if (!transport_queue_buffer_barriers.empty() || !transport_queue_image_barriers.empty()) {
+                VkDependencyInfo dep_info{};
+                dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_info.bufferMemoryBarrierCount = transport_queue_buffer_barriers.size();
+                dep_info.pBufferMemoryBarriers = transport_queue_buffer_barriers.data();
+                dep_info.imageMemoryBarrierCount = transport_queue_image_barriers.size();
+                dep_info.pImageMemoryBarriers = transport_queue_image_barriers.data();
+                vkCmdPipelineBarrier2(cmd_buf, &dep_info);
+
+                transport_queue_buffer_barriers.clear();
+                transport_queue_image_barriers.clear();
+            }
+
             VK_CHECK(vkEndCommandBuffer(cmd_buf));
 
             VkCommandBufferSubmitInfo cmd_info{};
@@ -357,7 +328,7 @@ namespace engine::transport2 {
             signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
             signal_info.semaphore = timeline_semaphore;
             signal_info.stageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            staging_buffer_finish_timeline = signal_info.value = ++timeline_counter;
+            signal_info.value = ++timeline_counter;
 
             VkSubmitInfo2 submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -376,8 +347,11 @@ namespace engine::transport2 {
     }
 
     void init() {
-        staging_buffer = Buffer::create("Transport buffer", staging_buffer_size, VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT,
-                                        {{&staging_buffer_ptr, &flush_staging_buffer}});
+        for (size_t i = 0; i < staging_buffers.size(); i++) {
+            staging_buffers[i] =
+                Buffer::create(std::format("Transport buffer #{}", i).c_str(), staging_buffer_size,
+                               VK_BUFFER_USAGE_2_TRANSFER_SRC_BIT, {{&staging_buffer_ptrs[i], &flush_staging_buffer}});
+        }
 
         VkCommandPoolCreateInfo transport_pool_info{};
         transport_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -421,7 +395,9 @@ namespace engine::transport2 {
         stop_worker = true;
         worker.join();
 
-        staging_buffer.destroy();
+        for (auto buf : staging_buffers) {
+            buf.destroy();
+        }
         vkDestroyCommandPool(device, cmd_pool, nullptr);
         for (auto& fence : cmd_buf_fences) {
             vkDestroyFence(device, fence, nullptr);
@@ -430,13 +406,11 @@ namespace engine::transport2 {
     }
 
     void tick() {
-        // std::lock_guard lock{submit_mutex};
-        //
-        // synchronization::begin_barriers();
-        // for (auto barrier : graphics_queue_barriers) {
-        //     std::visit([](auto barrier) { synchronization::apply_barrier(barrier); }, barrier);
-        // }
-        // synchronization::end_barriers();
+        synchronization::begin_barriers();
+        for (auto barrier : graphics_queue_barriers) {
+            std::visit([](auto barrier) { synchronization::apply_barrier(barrier); }, barrier);
+        }
+        synchronization::end_barriers();
         graphics_queue_barriers.clear();
     }
 
@@ -461,24 +435,23 @@ namespace engine::transport2 {
             largest_timeline_value = std::max(largest_timeline_value, ticket_timelines[t.id()].second);
         }
 
-        return VkSemaphoreSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .semaphore = timeline_semaphore,
-            .value = largest_timeline_value,
-            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT
-        };
+        return VkSemaphoreSubmitInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                     .pNext = nullptr,
+                                     .semaphore = timeline_semaphore,
+                                     .value = largest_timeline_value,
+                                     .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
     }
 
     ticket upload(bool priority, void* src, bool own, uint32_t size, VkBuffer dst, uint32_t dst_offset) {
         auto ticket = get_free_ticket();
 
         task task = {
-            .dst = task::BufferDst{
-                .buffer = dst,
-                .offset = dst_offset,
-                .initial_offset = dst_offset,
-            },
+            .dst =
+                task::BufferDst{
+                    .buffer = dst,
+                    .offset = dst_offset,
+                    .initial_offset = dst_offset,
+                },
             .src = src,
             .src_offset = 0,
             .src_size = size,
@@ -498,7 +471,8 @@ namespace engine::transport2 {
         return ticket;
     }
 
-    ticket upload(bool priority, void* src, bool own, VkFormat format, VkImage dst, VkImageLayout current_layout, VkImageLayout new_layout) {
+    ticket upload(bool priority, void* src, bool own, VkFormat format, VkImage dst, VkImageLayout current_layout,
+                  VkImageLayout new_layout) {
         auto ticket = get_free_ticket();
 
         // task task = {
