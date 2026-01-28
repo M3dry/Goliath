@@ -45,7 +45,7 @@ namespace engine::models {
     std::expected<engine::Model*, Err> get_cpu_model(gid gid);
 
     // timeline == -1 implies the model hasn't been yet uploaded to the GPU
-    std::expected<uint64_t, Err> get_timeline(gid gid);
+    std::expected<transport2::ticket, Err> get_ticket(gid gid);
     std::expected<engine::Buffer, Err> get_draw_buffer(gid gid);
     std::expected<engine::GPUModel, Err> get_gpu_model(gid gid);
     std::expected<engine::GPUGroup, Err> get_gpu_group(gid gid);

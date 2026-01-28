@@ -2,7 +2,6 @@
 #include "transport2_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/engine.hpp"
-#include "goliath/synchronization.hpp"
 
 #include <array>
 #include <cmath>
@@ -206,9 +205,9 @@ namespace engine::transport2 {
     VkSemaphore timeline_semaphore;
 
     VkCommandPool cmd_pool;
-    VkCommandBuffer cmd_buf;
-    VkCommandBuffer barrier_cmd_buf;
-    VkFence barrier_cmd_buf_fence;
+    uint32_t current_cmd_buf = 0;
+    std::array<VkCommandBuffer, 3> cmd_bufs;
+    std::array<VkFence, 3> cmd_buf_fences;
 
     static constexpr uint32_t staging_buffer_size = 8000000;
     Buffer staging_buffer{};
@@ -243,43 +242,42 @@ namespace engine::transport2 {
     void thread() {
         while (!stop_worker) {
             if (!transport_queue_buffer_barriers.empty() || !transport_queue_image_barriers.empty()) {
-                std::lock_guard lock{submit_mutex};
-
-                VK_CHECK(vkWaitForFences(device, 1, &barrier_cmd_buf_fence, true, UINT64_MAX));
-                VK_CHECK(vkResetFences(device, 1, &barrier_cmd_buf_fence));
-
-                vkResetCommandBuffer(barrier_cmd_buf, 0);
-
-                VkCommandBufferBeginInfo begin_info{};
-                begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-                begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-                VK_CHECK(vkBeginCommandBuffer(barrier_cmd_buf, &begin_info));
-
-                VkDependencyInfo dep_info{};
-                dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep_info.bufferMemoryBarrierCount = transport_queue_buffer_barriers.size();
-                dep_info.pBufferMemoryBarriers = transport_queue_buffer_barriers.data();
-                dep_info.imageMemoryBarrierCount = transport_queue_image_barriers.size();
-                dep_info.pImageMemoryBarriers = transport_queue_image_barriers.data();
-                vkCmdPipelineBarrier2(barrier_cmd_buf, &dep_info);
+                // std::lock_guard lock{submit_mutex};
+                //
+                // VK_CHECK(vkWaitForFences(device, 1, &cmd_buf_fences[2], true, UINT64_MAX));
+                // VK_CHECK(vkResetFences(device, 1, &cmd_buf_fences[2]));
+                // VK_CHECK(vkResetCommandBuffer(cmd_bufs[2], 0));
+                //
+                // VkCommandBufferBeginInfo begin_info{};
+                // begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                // begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                //
+                // VK_CHECK(vkBeginCommandBuffer(cmd_bufs[2], &begin_info));
+                //
+                // VkDependencyInfo dep_info{};
+                // dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                // dep_info.bufferMemoryBarrierCount = transport_queue_buffer_barriers.size();
+                // dep_info.pBufferMemoryBarriers = transport_queue_buffer_barriers.data();
+                // dep_info.imageMemoryBarrierCount = transport_queue_image_barriers.size();
+                // dep_info.pImageMemoryBarriers = transport_queue_image_barriers.data();
+                // vkCmdPipelineBarrier2(cmd_bufs[2], &dep_info);
                 transport_queue_buffer_barriers.clear();
                 transport_queue_image_barriers.clear();
 
-                VK_CHECK(vkEndCommandBuffer(barrier_cmd_buf));
-
-                VkCommandBufferSubmitInfo cmd_info{};
-                cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-                cmd_info.commandBuffer = barrier_cmd_buf;
-
-                VkSubmitInfo2 submit_info{};
-                submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-                submit_info.waitSemaphoreInfoCount = 0;
-                submit_info.commandBufferInfoCount = 1;
-                submit_info.pCommandBufferInfos = &cmd_info;
-                submit_info.signalSemaphoreInfoCount = 0;
-
-                VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, barrier_cmd_buf_fence));
+                // VK_CHECK(vkEndCommandBuffer(cmd_bufs[2]));
+                //
+                // VkCommandBufferSubmitInfo cmd_info{};
+                // cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+                // cmd_info.commandBuffer = cmd_bufs[2];
+                //
+                // VkSubmitInfo2 submit_info{};
+                // submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+                // submit_info.waitSemaphoreInfoCount = 0;
+                // submit_info.commandBufferInfoCount = 1;
+                // submit_info.pCommandBufferInfos = &cmd_info;
+                // submit_info.signalSemaphoreInfoCount = 0;
+                //
+                // VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, cmd_buf_fences[2]));
             }
 
             if (!is_timeline_ready(staging_buffer_finish_timeline)) {
@@ -305,6 +303,12 @@ namespace engine::transport2 {
                 continue;
             }
 
+            auto& cmd_buf = cmd_bufs[current_cmd_buf];
+            auto& cmd_buf_fence = cmd_buf_fences[current_cmd_buf];
+            current_cmd_buf = (current_cmd_buf + 1) % (cmd_bufs.size() - 1);
+
+            VK_CHECK(vkWaitForFences(device, 1, &cmd_buf_fence, true, UINT64_MAX));
+            VK_CHECK(vkResetFences(device, 1, &cmd_buf_fence));
             VK_CHECK(vkResetCommandBuffer(cmd_buf, 0));
 
             VkCommandBufferBeginInfo begin_info{};
@@ -363,7 +367,7 @@ namespace engine::transport2 {
             submit_info.signalSemaphoreInfoCount = 1;
             submit_info.pSignalSemaphoreInfos = &signal_info;
 
-            VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, nullptr));
+            VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, cmd_buf_fence));
 
             for (auto& task : tasks) {
                 ticket_timelines[task.ticket_id].second = timeline_counter;
@@ -386,15 +390,18 @@ namespace engine::transport2 {
         cmd_buf_alloc_info.commandBufferCount = 1;
         cmd_buf_alloc_info.commandPool = cmd_pool;
         cmd_buf_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        vkAllocateCommandBuffers(device, &cmd_buf_alloc_info, &cmd_buf);
-        vkAllocateCommandBuffers(device, &cmd_buf_alloc_info, &barrier_cmd_buf);
+        for (auto& cmd_buf : cmd_bufs) {
+            vkAllocateCommandBuffers(device, &cmd_buf_alloc_info, &cmd_buf);
+        }
 
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.pNext = nullptr;
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-        VK_CHECK(vkCreateFence(device, &fence_info, nullptr, &barrier_cmd_buf_fence));
+        for (auto& fence : cmd_buf_fences) {
+            VK_CHECK(vkCreateFence(device, &fence_info, nullptr, &fence));
+        }
 
         VkSemaphoreTypeCreateInfo semaphore_type{};
         semaphore_type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -416,18 +423,20 @@ namespace engine::transport2 {
 
         staging_buffer.destroy();
         vkDestroyCommandPool(device, cmd_pool, nullptr);
-        vkDestroyFence(device, barrier_cmd_buf_fence, nullptr);
+        for (auto& fence : cmd_buf_fences) {
+            vkDestroyFence(device, fence, nullptr);
+        }
         vkDestroySemaphore(device, timeline_semaphore, nullptr);
     }
 
     void tick() {
-        std::lock_guard lock{submit_mutex};
-
-        synchronization::begin_barriers();
-        for (auto barrier : graphics_queue_barriers) {
-            std::visit([](auto barrier) { synchronization::apply_barrier(barrier); }, barrier);
-        }
-        synchronization::end_barriers();
+        // std::lock_guard lock{submit_mutex};
+        //
+        // synchronization::begin_barriers();
+        // for (auto barrier : graphics_queue_barriers) {
+        //     std::visit([](auto barrier) { synchronization::apply_barrier(barrier); }, barrier);
+        // }
+        // synchronization::end_barriers();
         graphics_queue_barriers.clear();
     }
 
@@ -485,6 +494,34 @@ namespace engine::transport2 {
             if (priority) task_queue.emplace_front(task);
             else task_queue.emplace_back(task);
         }
+
+        return ticket;
+    }
+
+    ticket upload(bool priority, void* src, bool own, VkFormat format, VkImage dst, VkImageLayout current_layout, VkImageLayout new_layout) {
+        auto ticket = get_free_ticket();
+
+        // task task = {
+        //     .dst = task::BufferDst{
+        //         .buffer = dst,
+        //         .offset = dst_offset,
+        //         .initial_offset = dst_offset,
+        //     },
+        //     .src = src,
+        //     .src_offset = 0,
+        //     .src_size = size,
+        //     .ticket_id = ticket.id(),
+        //     .owning = own,
+        //     .last = true,
+        // };
+        //
+        // {
+        //     std::lock_guard lock{task_queue_lock};
+        //     auto& task_queue = task_queues[current_task_queue];
+        //
+        //     if (priority) task_queue.emplace_front(task);
+        //     else task_queue.emplace_back(task);
+        // }
 
         return ticket;
     }

@@ -4,11 +4,8 @@
 #include "goliath/gltf.hpp"
 #include "goliath/thread_pool.hpp"
 #include "goliath/culling.hpp"
-#include "goliath/engine.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/mspc_queue.hpp"
-#include "goliath/synchronization.hpp"
-#include "goliath/transport.hpp"
 #include "goliath/util.hpp"
 
 #include <expected>
@@ -35,7 +32,6 @@ namespace engine::models {
     }
 
     struct UploadedModelData {
-        uint64_t timeline = (uint64_t)-1;
         engine::Buffer draw_buffer{};
         engine::GPUModel gpu{};
         engine::GPUGroup group{};
@@ -183,30 +179,18 @@ namespace engine::models {
         initialized_queue.drain(initialized_gids);
 
         if (upload_gids.size() != 0) {
-            engine::synchronization::begin_barriers();
-            auto timeline = engine::transport::begin();
             for (const auto& gid : upload_gids) {
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
                     auto& cpu_data = *cpu_datas[gid.id()];
                     engine::gpu_group::begin();
                     auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
 
-                    VkBufferMemoryBarrier2 barrier{};
-                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                    barrier.dstStageMask =
-                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    barrier.dstQueueFamilyIndex = engine::graphics_queue_family;
                     auto& gpu_data = gpu_datas[gid.id()];
-                    gpu_data.group = engine::gpu_group::end(&barrier, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
+                    gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
                     gpu_data.draw_buffer = draw_buffer;
                     gpu_data.gpu = gpu;
-                    gpu_data.timeline = timeline;
-
-                    engine::synchronization::apply_barrier(barrier);
                 }
             }
-            engine::transport::end();
-            engine::synchronization::end_barriers();
         }
 
         bool initialized = false;
@@ -325,9 +309,7 @@ namespace engine::models {
             ref_counts[gid.id()] = 0;
 
             cpu_datas[gid.id()] = std::nullopt;
-            gpu_datas[gid.id()] = UploadedModelData{
-                .timeline = (size_t)-1,
-            };
+            gpu_datas[gid.id()] = UploadedModelData{};
 
             generations[gid.id()] += 1;
             deleted[gid.id()] = false;
@@ -341,9 +323,7 @@ namespace engine::models {
             ref_counts.emplace_back(0);
 
             cpu_datas.emplace_back(std::nullopt);
-            gpu_datas.emplace_back(UploadedModelData{
-                .timeline = (size_t)-1,
-            });
+            gpu_datas.emplace_back(UploadedModelData{});
 
             generations.emplace_back(0);
             deleted.emplace_back(false);
@@ -390,9 +370,7 @@ namespace engine::models {
         names[gid.id()] = "";
 
         cpu_datas[gid.id()] = std::nullopt;
-        gpu_datas[gid.id()] = UploadedModelData{
-            .timeline = (size_t)-1,
-        };
+        gpu_datas[gid.id()] = UploadedModelData{};
 
         return true;
     }
@@ -414,12 +392,12 @@ namespace engine::models {
         return model ? &*model : nullptr;
     }
 
-    std::expected<uint64_t, Err> get_timeline(gid gid) {
+    std::expected<transport2::ticket, Err> get_ticket(gid gid) {
         assert(init_called);
 
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        return gpu_datas[gid.id()].timeline;
+        return gpu_datas[gid.id()].group.ticket;
     }
 
     std::expected<engine::Buffer, Err> get_draw_buffer(gid gid) {
@@ -457,7 +435,7 @@ namespace engine::models {
 
         if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
 
-        if (engine::transport::is_ready(gpu_datas[gid.id()].timeline)) return LoadState::OnGPU;
+        if (engine::transport2::is_ready(gpu_datas[gid.id()].group.ticket)) return LoadState::OnGPU;
         if (cpu_datas[gid.id()]) return LoadState::OnCPU;
         return LoadState::OnDisk;
     }
@@ -472,7 +450,7 @@ namespace engine::models {
             if (++ref_counts[gid.id()] != 1) return;
 
             cpu_datas[gid.id()] = std::nullopt;
-            gpu_datas[gid.id()].timeline = -1;
+            gpu_datas[gid.id()] = {};
             io_pool.enqueue({task::Acquire, gid});
         }
     }

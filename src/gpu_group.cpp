@@ -1,5 +1,4 @@
 #include "goliath/gpu_group.hpp"
-#include "goliath/transport.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -44,7 +43,7 @@ namespace engine::gpu_group {
         return needed_data_size - data_size;
     }
 
-    GPUGroup end(VkBufferMemoryBarrier2* barrier, VkBufferUsageFlags usage_flags) {
+    GPUGroup end(bool priority, VkBufferUsageFlags usage_flags) {
         if (needed_data_size == 0) return GPUGroup{};
 
         auto group = GPUGroup{
@@ -63,7 +62,7 @@ namespace engine::gpu_group {
         }
         textures::acquire(group.acquired_texture_gids, group.acquired_texture_count);
 
-        transport::upload(barrier, start_of_data, needed_data_size, group.data.data(), 0);
+        group.ticket = transport2::upload(priority, start_of_data, true, needed_data_size, group.data, 0);
 
         return group;
     }

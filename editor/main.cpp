@@ -150,6 +150,7 @@ int main(int argc, char** argv) {
     EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
     EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
+    EXVAR_DRAG(exvar_reg, "Editor/Camera/movement speed", float, movement_speed, = 0.5f, 0.0f, 1.0f);
 
     EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
     EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
@@ -473,13 +474,13 @@ int main(int argc, char** argv) {
                 auto right = cam.right();
                 auto normalized_movement = glm::normalize(movement);
 
-                cam.position += -normalized_movement.z * forward + normalized_movement.x * right;
+                cam.position += movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
                 exvar_reg.modified();
             }
 
             auto mouse_delta = engine::event::get_mouse_delta();
             if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
-                cam.rotate(glm::radians(-mouse_delta.x), glm::radians(-mouse_delta.y));
+                cam.rotate(sensitivity * glm::radians(-mouse_delta.x), sensitivity * glm::radians(-mouse_delta.y));
             }
 
             cam.update_matrices();
@@ -635,7 +636,9 @@ int main(int argc, char** argv) {
 
             auto& transform_buffer = transform_buffers[engine::get_current_frame()];
             if (scene::selected_scene().instances.size() != 0) {
-                transform_buffer_ticket = engine::transport2::upload(true, transforms[engine::get_current_frame()], false, scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer, 0);
+                transform_buffer_ticket = engine::transport2::upload(
+                    true, transforms[engine::get_current_frame()], false,
+                    scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer, 0);
             }
 
             VkClearColorValue target_clear_color{};
