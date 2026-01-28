@@ -187,9 +187,9 @@ namespace engine::transport2 {
                         graphics_queue_barriers.emplace_back(VkImageMemoryBarrier2{
                             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                             .pNext = nullptr,
-                            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+                            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                            .srcAccessMask = VK_ACCESS_2_NONE,
+                            .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                             .dstAccessMask = VK_ACCESS_2_NONE,
                             .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             .newLayout = dst.new_layout,
@@ -471,31 +471,76 @@ namespace engine::transport2 {
         return ticket;
     }
 
-    ticket upload(bool priority, void* src, bool own, VkFormat format, VkImage dst, VkImageLayout current_layout,
-                  VkImageLayout new_layout) {
+    ticket upload(bool priority, VkFormat format, VkExtent3D dimension, void* src, bool own, VkImage dst,
+                  VkImageSubresourceLayers dst_layers, VkOffset3D dst_offset, VkImageLayout dst_layout) {
         auto ticket = get_free_ticket();
 
-        // task task = {
-        //     .dst = task::BufferDst{
-        //         .buffer = dst,
-        //         .offset = dst_offset,
-        //         .initial_offset = dst_offset,
-        //     },
-        //     .src = src,
-        //     .src_offset = 0,
-        //     .src_size = size,
-        //     .ticket_id = ticket.id(),
-        //     .owning = own,
-        //     .last = true,
-        // };
-        //
-        // {
-        //     std::lock_guard lock{task_queue_lock};
-        //     auto& task_queue = task_queues[current_task_queue];
-        //
-        //     if (priority) task_queue.emplace_front(task);
-        //     else task_queue.emplace_back(task);
-        // }
+        transport_queue_image_barriers.emplace_back(VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = VK_ACCESS_2_NONE,
+            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image = dst,
+            .subresourceRange =
+                VkImageSubresourceRange{
+                    .aspectMask = dst_layers.aspectMask,
+                    .baseMipLevel = dst_layers.mipLevel,
+                    .levelCount = 1,
+                    .baseArrayLayer = dst_layers.baseArrayLayer,
+                    .layerCount = dst_layers.layerCount,
+                },
+        });
+
+        uint32_t bytes_per_pixel = 4;
+
+        std::vector<task> tasks{};
+        tasks.resize(dst_layers.layerCount);
+
+        for (uint32_t i = 0; i < dst_layers.layerCount; i++) {
+            tasks.emplace_back(task{
+                .dst =
+                    task::ImageDst{
+                        .image = dst,
+                        .subresource =
+                            VkImageSubresourceLayers{
+                                .aspectMask = dst_layers.aspectMask,
+                                .mipLevel = dst_layers.mipLevel,
+                                .baseArrayLayer = dst_layers.baseArrayLayer + i,
+                                .layerCount = 1,
+                            },
+                        .initial_base_array_layer = dst_layers.baseArrayLayer,
+
+                        .offset = dst_offset,
+                        .extent = dimension,
+
+                        .row_length = dimension.width,
+                        .image_height = dimension.height,
+
+                        .new_layout = dst_layout,
+                    },
+                .src = src,
+                .src_offset = 0,
+                .src_size = dimension.width * dimension.height * bytes_per_pixel,
+                .ticket_id = ticket.id(),
+                .owning = own,
+                .last = i == (dst_layers.layerCount - 1),
+            });
+        }
+
+        {
+            std::lock_guard lock{task_queue_lock};
+            auto& task_queue = task_queues[current_task_queue];
+
+            if (priority) {
+                task_queue.insert(task_queue.begin(), tasks.rbegin(), tasks.rend());
+            } else {
+                task_queue.insert(task_queue.end(), tasks.begin(), tasks.end());
+            }
+        }
 
         return ticket;
     }
