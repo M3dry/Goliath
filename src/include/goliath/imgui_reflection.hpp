@@ -150,11 +150,11 @@ namespace engine::imgui_reflection {
                     }
                     ImGui::EndGroup();
                 } else if (dimension[1] == 1) {
-                    modified |= input<T>(label, arg, value, dimension[1]);
+                    modified |= input<T>(label, arg, value, dimension[0]);
                 } else if (dimension[0] == 1) {
-                    for (size_t i = 0; i < dimension[0]; i++) {
+                    for (size_t i = 0; i < dimension[1]; i++) {
                         ImGui::PushID(i);
-                        modified |= input<T>(i == dimension[0] - 1 ? label : "", arg, value + i, 1);
+                        modified |= input<T>(i == dimension[1] - 1 ? label : "", arg, value + i, 1);
                         ImGui::PopID();
                     }
                 }

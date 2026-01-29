@@ -107,7 +107,8 @@ namespace engine::transport2 {
                 dst);
         }
 
-        void upload(VkCommandBuffer cmd_buf, VkBuffer src_buf, uint32_t src_buf_offset) {
+        void upload(std::variant<VkBufferMemoryBarrier2, VkImageMemoryBarrier2>& graphics_barrier,
+                    VkCommandBuffer cmd_buf, VkBuffer src_buf, uint32_t src_buf_offset) {
             std::visit(
                 [&](auto&& dst) {
                     using Dst = std::decay_t<decltype(dst)>;
@@ -135,7 +136,7 @@ namespace engine::transport2 {
                             .size = src_offset + src_size,
                         });
 
-                        graphics_queue_barriers.emplace_back(VkBufferMemoryBarrier2{
+                        graphics_barrier = VkBufferMemoryBarrier2{
                             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                             .pNext = nullptr,
                             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
@@ -147,7 +148,7 @@ namespace engine::transport2 {
                             .buffer = dst.buffer,
                             .offset = dst.initial_offset,
                             .size = src_offset + src_size,
-                        });
+                        };
                     } else {
                         VkBufferImageCopy region{
                             .bufferOffset = src_buf_offset,
@@ -184,7 +185,7 @@ namespace engine::transport2 {
                                 },
                         });
 
-                        graphics_queue_barriers.emplace_back(VkImageMemoryBarrier2{
+                        graphics_barrier = VkImageMemoryBarrier2{
                             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                             .pNext = nullptr,
                             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
@@ -204,7 +205,7 @@ namespace engine::transport2 {
                                     .baseArrayLayer = dst.initial_base_array_layer,
                                     .layerCount = dst.subresource.layerCount,
                                 },
-                        });
+                        };
                     }
                 },
                 dst);
@@ -228,6 +229,8 @@ namespace engine::transport2 {
     uint32_t current_task_queue = 0;
     std::array<std::deque<task>, 2> task_queues{};
     std::mutex task_queue_lock{};
+
+    std::mutex graphics_barriers_lock{};
 
     bool is_timeline_ready(uint64_t timeline) {
         if (finished_timeline >= timeline) return true;
@@ -299,9 +302,11 @@ namespace engine::transport2 {
 
             if (flush_staging_buffer) staging_buffer.flush_mapped(0, staging_buffer_size);
 
+            std::vector<std::variant<VkBufferMemoryBarrier2, VkImageMemoryBarrier2>> graphics_barriers;
             uint32_t upload_offset = 0;
             for (auto& task : tasks) {
-                task.upload(cmd_buf, staging_buffer, upload_offset);
+                graphics_barriers.emplace_back();
+                task.upload(graphics_barriers.back(), cmd_buf, staging_buffer, upload_offset);
                 upload_offset += task.src_size;
             }
 
@@ -316,6 +321,11 @@ namespace engine::transport2 {
 
                 transport_queue_buffer_barriers.clear();
                 transport_queue_image_barriers.clear();
+            }
+
+            {
+                std::lock_guard lock{graphics_barriers_lock};
+                graphics_queue_barriers.insert(graphics_queue_barriers.end(), graphics_barriers.begin(), graphics_barriers.end());
             }
 
             VK_CHECK(vkEndCommandBuffer(cmd_buf));
@@ -406,6 +416,8 @@ namespace engine::transport2 {
     }
 
     void tick() {
+        std::lock_guard lock{graphics_barriers_lock};
+
         synchronization::begin_barriers();
         for (auto barrier : graphics_queue_barriers) {
             std::visit([](auto barrier) { synchronization::apply_barrier(barrier); }, barrier);
