@@ -91,6 +91,7 @@ SET(ENGINE_SOURCES
     materials.cpp
     culling.cpp
     exvar.cpp
+    dyn_module.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

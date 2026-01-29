@@ -25,4 +25,9 @@ target_link_libraries(editor PRIVATE goliath nfd)
 if(MSVC)
     target_compile_options(editor PRIVATE /FS)
     set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/$<CONFIG>")
+else()
+    target_compile_options(editor PRIVATE
+        -fvisibility=hidden
+        -fvisibility-inlines-hidden
+    )
 endif()
