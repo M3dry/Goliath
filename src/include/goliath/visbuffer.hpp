@@ -18,8 +18,8 @@ namespace engine::visbuffer {
     extern uint32_t fragment_id_buffer_size;
     extern std::array<uint32_t, frames_in_flight> fragment_id_buffer_offsets;
 
-    void init(glm::uvec2 dims, VkImageMemoryBarrier2* img_barriers);
-    void resize(glm::uvec2 new_dims, VkImageMemoryBarrier2* img_barriers, bool swapchain_changed, bool material_count_changed);
+    void init(glm::uvec2 dims);
+    void resize(glm::uvec2 new_dims, bool material_count_changed);
     void destroy();
 
     void push_material(uint16_t n = 1);

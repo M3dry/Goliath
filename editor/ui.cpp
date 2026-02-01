@@ -98,8 +98,8 @@ namespace ui {
 
     void destroy() {
         for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
-            game_window_images[i].destroy();
-            engine::GPUImageView::destroy(game_window_image_views[i]);
+            engine::gpu_image::destroy(game_window_images[i]);
+            engine::gpu_image_view::destroy(game_window_image_views[i]);
             ImGui_ImplVulkan_RemoveTexture(game_window_textures[i]);
         }
     }
@@ -128,13 +128,12 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
-    std::optional<VkImageMemoryBarrier2> game_window(engine::Camera& cam) {
+    void game_window(engine::Camera& cam) {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
         auto& game_window_image = game_window_images[curr_frame];
         auto& game_window_image_view = game_window_image_views[curr_frame];
         auto& game_window_texture = game_window_textures[curr_frame];
-        auto& [game_window_barrier_applied, game_window_barrier] = game_window_barriers[curr_frame];
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -146,36 +145,28 @@ namespace ui {
         ImVec2 avail = ImGui::GetWindowSize();
         skip_game_window = avail.x <= 0 || avail.y <= 0;
 
-        bool new_barrier = false;
         if ((avail.x != game_window_.x || avail.y != game_window_.y) && !skip_game_window) {
-            game_window_image.destroy();
-            engine::GPUImageView::destroy(game_window_image_view);
+            engine::gpu_image::destroy(game_window_image);
+            engine::gpu_image_view::destroy(game_window_image_view);
             ImGui_ImplVulkan_RemoveTexture(game_window_texture);
 
-            auto image_upload =
-                engine::GPUImage::upload(std::format("Game window texture #{}", curr_frame).c_str(),
+            game_window_image =
+                engine::gpu_image::upload(std::format("Game window texture #{}", curr_frame).c_str(),
                                          engine::GPUImageInfo{}
                                              .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                              .width(avail.x)
                                              .height(avail.y)
                                              .format(VK_FORMAT_R8G8B8A8_UNORM)
-                                             .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT));
-            game_window_image = image_upload.first;
-            game_window_barrier_applied = false;
-            game_window_barrier = image_upload.second;
-            game_window_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            game_window_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                                             .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT), VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
             game_window_image_view =
-                engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+                engine::gpu_image_view::create(engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
 
             game_window_texture = ImGui_ImplVulkan_AddTexture(game_window_sampler, game_window_image_view,
                                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
             game_window_ = avail;
-
-            new_barrier = true;
         }
 
         if (!skip_game_window) {
@@ -238,8 +229,6 @@ namespace ui {
         }
         ImGui::End();
         ImGui::PopStyleVar();
-
-        return new_barrier ? std::make_optional(game_window_barrier) : std::nullopt;
     }
 
     bool skipped_game_window() {

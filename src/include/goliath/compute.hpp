@@ -56,12 +56,14 @@ namespace engine {
         uint32_t _push_constant_size = 0;
 
         ComputePipeline() = default;
-        ComputePipeline(ComputePipelineBuilder&& builder);
 
-        void bind();
-        void dispatch(DispatchParams params);
-        void dispatch_indirect(IndirectDispatchParams params);
-
-        void destroy();
+        void bind() const;
+        void dispatch(const DispatchParams& params) const;
+        void dispatch_indirect(const IndirectDispatchParams& params) const;
     };
+}
+
+namespace engine::compute {
+    ComputePipeline create(const ComputePipelineBuilder& builder);
+    void destroy(const ComputePipeline& pipeline);
 }

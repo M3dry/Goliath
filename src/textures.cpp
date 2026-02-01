@@ -1,9 +1,7 @@
 #include "goliath/textures.hpp"
 #include "goliath/mspc_queue.hpp"
 #include "goliath/samplers.hpp"
-#include "goliath/synchronization.hpp"
 #include "goliath/thread_pool.hpp"
-#include "goliath/transport.hpp"
 #include "textures_.hpp"
 
 #include "xxHash/xxhash.h"
@@ -48,7 +46,7 @@ namespace engine::textures {
 
     std::vector<gid> initializing_textures{};
     static constexpr std::size_t initialized_queue_size = 32;
-    engine::MSPCQueue<gid, initialized_queue_size> initialized_queue;
+    MSPCQueue<gid, initialized_queue_size> initialized_queue;
 
     struct upload_task {
         gid gid;
@@ -58,8 +56,8 @@ namespace engine::textures {
     };
 
     static constexpr std::size_t upload_queue_size = 64;
-    engine::MSPCQueue<upload_task, upload_queue_size> upload_queue;
-    std::deque<std::pair<uint64_t, gid>> finalize_queue{};
+    MSPCQueue<upload_task, upload_queue_size> upload_queue;
+    std::deque<std::pair<transport2::ticket, gid>> finalize_queue{};
     std::mutex gid_read{};
 
     std::optional<gid> find_empty_gid() {
@@ -197,8 +195,8 @@ namespace engine::textures {
         if (!init_called) return;
 
         for (std::size_t i = 0; i < names.size(); i++) {
-            gpu_images[i].destroy();
-            GPUImageView::destroy(gpu_image_views[i]);
+            gpu_image::destroy(gpu_images[i]);
+            gpu_image_view::destroy(gpu_image_views[i]);
         }
 
         texture_pool.destroy();
@@ -213,42 +211,36 @@ namespace engine::textures {
         std::vector<gid> initialized_gids{};
         initialized_queue.drain(initialized_gids);
 
-        uint64_t finish_timeline;
         if (upload_tasks.size() != 0) {
-            engine::synchronization::begin_barriers();
-            auto finish_timeline = engine::transport::begin();
             for (const auto& up_task : upload_tasks) {
                 auto gid = up_task.gid;
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
                     auto metadata = up_task.metadata;
-                    auto [image, barrier] = GPUImage::upload(names[gid.id()].c_str(),
-                                                             GPUImageInfo{}
-                                                                 .width(metadata.width)
-                                                                 .height(metadata.height)
-                                                                 .format(metadata.format)
-                                                                 .data(up_task.image_data)
-                                                                 .size(up_task.image_size)
-                                                                 .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                                                                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+                    transport2::ticket ticket{};
+                    auto image = gpu_image::upload(names[gid.id()].c_str(),
+                                                   GPUImageInfo{}
+                                                       .width(metadata.width)
+                                                       .height(metadata.height)
+                                                       .format(metadata.format)
+                                                       .data(up_task.image_data, free, ticket, false)
+                                                       .size(up_task.image_size)
+                                                       .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                                       .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT),
+                                                   VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                   VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
                     gpu_images[gid.id()] = image;
-                    gpu_image_views[gid.id()] = GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT).create();
+                    gpu_image_views[gid.id()] =
+                        gpu_image_view::create(GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
 
-                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    barrier.dstStageMask =
-                        VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    synchronization::apply_barrier(barrier);
-
-                    free(up_task.image_data);
-
-                    finalize_queue.emplace_back(finish_timeline, gid);
+                    finalize_queue.emplace_back(ticket, gid);
                 }
             }
-            engine::transport::end();
-            engine::synchronization::end_barriers();
         }
 
-        while (finalize_queue.size() > 0 && transport::is_ready(finalize_queue.front().first)) {
+        while (finalize_queue.size() > 0 && transport2::is_ready(finalize_queue.front().first)) {
             auto gid = finalize_queue.front().second;
 
             if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
@@ -477,8 +469,8 @@ namespace engine::textures {
 
         std::filesystem::remove(texture_directory / make_texture_path(gid));
 
-        gpu_images[gid.id()].destroy();
-        GPUImageView::destroy(gpu_image_views[gid.id()]);
+        gpu_image::destroy(gpu_images[gid.id()]);
+        gpu_image_view::destroy(gpu_image_views[gid.id()]);
         samplers::remove(samplers[gid.id()]);
 
         names[gid.id()] = "";
@@ -553,8 +545,8 @@ namespace engine::textures {
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
-            gpu_images[gid.id()].destroy();
-            GPUImageView::destroy(gpu_image_views[gid.id()]);
+            gpu_image::destroy(gpu_images[gid.id()]);
+            gpu_image_view::destroy(gpu_image_views[gid.id()]);
 
             gpu_images[gid.id()] = GPUImage{};
             gpu_image_views[gid.id()] = nullptr;

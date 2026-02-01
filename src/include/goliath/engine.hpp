@@ -2,9 +2,10 @@
 
 #include <filesystem>
 
+#include <mutex>
 #include <volk.h>
-#include <vk_mem_alloc.h>
 #include <vulkan/vk_enum_string_helper.h>
+#include <vk_mem_alloc.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -40,12 +41,17 @@ namespace engine {
     extern std::vector<VkImage> swapchain_images;
     extern std::vector<VkImageView> swapchain_image_views;
 
+    extern VkCommandPool barriers_cmd_pool;
+    extern VkFence barriers_cmd_buf_fence;
+    extern VkCommandBuffer barriers_cmd_buf;
+
+    extern std::mutex graphics_queue_lock;
     extern VkQueue graphics_queue;
     extern uint32_t graphics_queue_family;
     extern VkQueue transport_queue;
     extern uint32_t transport_queue_family;
 
-    struct Init{
+    struct Init {
         const char* window_name;
         uint32_t texture_capacity = 1000;
         bool fullscreen = true;
@@ -70,4 +76,6 @@ namespace engine {
     bool models_to_save();
     bool materials_to_save();
     bool textures_to_save();
+
+    bool drawing_prepared();
 }

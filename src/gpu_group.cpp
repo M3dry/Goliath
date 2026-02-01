@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <vulkan/vulkan_core.h>
 
 void engine::GPUGroup::destroy() {
     data.destroy();
@@ -12,7 +13,7 @@ void engine::GPUGroup::destroy() {
 
 namespace engine::gpu_group {
     struct UploadFunc {
-        void(*f)(uint8_t*, uint32_t, uint32_t, textures::gid*, uint32_t, void*);
+        void (*f)(uint8_t*, uint32_t, uint32_t, textures::gid*, uint32_t, void*);
         void* ctx;
         uint32_t start;
         uint32_t size;
@@ -43,11 +44,12 @@ namespace engine::gpu_group {
         return needed_data_size - data_size;
     }
 
-    GPUGroup end(bool priority, VkBufferUsageFlags usage_flags) {
+    GPUGroup end(bool priority, VkBufferUsageFlags usage_flags, VkPipelineStageFlags2 stage, VkAccessFlagBits2 access) {
         if (needed_data_size == 0) return GPUGroup{};
 
         auto group = GPUGroup{
-            .data = Buffer::create("GPU group buffer", needed_data_size, VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | usage_flags, std::nullopt),
+            .data = Buffer::create("GPU group buffer", needed_data_size,
+                                   VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | usage_flags, std::nullopt),
             .acquired_texture_count = acquired_texture_count,
             .acquired_texture_gids = (textures::gid*)malloc(acquired_texture_count * sizeof(textures::gid)),
         };
@@ -62,7 +64,7 @@ namespace engine::gpu_group {
         }
         textures::acquire(group.acquired_texture_gids, group.acquired_texture_count);
 
-        group.ticket = transport2::upload(priority, start_of_data, true, needed_data_size, group.data, 0);
+        group.ticket = transport2::upload(priority, start_of_data, free, needed_data_size, group.data, 0, stage, access);
 
         return group;
     }

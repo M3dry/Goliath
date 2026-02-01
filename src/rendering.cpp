@@ -21,21 +21,6 @@ engine::RenderPass::RenderPass() {
     _info.viewMask = 0;
 }
 
-VkShaderModule engine::create_shader(std::span<uint8_t> code) {
-    VkShaderModuleCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    info.codeSize = code.size();
-    info.pCode = (uint32_t*)code.data();
-
-    VkShaderModule out;
-    vkCreateShaderModule(device, &info, nullptr, &out);
-    return out;
-}
-
-void engine::destroy_shader(VkShaderModule shader) {
-    vkDestroyShaderModule(device, shader, nullptr);
-}
-
 engine::GraphicsPipelineBuilder::GraphicsPipelineBuilder() {
     _set_layout[0] = descriptor::empty_set;
     _set_layout[1] = descriptor::empty_set;
@@ -48,111 +33,7 @@ engine::GraphicsPipelineBuilder&& engine::GraphicsPipelineBuilder::clear_descrip
     return std::move(*this);
 }
 
-engine::GraphicsPipeline::GraphicsPipeline(const engine::GraphicsPipelineBuilder& builder)
-    : _push_constant_size(builder._push_constant_size) {
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = builder._vertex;
-    stages[0].pName = "main";
-
-    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = builder._fragment;
-    stages[1].pName = "main";
-
-    VkPipelineVertexInputStateCreateInfo vert_input{};
-    vert_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
-    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo viewport_state{};
-    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewport_state.viewportCount = 1;
-    viewport_state.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
-    depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-
-    VkPipelineColorBlendStateCreateInfo blend_state{};
-    blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend_state.attachmentCount = (uint32_t)builder._color_blend_attachments.size();
-    blend_state.pAttachments = builder._color_blend_attachments.data();
-
-    VkDynamicState dynamic_states[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
-        VK_DYNAMIC_STATE_LINE_WIDTH,
-        VK_DYNAMIC_STATE_CULL_MODE,
-        VK_DYNAMIC_STATE_FRONT_FACE,
-        VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
-        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
-        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
-        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-        VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,
-        VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
-        VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
-        VK_DYNAMIC_STATE_STENCIL_OP,
-        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
-        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
-    };
-    VkPipelineDynamicStateCreateInfo dynamic_state{};
-    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamic_state.dynamicStateCount = sizeof(dynamic_states) / sizeof(VkDynamicState);
-    dynamic_state.pDynamicStates = dynamic_states;
-
-    VkPushConstantRange push_constant_range{};
-    push_constant_range.size = builder._push_constant_size;
-    push_constant_range.offset = 0;
-    push_constant_range.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
-
-    VkPipelineLayoutCreateInfo layout_info{};
-    layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout_info.setLayoutCount = 4;
-    layout_info.pSetLayouts = builder._set_layout;
-    layout_info.pushConstantRangeCount = builder._push_constant_size == 0 ? 0 : 1;
-    layout_info.pPushConstantRanges = &push_constant_range;
-    VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &_pipeline_layout));
-
-    VkPipelineRenderingCreateInfo rendering{};
-    rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    rendering.colorAttachmentCount = (uint32_t)builder._color_format_attachments.size();
-    rendering.pColorAttachmentFormats = builder._color_format_attachments.data();
-    rendering.depthAttachmentFormat = builder._depth_format;
-    rendering.stencilAttachmentFormat = builder._stencil_format;
-    rendering.viewMask = 0;
-
-    VkGraphicsPipelineCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.pNext = &rendering;
-    info.stageCount = 2;
-    info.pStages = stages;
-    info.pVertexInputState = &vert_input;
-    info.pInputAssemblyState = &input_assembly;
-    info.pViewportState = &viewport_state;
-    info.pRasterizationState = &rasterizer;
-    info.pMultisampleState = &multisampling;
-    info.pDepthStencilState = &depth_stencil;
-    info.pColorBlendState = &blend_state;
-    info.pDynamicState = &dynamic_state;
-    info.layout = _pipeline_layout;
-
-    VK_CHECK(vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &_pipeline));
-
-    update_viewport_to_swapchain();
-    update_scissor_to_viewport();
-}
-
-void engine::GraphicsPipeline::bind() {
+void engine::GraphicsPipeline::bind() const {
     auto cmd_buf = get_cmd_buf();
 
     vkCmdSetPrimitiveTopologyEXT(cmd_buf, static_cast<VkPrimitiveTopology>(_topology));
@@ -186,7 +67,7 @@ void engine::GraphicsPipeline::bind() {
     vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
 }
 
-void engine::GraphicsPipeline::draw(const DrawParams& params) {
+void engine::GraphicsPipeline::draw(const DrawParams& params) const {
     auto cmd_buf = get_cmd_buf();
     auto& descriptor_pool = get_frame_descriptor_pool();
 
@@ -211,7 +92,7 @@ void engine::GraphicsPipeline::draw(const DrawParams& params) {
     vkCmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex_id, params.first_instance_id);
 }
 
-void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
+void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) const {
     auto cmd_buf = get_cmd_buf();
     auto& descriptor_pool = get_frame_descriptor_pool();
 
@@ -236,7 +117,7 @@ void engine::GraphicsPipeline::draw_indirect(const DrawIndirectParams& params) {
     vkCmdDrawIndirect(cmd_buf, params.draw_buffer, params.start_offset, params.draw_count, params.stride);
 }
 
-void engine::GraphicsPipeline::draw_indirect_count(const DrawIndirectCountParams& params) {
+void engine::GraphicsPipeline::draw_indirect_count(const DrawIndirectCountParams& params) const {
     auto cmd_buf = get_cmd_buf();
     auto& descriptor_pool = get_frame_descriptor_pool();
 
@@ -262,11 +143,6 @@ void engine::GraphicsPipeline::draw_indirect_count(const DrawIndirectCountParams
                            params.max_draw_count, params.stride);
 }
 
-void engine::GraphicsPipeline::destroy() {
-    vkDestroyPipeline(device, _pipeline, nullptr);
-    vkDestroyPipelineLayout(device, _pipeline_layout, nullptr);
-}
-
 namespace engine::rendering {
     void begin(const RenderPass& render_pass) {
         vkCmdBeginRendering(get_cmd_buf(), &render_pass._info);
@@ -274,5 +150,135 @@ namespace engine::rendering {
 
     void end() {
         vkCmdEndRendering(get_cmd_buf());
+    }
+
+    GraphicsPipeline create_pipeline(const GraphicsPipelineBuilder& builder) {
+        GraphicsPipeline res{};
+        res._push_constant_size = builder._push_constant_size;
+
+        VkPipelineShaderStageCreateInfo stages[2]{};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = builder._vertex;
+        stages[0].pName = "main";
+
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = builder._fragment;
+        stages[1].pName = "main";
+
+        VkPipelineVertexInputStateCreateInfo vert_input{};
+        vert_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+        input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo viewport_state{};
+        viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewport_state.viewportCount = 1;
+        viewport_state.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizer{};
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+
+        VkPipelineMultisampleStateCreateInfo multisampling{};
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+        depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+        VkPipelineColorBlendStateCreateInfo blend_state{};
+        blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        blend_state.attachmentCount = (uint32_t)builder._color_blend_attachments.size();
+        blend_state.pAttachments = builder._color_blend_attachments.data();
+
+        VkDynamicState dynamic_states[] = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_LINE_WIDTH,
+            VK_DYNAMIC_STATE_CULL_MODE,
+            VK_DYNAMIC_STATE_FRONT_FACE,
+            VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY,
+            VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+            VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+            VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,
+            VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE,
+            VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
+            VK_DYNAMIC_STATE_STENCIL_OP,
+            VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+            VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        };
+        VkPipelineDynamicStateCreateInfo dynamic_state{};
+        dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamic_state.dynamicStateCount = sizeof(dynamic_states) / sizeof(VkDynamicState);
+        dynamic_state.pDynamicStates = dynamic_states;
+
+        VkPushConstantRange push_constant_range{};
+        push_constant_range.size = builder._push_constant_size;
+        push_constant_range.offset = 0;
+        push_constant_range.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+
+        VkPipelineLayoutCreateInfo layout_info{};
+        layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layout_info.setLayoutCount = 4;
+        layout_info.pSetLayouts = builder._set_layout;
+        layout_info.pushConstantRangeCount = builder._push_constant_size == 0 ? 0 : 1;
+        layout_info.pPushConstantRanges = &push_constant_range;
+        VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &res._pipeline_layout));
+
+        VkPipelineRenderingCreateInfo rendering{};
+        rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        rendering.colorAttachmentCount = (uint32_t)builder._color_format_attachments.size();
+        rendering.pColorAttachmentFormats = builder._color_format_attachments.data();
+        rendering.depthAttachmentFormat = builder._depth_format;
+        rendering.stencilAttachmentFormat = builder._stencil_format;
+        rendering.viewMask = 0;
+
+        VkGraphicsPipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        info.pNext = &rendering;
+        info.stageCount = 2;
+        info.pStages = stages;
+        info.pVertexInputState = &vert_input;
+        info.pInputAssemblyState = &input_assembly;
+        info.pViewportState = &viewport_state;
+        info.pRasterizationState = &rasterizer;
+        info.pMultisampleState = &multisampling;
+        info.pDepthStencilState = &depth_stencil;
+        info.pColorBlendState = &blend_state;
+        info.pDynamicState = &dynamic_state;
+        info.layout = res._pipeline_layout;
+
+        VK_CHECK(vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &res._pipeline));
+
+        res.update_viewport_to_swapchain();
+        res.update_scissor_to_viewport();
+
+        return res;
+    }
+
+    void destroy_pipeline(const GraphicsPipeline& pipeline) {
+        vkDestroyPipeline(device, pipeline._pipeline, nullptr);
+        vkDestroyPipelineLayout(device, pipeline._pipeline_layout, nullptr);
+    }
+}
+
+namespace engine::shader {
+    VkShaderModule create(std::span<uint8_t> code) {
+        VkShaderModuleCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = code.size();
+        info.pCode = (uint32_t*)code.data();
+
+        VkShaderModule out;
+        vkCreateShaderModule(device, &info, nullptr, &out);
+        return out;
+    }
+
+    void destroy(VkShaderModule shader) {
+        vkDestroyShaderModule(device, shader, nullptr);
     }
 }

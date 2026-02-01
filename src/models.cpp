@@ -1,19 +1,19 @@
 #include "goliath/models.hpp"
-#include "goliath/materials.hpp"
-#include "models_.hpp"
-#include "goliath/gltf.hpp"
-#include "goliath/thread_pool.hpp"
 #include "goliath/culling.hpp"
+#include "goliath/gltf.hpp"
 #include "goliath/gpu_group.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/mspc_queue.hpp"
+#include "goliath/thread_pool.hpp"
 #include "goliath/util.hpp"
+#include "models_.hpp"
 
 #include <expected>
 #include <filesystem>
 #include <mutex>
 #include <string>
 #include <vector>
-
+#include <vulkan/vulkan_core.h>
 
 namespace engine::models {
     bool init_called = false;
@@ -186,7 +186,11 @@ namespace engine::models {
                     auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
 
                     auto& gpu_data = gpu_datas[gid.id()];
-                    gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT);
+                    gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                                                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
                     gpu_data.draw_buffer = draw_buffer;
                     gpu_data.gpu = gpu;
                 }

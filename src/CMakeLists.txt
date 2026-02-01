@@ -68,7 +68,6 @@ set(MIKKTSPACE_SOURCES
 SET(ENGINE_SOURCES
     engine.cpp
     imgui.cpp
-    transport.cpp
     transport2.cpp
     descriptor_pool.cpp
     texture_pool.cpp
@@ -92,6 +91,7 @@ SET(ENGINE_SOURCES
     culling.cpp
     exvar.cpp
     dyn_module.cpp
+    game_interface.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

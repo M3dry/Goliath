@@ -23,5 +23,5 @@ namespace engine::gpu_group {
     uint32_t upload(uint32_t texture_gid_count, uint32_t data_size,
                     void (*upload_ptr)(uint8_t*, uint32_t, uint32_t, textures::gid*, uint32_t, void*), void* ctx = nullptr);
 
-    [[nodiscard]] GPUGroup end(bool priority, VkBufferUsageFlags usage_flags);
+    [[nodiscard]] GPUGroup end(bool priority, VkBufferUsageFlags usage_flags, VkPipelineStageFlags2 stage, VkAccessFlagBits2 access);
 }

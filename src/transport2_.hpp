@@ -3,6 +3,4 @@
 namespace engine::transport2 {
     void init();
     void destroy();
-
-    void tick();
 }

@@ -1,10 +1,11 @@
 #pragma once
 
+#include "goliath/transport2.hpp"
 #include <utility>
 #include <vector>
 
-#include <volk.h>
 #include <vk_mem_alloc.h>
+#include <volk.h>
 
 namespace engine {
     class Image {
@@ -37,6 +38,9 @@ namespace engine {
     struct GPUImageInfo {
         VkImageCreateInfo _image_info{};
         void* _img_data = nullptr;
+        std::optional<transport2::FreeFn*> _own_data = std::nullopt;
+        bool _priority = false;
+        transport2::ticket* _ticket;
         uint32_t _width = 0;
         uint32_t _height = 0;
         uint32_t _size = 0;
@@ -104,16 +108,24 @@ namespace engine {
             return std::move(*this);
         }
 
-        GPUImageInfo&& image(const Image& img) {
+        GPUImageInfo&& image(const Image& img, std::optional<transport2::FreeFn*> own, transport2::ticket& ticket,
+                             bool priority) {
+            _priority = priority;
+            _ticket = &ticket;
             _img_data = img.data;
+            _own_data = own;
             _width = img.width;
             _height = img.height;
             _image_info.format = img.format;
             return std::move(*this);
         }
 
-        GPUImageInfo&& data(void* ptr) {
+        GPUImageInfo&& data(void* ptr, std::optional<transport2::FreeFn*> own, transport2::ticket& ticket,
+                            bool priority) {
+            _priority = priority;
+            _ticket = &ticket;
             _img_data = ptr;
+            _own_data = own;
             return std::move(*this);
         }
 
@@ -155,14 +167,6 @@ namespace engine {
         VmaAllocation allocation;
         VkImageLayout layout;
         VkFormat format;
-
-        // `transport::begin` must have been called before these two are called, unless the second function is supplied
-        // with `builder._img_data == nulltpr`, then no upload happens the returned barrier needs `dstStageMask` and
-        // `dstAccessMask` set by the caller before application
-        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const char* name, const Image& img, VkImageLayout new_layout);
-        static std::pair<GPUImage, VkImageMemoryBarrier2> upload(const char* name, const GPUImageInfo& builder);
-
-        void destroy();
     };
 
     struct GPUImageView {
@@ -230,9 +234,19 @@ namespace engine {
             _info.subresourceRange.layerCount = count;
             return std::move(*this);
         }
-
-        VkImageView create();
-
-        static void destroy(VkImageView view);
     };
+}
+
+namespace engine::gpu_image {
+    GPUImage upload(bool priority, bool own, const char* name, const Image& img, VkImageLayout new_layout,
+                    transport2::ticket& ticket, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access);
+    GPUImage upload(const char* name, const GPUImageInfo& builder, VkPipelineStageFlags2 dst_stage,
+                    VkAccessFlags2 dst_access);
+
+    void destroy(const GPUImage& gpu_image);
+}
+
+namespace engine::gpu_image_view {
+    VkImageView create(const GPUImageView& gpu_image_view);
+    void destroy(VkImageView view);
 }

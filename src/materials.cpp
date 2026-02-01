@@ -86,7 +86,8 @@ namespace engine::materials {
                                VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
         }
 
-        next_buffer_ticket = transport2::upload(false, upload, true, upload_size, gpu_buffers[(current_buffer + 1) % 2], 0);
+        next_buffer_ticket = transport2::upload(false, upload, free, upload_size, gpu_buffers[(current_buffer + 1) % 2],
+                                                0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
 
         update = false;
         auto res = want_save;

@@ -160,9 +160,6 @@ namespace engine {
         }
     };
 
-    VkShaderModule create_shader(std::span<uint8_t> code);
-    void destroy_shader(VkShaderModule shader);
-
     enum struct CullMode {
         NoCull = VK_CULL_MODE_NONE,
         Back = VK_CULL_MODE_BACK_BIT,
@@ -363,7 +360,7 @@ namespace engine {
 
         VkPipelineLayout _pipeline_layout;
         VkPipeline _pipeline;
-        const uint32_t _push_constant_size;
+        uint32_t _push_constant_size;
 
         Topology _topology = Topology::TriangleList;
         bool _primitive_restart_enable = false;
@@ -389,13 +386,10 @@ namespace engine {
         CompareOp _depth_compare_op;
         std::optional<VkDepthBiasInfoEXT> _depth_bias;
 
-        GraphicsPipeline(const GraphicsPipelineBuilder& builder);
-
-        void bind();
-        void draw(const DrawParams& params);
-        void draw_indirect(const DrawIndirectParams& params);
-        void draw_indirect_count(const DrawIndirectCountParams& params);
-        void destroy();
+        void bind() const;
+        void draw(const DrawParams& params) const;
+        void draw_indirect(const DrawIndirectParams& params) const;
+        void draw_indirect_count(const DrawIndirectCountParams& params) const;
 
         GraphicsPipeline&& topology(Topology top) {
             _topology = top;
@@ -506,4 +500,12 @@ namespace engine {
 namespace engine::rendering {
     void begin(const RenderPass& render_pass);
     void end();
+
+    GraphicsPipeline create_pipeline(const GraphicsPipelineBuilder& builder);
+    void destroy_pipeline(const GraphicsPipeline& pipeline);
+}
+
+namespace engine::shader {
+    VkShaderModule create(std::span<uint8_t> code);
+    void destroy(VkShaderModule shader);
 }

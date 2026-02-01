@@ -20,7 +20,6 @@
 
 #include "VkBootstrap.h"
 #include "imgui_.hpp"
-#include "transport_.hpp"
 #include "transport2_.hpp"
 
 #include <print>
@@ -78,6 +77,7 @@ namespace engine {
     std::vector<VkImageView> swapchain_image_views{};
     std::vector<VkSemaphore> swapchain_semaphores{};
 
+    std::mutex graphics_queue_lock{};
     VkQueue graphics_queue;
     uint32_t graphics_queue_family;
     VkQueue transport_queue;
@@ -96,11 +96,19 @@ namespace engine {
     uint64_t presented_timeline_value = 0;
     VkSemaphore timeline_semaphore{};
 
+    bool _drawing_prepared = false;
+
+    VkCommandPool barriers_cmd_pool;
+    VkFence barriers_cmd_buf_fence;
+    VkCommandBuffer barriers_cmd_buf;
+
     void rebuild_swapchain(uint32_t width, uint32_t height) {
         while (width == 0 || height == 0) {
             glfwGetFramebufferSize(window, (int*)&width, (int*)&height);
             glfwWaitEvents();
         }
+
+        vkDeviceWaitIdle(device);
 
         auto& frame_data = get_current_frame_data();
         frame_data.destroy_swapchain(OldSwapchain{
@@ -390,8 +398,26 @@ namespace engine {
 
         VK_CHECK(vkCreateSemaphore(device, &timeline_semaphore_info, nullptr, &timeline_semaphore));
 
+        VkCommandPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = graphics_queue_family;
+        VK_CHECK(vkCreateCommandPool(device, &pool_info, nullptr, &barriers_cmd_pool));
+
+        VkCommandBufferAllocateInfo cmd_buf_alloc_info{};
+        cmd_buf_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        cmd_buf_alloc_info.commandBufferCount = 1;
+        cmd_buf_alloc_info.commandPool = barriers_cmd_pool;
+        cmd_buf_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        VK_CHECK(vkAllocateCommandBuffers(device, &cmd_buf_alloc_info, &barriers_cmd_buf));
+
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_info.pNext = nullptr;
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VK_CHECK(vkCreateFence(device, &fence_info, nullptr, &barriers_cmd_buf_fence));
+
         samplers::init();
-        transport::init();
         transport2::init();
         imgui::init();
         event::register_glfw_callbacks();
@@ -414,8 +440,10 @@ namespace engine {
         samplers::destroy();
         descriptor::destroy_empty_set();
         imgui::destroy();
-        transport::destroy();
         transport2::destroy();
+
+        vkDestroyCommandPool(device, barriers_cmd_pool, nullptr);
+        vkDestroyFence(device, barriers_cmd_buf_fence, nullptr);
 
         delete[] frames;
 
@@ -520,18 +548,23 @@ namespace engine {
 
         VkBufferMemoryBarrier2 material_barrier{};
         materials_to_save_ |= materials::update_gpu_buffer();
+
+        _drawing_prepared = true;
     }
 
     bool next_frame(std::span<VkSemaphoreSubmitInfo> extra_waits) {
         FrameData& frame = get_current_frame_data();
 
-        transport2::tick();
-
         transition_image(frame.cmd_buf, swapchain_images[swapchain_ix], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
+        _drawing_prepared = false;
         VK_CHECK(vkEndCommandBuffer(frame.cmd_buf));
 
+        VkSemaphoreSubmitInfo extra_wait_space;
+        if (extra_waits.size() == 0) {
+            extra_waits = {&extra_wait_space, 1};
+        }
         extra_waits[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         extra_waits[0].semaphore = frame.swapchain_semaphore;
         extra_waits[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -559,17 +592,22 @@ namespace engine {
         submit_info.signalSemaphoreInfoCount = 2;
         submit_info.pSignalSemaphoreInfos = signal_info;
 
-        VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, frame.render_fence));
 
-        VkPresentInfoKHR present_info{};
-        present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &swapchain_semaphores[frame.render_semaphore];
-        present_info.swapchainCount = 1;
-        present_info.pSwapchains = &swapchain;
-        present_info.pImageIndices = &swapchain_ix;
+        VkResult result;
+        {
+            std::lock_guard lock{graphics_queue_lock};
+            VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, frame.render_fence));
 
-        auto result = vkQueuePresentKHR(graphics_queue, &present_info);
+            VkPresentInfoKHR present_info{};
+            present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            present_info.waitSemaphoreCount = 1;
+            present_info.pWaitSemaphores = &swapchain_semaphores[frame.render_semaphore];
+            present_info.swapchainCount = 1;
+            present_info.pSwapchains = &swapchain;
+            present_info.pImageIndices = &swapchain_ix;
+            result = vkQueuePresentKHR(graphics_queue, &present_info);
+        }
+
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
@@ -630,5 +668,9 @@ namespace engine {
         auto res = textures_to_save_;
         textures_to_save_ = false;
         return res;
+    }
+
+    bool drawing_prepared() {
+        return _drawing_prepared;
     }
 }

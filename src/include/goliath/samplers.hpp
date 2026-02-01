@@ -47,6 +47,10 @@ namespace engine {
             _info.mipLodBias = 0.0f;
         };
 
+        operator VkSamplerCreateInfo() const {
+            return _info;
+        }
+
         bool operator==(const Sampler& other) const {
 #define CHECK(field)                                                                                                   \
     if (_info.field != other._info.field) {                                                                            \
@@ -157,14 +161,15 @@ namespace engine {
             _info.mipLodBias = mip_bias;
             return std::move(*this);
         }
-
-        VkSampler create() const;
-
-        static void destroy(VkSampler sampler);
     };
 
     void to_json(nlohmann::json& j, const Sampler& sampler);
     void from_json(const nlohmann::json& j, Sampler& sampler);
+}
+
+namespace engine::sampler {
+    VkSampler create(const Sampler& prototype);
+    void destroy(VkSampler sampler);
 }
 
 namespace engine::samplers {

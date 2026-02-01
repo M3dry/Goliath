@@ -14,7 +14,7 @@ namespace ui {
     void tick(float dt);
     void begin();
 
-    std::optional<VkImageMemoryBarrier2> game_window(engine::Camera& cam);
+    void game_window(engine::Camera& cam);
     bool skipped_game_window();
     std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);
     ImVec2 game_window_size();

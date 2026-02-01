@@ -28,20 +28,20 @@ namespace engine::culling {
 
         uint32_t flatten_draw_size;
         auto* flatten_draw_spv = util::read_file("./flatten_draw.spv", &flatten_draw_size);
-        auto flatten_draw_module = engine::create_shader({flatten_draw_spv, flatten_draw_size});
+        auto flatten_draw_module = engine::shader::create({flatten_draw_spv, flatten_draw_size});
         flatten_draw_pipeline =
-            ComputePipeline{ComputePipelineBuilder{}.shader(flatten_draw_module).push_constant(FlattenDrawPC::size)};
+            compute::create(ComputePipelineBuilder{}.shader(flatten_draw_module).push_constant(FlattenDrawPC::size));
         free(flatten_draw_spv);
 
         uint32_t culling_size;
         auto* culling_spv = util::read_file("./culling.spv", &culling_size);
-        auto culling_module = engine::create_shader({culling_spv, culling_size});
+        auto culling_module = engine::shader::create({culling_spv, culling_size});
         culling_pipeline =
-            ComputePipeline{ComputePipelineBuilder{}.shader(culling_module).push_constant(CullingPC::size)};
+            compute::create(ComputePipelineBuilder{}.shader(culling_module).push_constant(CullingPC::size));
         free(culling_spv);
 
-        engine::destroy_shader(flatten_draw_module);
-        engine::destroy_shader(culling_module);
+        engine::shader::destroy(flatten_draw_module);
+        engine::shader::destroy(culling_module);
     }
 
     void destroy() {
@@ -50,8 +50,8 @@ namespace engine::culling {
             task_data_buffers[i].destroy();
         }
 
-        flatten_draw_pipeline.destroy();
-        culling_pipeline.destroy();
+        compute::destroy(flatten_draw_pipeline);
+        compute::destroy(culling_pipeline);
     }
 
     void resize(uint32_t max_tasks) {

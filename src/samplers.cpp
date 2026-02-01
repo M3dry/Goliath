@@ -7,16 +7,6 @@
 #include <vector>
 
 namespace engine {
-    VkSampler Sampler::create() const {
-        VkSampler sampler;
-        vkCreateSampler(device, &_info, nullptr, &sampler);
-        return sampler;
-    }
-
-    void Sampler::destroy(VkSampler sampler) {
-        engine::destroy_sampler(sampler);
-    }
-
     void to_json(nlohmann::json& j, const Sampler& sampler) {
         j = nlohmann::json{
             {"addr_u", sampler._info.addressModeU},
@@ -57,6 +47,18 @@ namespace engine {
     }
 }
 
+namespace engine::sampler {
+    VkSampler create(const Sampler& prototype) {
+        VkSampler sampler;
+        vkCreateSampler(device, &prototype._info, nullptr, &sampler);
+        return sampler;
+    }
+
+    void destroy(VkSampler sampler) {
+        engine::destroy_sampler(sampler);
+    }
+}
+
 namespace engine::samplers {
     uint64_t hash_sampler(const Sampler& sampler) {
         return XXH3_64bits(&sampler, sizeof(Sampler));
@@ -71,12 +73,12 @@ namespace engine::samplers {
         hashes.emplace_back(hash_sampler(Sampler{}));
         ref_counts.emplace_back(1);
         prototypes.emplace_back(Sampler{});
-        samplers.emplace_back(Sampler{}.create());
+        samplers.emplace_back(sampler::create(Sampler{}));
     }
 
     void destroy() {
         for (auto sampler : samplers) {
-            Sampler::destroy(sampler);
+            sampler::destroy(sampler);
         }
     }
 
@@ -117,7 +119,7 @@ namespace engine::samplers {
             hashes.emplace_back(hash_sampler(entry.prototype));
             ref_counts.emplace_back(entry.ref_count);
             prototypes.emplace_back(entry.prototype);
-            samplers.emplace_back(entry.prototype.create());
+            samplers.emplace_back(sampler::create(entry.prototype));
 
             ix_counter++;
         }
@@ -159,14 +161,14 @@ namespace engine::samplers {
             hashes.emplace_back(sampler_hash);
             ref_counts.emplace_back(1);
             prototypes.emplace_back(new_sampler);
-            samplers.emplace_back(new_sampler.create());
+            samplers.emplace_back(sampler::create(new_sampler));
 
             return hashes.size() - 1;
         } else {
             hashes[empty_spot] = sampler_hash;
             ref_counts[empty_spot] = 1;
             prototypes[empty_spot] = new_sampler;
-            samplers[empty_spot] = new_sampler.create();
+            samplers[empty_spot] = sampler::create(new_sampler);
 
             return empty_spot;
         }
@@ -175,7 +177,7 @@ namespace engine::samplers {
     void remove(uint32_t ix) {
         if (--ref_counts[ix] != 0) return;
 
-        Sampler::destroy(samplers[ix]);
+        sampler::destroy(samplers[ix]);
 
         hashes[ix] = 0;
         samplers[ix] = nullptr;
