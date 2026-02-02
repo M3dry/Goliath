@@ -63,7 +63,7 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, uint32_t f
                                                   .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
                                               VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                                               VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
         image_views[i] =
             engine::gpu_image_view::create(engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT));
@@ -82,7 +82,7 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, uint32_t 
                                           .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                                           .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
                                                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
-                                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
         image_views[i] =
             engine::gpu_image_view::create(engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
@@ -110,7 +110,7 @@ void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, eng
     grid_pipeline.update_viewport_to_swapchain();
     grid_pipeline.update_scissor_to_viewport();
 
-    // engine::visbuffer::resize({engine::swapchain_extent.width, engine::swapchain_extent.height}, false);
+    engine::visbuffer::resize({engine::swapchain_extent.width, engine::swapchain_extent.height}, false);
 }
 
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
