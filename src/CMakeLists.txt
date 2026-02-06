@@ -117,4 +117,9 @@ target_compile_definitions(goliath PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK=1)
 if(MSVC)
     target_compile_options(goliath PRIVATE /FS)
     set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/pdb/$<CONFIG>")
+else()
+    target_compile_options(goliath PRIVATE
+        -fvisibility=hidden
+        -fvisibility-inlines-hidden
+    )
 endif()

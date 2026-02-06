@@ -90,8 +90,8 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, uint32_t 
 }
 
 void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, engine::GPUImage* target_images,
-             VkImageView* target_image_views, engine::GraphicsPipeline& visbuffer_raster_pipeline,
-             engine::GraphicsPipeline& grid_pipeline, bool resize_visbuffer) {
+             VkImageView* target_image_views, engine::GraphicsPipeline& visbuffer_raster_pipeline, engine::VisBuffer& visbuffer,
+             engine::GraphicsPipeline& grid_pipeline) {
     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
         engine::gpu_image_view::destroy(depth_image_views[i]);
         engine::gpu_image::destroy(depth_images[i]);
@@ -110,7 +110,7 @@ void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, eng
     grid_pipeline.update_viewport_to_swapchain();
     grid_pipeline.update_scissor_to_viewport();
 
-    engine::visbuffer::resize({engine::swapchain_extent.width, engine::swapchain_extent.height}, false);
+    engine::visbuffer::resize(visbuffer, {engine::swapchain_extent.width, engine::swapchain_extent.height});
 }
 
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
     NFD_Init();
     engine::culling::init(8192);
 
-    engine::visbuffer::init({engine::swapchain_extent.width, engine::swapchain_extent.height});
+    auto visbuffer = engine::visbuffer::create({engine::swapchain_extent.width, engine::swapchain_extent.height});
 
     uint32_t visbuffer_raster_vertex_spv_size;
     auto visbuffer_raster_vertex_spv_data =
@@ -267,15 +267,15 @@ int main(int argc, char** argv) {
     auto pbr_module = engine::shader::create({pbr_spv_data, pbr_spv_size});
     free(pbr_spv_data);
 
-    auto pbr_shading_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+    auto pbr_shading_set_layout = engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
         .count = 1,
         .type = engine::descriptor::Binding::UBO,
         .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-    }>::create();
+    }>{});
     auto pbr_pipeline =
         engine::compute::create(engine::ComputePipelineBuilder{}
                                     .shader(pbr_module)
-                                    .descriptor_layout(0, engine::visbuffer::shading_set_layout)
+                                    .descriptor_layout(0, engine::visbuffer::shading_layout)
                                     .descriptor_layout(1, pbr_shading_set_layout)
                                     .descriptor_layout(2, engine::textures::get_texture_pool().set_layout)
                                     .push_constant(PBRPC::size));
@@ -317,7 +317,7 @@ int main(int argc, char** argv) {
     auto postprocessing_module = engine::shader::create({postprocessing_spv_data, postprocessing_spv_size});
     free(postprocessing_spv_data);
 
-    auto postprocessing_set_layout = engine::DescriptorSet<engine::descriptor::Binding{
+    auto postprocessing_set_layout = engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
                                                                .count = 1,
                                                                .type = engine::descriptor::Binding::StorageImage,
                                                                .stages = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -326,7 +326,7 @@ int main(int argc, char** argv) {
                                                                .count = 1,
                                                                .type = engine::descriptor::Binding::StorageImage,
                                                                .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                           }>::create();
+                                                           }>{});
     auto postprocessing_pipeline = engine::compute::create(engine::ComputePipelineBuilder{}
                                                                .shader(postprocessing_module)
                                                                .descriptor_layout(0, postprocessing_set_layout)
@@ -473,8 +473,8 @@ int main(int argc, char** argv) {
         }
 
         if (engine::prepare_frame()) {
-            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
-                    grid_pipeline, false);
+            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline, visbuffer,
+                    grid_pipeline);
         }
 
         engine::transport2::ticket transform_buffer_ticket{};
@@ -580,7 +580,7 @@ int main(int argc, char** argv) {
             vkCmdClearColorImage(engine::get_cmd_buf(), target_images[engine::get_current_frame()].image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &target_clear_color, 1, &clear_range);
 
-            engine::visbuffer::clear_buffers();
+            engine::visbuffer::clear_buffers(visbuffer, engine::get_current_frame());
 
             engine::culling::bind_flatten();
             auto curr_scene = scene::selected_scene();
@@ -606,11 +606,11 @@ int main(int argc, char** argv) {
             engine::culling::sync_for_draw(draw_id_buffer, indirect_draw_buffer);
             engine::synchronization::end_barriers();
 
-            engine::visbuffer::prepare_for_draw();
+            engine::visbuffer::prepare_for_draw(visbuffer, engine::get_current_frame());
 
             engine::rendering::begin(
                 engine::RenderPass{}
-                    .add_color_attachment(engine::visbuffer::attach())
+                    .add_color_attachment(visbuffer.attach(engine::get_current_frame()))
                     .depth_attachment(engine::RenderingAttachement{}
                                           .set_image(depth_image_views[engine::get_current_frame()],
                                                      VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
@@ -632,9 +632,9 @@ int main(int argc, char** argv) {
             });
             engine::rendering::end();
 
-            engine::visbuffer::count_materials(draw_id_buffer.address());
-            engine::visbuffer::get_offsets();
-            engine::visbuffer::write_fragment_ids(draw_id_buffer.address());
+            engine::visbuffer::count_materials(visbuffer, draw_id_buffer.address(), engine::get_current_frame());
+            engine::visbuffer::get_offsets(visbuffer, engine::get_current_frame());
+            engine::visbuffer::write_fragment_ids(visbuffer, draw_id_buffer.address(), engine::get_current_frame());
 
             VkImageMemoryBarrier2 target_barrier{};
             target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -660,15 +660,15 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
-            auto shading = engine::visbuffer::shade(target_image_views[engine::get_current_frame()]);
+            auto shading = engine::visbuffer::shade(visbuffer, target_image_views[engine::get_current_frame()], engine::get_current_frame());
             auto mats_buffer = engine::materials::get_buffer().address();
             if (mats_buffer != 0) {
                 for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                     uint8_t pbr_pc[PBRPC::size]{};
                     PBRPC::write(pbr_pc,
                                  glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
-                                 engine::visbuffer::stages.address() + shading.indirect_buffer_offset,
-                                 engine::visbuffer::stages.address() + shading.fragment_id_buffer_offset,
+                                 visbuffer.stages.address() + shading.indirect_buffer_offset,
+                                 visbuffer.stages.address() + shading.fragment_id_buffer_offset,
                                  draw_id_buffer.address(), mat_id, mats_buffer);
 
                     PBRShadingSet shading_set_data{
@@ -693,7 +693,7 @@ int main(int argc, char** argv) {
                                 engine::textures::get_texture_pool().set,
                                 engine::descriptor::null_set,
                             },
-                        .indirect_buffer = engine::visbuffer::stages,
+                        .indirect_buffer = visbuffer.stages,
                         .buffer_offset = shading.indirect_buffer_offset,
                     });
                 }
@@ -749,7 +749,7 @@ int main(int argc, char** argv) {
             engine::descriptor::begin_update(pp_set);
             engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
                                                      target_image_views[engine::get_current_frame()]);
-            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, engine::visbuffer::get_view());
+            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, visbuffer.image_views[engine::get_current_frame()]);
             engine::descriptor::end_update();
 
             uint8_t postprocessing_push_constant[PostprocessingPC::size]{};
@@ -837,8 +837,8 @@ int main(int argc, char** argv) {
         std::array<VkSemaphoreSubmitInfo, 2> waits{};
         waits[1] = engine::transport2::wait_on({&transform_buffer_ticket, 1});
         if (engine::next_frame(waits)) {
-            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
-                    grid_pipeline, false);
+            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline, visbuffer,
+                    grid_pipeline);
 
             engine::increment_frame();
         }
@@ -848,11 +848,13 @@ int main(int argc, char** argv) {
 
     NFD_Quit();
 
+    engine::visbuffer::destroy(visbuffer);
+
     engine::rendering::destroy_pipeline(visbuffer_raster_pipeline);
     engine::shader::destroy(visbuffer_raster_fragment_module);
     engine::shader::destroy(visbuffer_raster_vertex_module);
 
-    engine::destroy_descriptor_set_layout(pbr_shading_set_layout);
+    engine::descriptor::destroy_layout(pbr_shading_set_layout);
     engine::compute::destroy(pbr_pipeline);
     engine::shader::destroy(pbr_module);
 
@@ -860,7 +862,7 @@ int main(int argc, char** argv) {
     engine::shader::destroy(grid_module);
     engine::rendering::destroy_pipeline(grid_pipeline);
 
-    engine::destroy_descriptor_set_layout(postprocessing_set_layout);
+    engine::descriptor::destroy_layout(postprocessing_set_layout);
     engine::compute::destroy(postprocessing_pipeline);
     engine::shader::destroy(postprocessing_module);
 
@@ -889,7 +891,6 @@ int main(int argc, char** argv) {
     scene::destroy();
 
     engine::culling::destroy();
-    engine::visbuffer::destroy();
     engine::destroy();
 
     exvar_reg.destroy();

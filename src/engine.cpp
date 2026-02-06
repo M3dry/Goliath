@@ -2,6 +2,7 @@
 #include "engine_.hpp"
 #include "event_.hpp"
 #include "goliath/samplers.hpp"
+#include "goliath/visbuffer.hpp"
 #include "materials_.hpp"
 #include "models_.hpp"
 #include "textures_.hpp"
@@ -427,6 +428,7 @@ namespace engine {
             materials::init();
             models::init(*opts.models_directory);
         }
+        visbuffer::init();
 
         glfwShowWindow(window);
     };
@@ -434,6 +436,7 @@ namespace engine {
     void destroy() {
         vkDeviceWaitIdle(device);
 
+        visbuffer::destroy();
         materials::destroy();
         models::destroy();
         textures::destroy();

@@ -83,6 +83,36 @@ namespace engine {
         }
     }
 
+    VkImageMemoryBarrier2 GPUImage::transition(std::optional<VkImageLayout> new_layout, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access) {
+        VkImageMemoryBarrier2 barrier{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = current_stage,
+            .srcAccessMask = current_access,
+            .dstStageMask = dst_stage,
+            .dstAccessMask = dst_access,
+            .oldLayout = current_layout,
+            .newLayout = new_layout ? *new_layout : current_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange =
+                VkImageSubresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+
+        current_layout = new_layout ? *new_layout : current_layout;
+        current_stage = dst_stage;
+        current_access = dst_access;
+
+        return barrier;
+    }
+
     GPUImageView::GPUImageView(const GPUImage& img) {
         _info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         _info.pNext = nullptr;
@@ -180,7 +210,10 @@ namespace engine::gpu_image {
                                     },
                                     VkOffset3D{.x = 0, .y = 0, .z = 0}, VK_IMAGE_LAYOUT_UNDEFINED, new_layout, dst_stage, dst_access);
 
-        gpu_img.layout = new_layout;
+        gpu_img.current_layout = new_layout;
+        gpu_img.current_stage = dst_stage;
+        gpu_img.current_access = dst_access;
+
         gpu_img.format = img.format;
         return gpu_img;
     }
@@ -239,13 +272,16 @@ namespace engine::gpu_image {
             });
             synchronization::end_barriers();
         }
-        gpu_img.layout = builder._new_image_layout;
+        gpu_img.current_layout = builder._new_image_layout;
+        gpu_img.current_stage = dst_stage;
+        gpu_img.current_access = dst_access;
+
         gpu_img.format = builder._image_info.format;
 
         return gpu_img;
     }
 
-    void destroy(const GPUImage& gpu_image) {
+    void destroy(GPUImage& gpu_image) {
         destroy_image(gpu_image.image, gpu_image.allocation);
     }
 }

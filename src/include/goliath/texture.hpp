@@ -6,6 +6,7 @@
 
 #include <vk_mem_alloc.h>
 #include <volk.h>
+#include <vulkan/vulkan_core.h>
 
 namespace engine {
     class Image {
@@ -165,8 +166,13 @@ namespace engine {
     struct GPUImage {
         VkImage image;
         VmaAllocation allocation;
-        VkImageLayout layout;
         VkFormat format;
+
+        VkImageLayout current_layout;
+        VkPipelineStageFlags2 current_stage;
+        VkAccessFlags2 current_access;
+
+        VkImageMemoryBarrier2 transition(std::optional<VkImageLayout> new_layout, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access);
     };
 
     struct GPUImageView {
@@ -243,7 +249,7 @@ namespace engine::gpu_image {
     GPUImage upload(const char* name, const GPUImageInfo& builder, VkPipelineStageFlags2 dst_stage,
                     VkAccessFlags2 dst_access);
 
-    void destroy(const GPUImage& gpu_image);
+    void destroy(GPUImage& gpu_image);
 }
 
 namespace engine::gpu_image_view {

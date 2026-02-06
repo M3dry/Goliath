@@ -65,5 +65,5 @@ namespace engine {
 
 namespace engine::compute {
     ComputePipeline create(const ComputePipelineBuilder& builder);
-    void destroy(const ComputePipeline& pipeline);
+    void destroy(ComputePipeline& pipeline);
 }

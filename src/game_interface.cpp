@@ -11,15 +11,21 @@
 #include "goliath/materials.hpp"
 #include "goliath/models.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/textures.hpp"
 #include "goliath/transport2.hpp"
 #include "goliath/visbuffer.hpp"
+#include <immintrin.h>
 #include <unistd.h>
 #include <vulkan/vulkan_core.h>
 
 void engine::game_interface::make_engine_service(EngineService* serv) {
+    EngineService::SamplerServicePtrs sampler_service{};
+    sampler_service.create = [](const Sampler* prototype) { return engine::sampler::create(*prototype); };
+    sampler_service.destroy = [](VkSampler sampler) { engine::sampler::destroy(sampler); };
+
     EngineService::SamplersServicePtrs samplers_service{};
     samplers_service.add = [](const Sampler* new_sampler) { return samplers::add(*new_sampler); };
     samplers_service.remove = samplers::remove;
@@ -173,7 +179,22 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
     };
 
     EngineService::VisBufferServicePtrs visbuffer_service{};
-    visbuffer_service.resize = visbuffer::resize;
+    visbuffer_service.shading_layout = &visbuffer::shading_layout;
+    visbuffer_service.create = [](glm::uvec2 dimensions) {
+        return visbuffer::create(dimensions);
+    };
+    visbuffer_service.resize = [](VisBuffer* visbuffer, glm::uvec2 new_dimensions) {
+        visbuffer::resize(*visbuffer, new_dimensions);
+    };
+    visbuffer_service.destroy = [](VisBuffer* visbuffer) {
+        visbuffer::destroy(*visbuffer);
+    };
+    visbuffer_service.push_material = [](VisBuffer* visbuffer, uint16_t n) {
+        visbuffer::push_material(*visbuffer, n);
+    };
+    visbuffer_service.pop_material = [](VisBuffer* visbuffer, uint16_t n) {
+        visbuffer::pop_material(*visbuffer, n);
+    };
 
     EngineService::CullingServicePtrs culling_service{};
     culling_service.resize = culling::resize;
@@ -193,6 +214,12 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
     };
     texture_service.destroy_image = [](GPUImage* gpu_image) { gpu_image::destroy(*gpu_image); };
     texture_service.destroy_view = gpu_image_view::destroy;
+
+    EngineService::DescriptorServicePtrs descriptor_service{};
+    descriptor_service.destroy_layout = engine::descriptor::destroy_layout;
+    descriptor_service.create_layout = [](const VkDescriptorSetLayoutCreateInfo* info) {
+        return engine::descriptor::create_layout(*info);
+    };
 
     serv->frame_ix = 0;
     serv->frames_in_flight = frames_in_flight;
@@ -225,6 +252,7 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
             .transport_queue_family = &transport_queue_family,
         };
     };
+    serv->sampler = sampler_service;
     serv->samplers = samplers_service;
     serv->transport = transport_service;
     serv->textures = textures_service;
@@ -237,6 +265,7 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
     serv->visbuffer = visbuffer_service;
     serv->culling = culling_service;
     serv->texture = texture_service;
+    serv->descriptor = descriptor_service;
 }
 
 void engine::game_interface::make_frame_service(FrameService* serv) {
@@ -327,19 +356,24 @@ void engine::game_interface::make_frame_service(FrameService* serv) {
     synchronization_service.end_barriers = synchronization::end_barriers;
 
     FrameService::VisBufferServicePtrs visbuffer_service{};
-    visbuffer_service.push_material = visbuffer::push_material;
-    visbuffer_service.pop_material = visbuffer::pop_material;
-    visbuffer_service.view = []() { return visbuffer::get_view(); };
-    visbuffer_service.image = []() { return visbuffer::get_image(); };
-    visbuffer_service.transition_to_attachement = visbuffer::transition_to_attachement;
-    visbuffer_service.transition_to_general = visbuffer::transition_to_general;
-    visbuffer_service.attach = visbuffer::attach;
-    visbuffer_service.prepare_for_draw = visbuffer::prepare_for_draw;
-    visbuffer_service.count_materials = visbuffer::count_materials;
-    visbuffer_service.get_offsets = visbuffer::get_offsets;
-    visbuffer_service.write_fragment_ids = visbuffer::write_fragment_ids;
-    visbuffer_service.shade = visbuffer::shade;
-    visbuffer_service.clear_buffers = visbuffer::clear_buffers;
+    visbuffer_service.clear_buffers = [](VisBuffer* visbuffer, uint32_t current_frame) {
+        visbuffer::clear_buffers(*visbuffer, current_frame);
+    };
+    visbuffer_service.prepare_for_draw = [](VisBuffer* visbuffer, uint32_t current_frame) {
+        visbuffer::prepare_for_draw(*visbuffer, current_frame);
+    };
+    visbuffer_service.count_materials = [](VisBuffer* visbuffer, uint64_t draw_id_addr, uint32_t current_frame) {
+        visbuffer::count_materials(*visbuffer, draw_id_addr, current_frame);
+    };
+    visbuffer_service.get_offsets = [](VisBuffer* visbuffer, uint32_t current_frame) {
+        visbuffer::get_offsets(*visbuffer, current_frame);
+    };
+    visbuffer_service.write_fragment_ids = [](VisBuffer* visbuffer, uint64_t draw_id_addr, uint32_t current_frame) {
+        visbuffer::write_fragment_ids(*visbuffer, draw_id_addr, current_frame);
+    };
+    visbuffer_service.shade = [](VisBuffer* visbuffer, VkImageView target, uint32_t current_frame) {
+        return visbuffer::shade(*visbuffer, target, current_frame);
+    };
 
     FrameService::TexturePoolServicePtrs texture_pool_service{};
     texture_pool_service.bind = [](const TexturePool* texture_pool, VkPipelineBindPoint bind_point,
@@ -347,14 +381,14 @@ void engine::game_interface::make_frame_service(FrameService* serv) {
 
     serv->target = nullptr;
     serv->target_view = nullptr;
-    serv->target_dimensions = {0,0};
+    serv->target_dimensions = {0, 0};
 
     serv->descriptor = descriptor_service;
     serv->compute = compute_service;
     serv->culling = culling_service;
     serv->rendering = rendering_service;
     serv->synchronization = synchronization_service;
-    serv->visbuffer = visbuffer_service;
+    serv->visbuffer = {visbuffer_service, 0};
     serv->texture_pool = texture_pool_service;
 }
 
@@ -366,6 +400,11 @@ void engine::game_interface::make_tick_service(TickService* serv) {
     ptrs.get_mouse_absolute = event::get_mouse_absolute;
 
     *serv = ptrs;
+}
+
+void engine::game_interface::update_frame_service(FrameService* fs, uint32_t current_frame) {
+    auto ptrs = (FrameService::VisBufferServicePtrs)fs->visbuffer;
+    fs->visbuffer = {ptrs, current_frame};
 }
 
 void engine::game_interface::start(const GameConfig& config, const AssetPaths& asset_paths, uint32_t argc,
@@ -468,6 +507,7 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
         frame_service.target = targets[engine_service.frame_ix].image;
         frame_service.target_view = target_views[engine_service.frame_ix];
         frame_service.target_dimensions = target_dimension;
+        update_frame_service(&frame_service, engine::get_current_frame());
         auto wait_infos = config.funcs.render(user_data, get_cmd_buf(), &frame_service, &engine_service, &wait_count);
 
         VkImageMemoryBarrier2 swapchain_barrier{};

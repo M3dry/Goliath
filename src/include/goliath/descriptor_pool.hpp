@@ -1,25 +1,10 @@
 #pragma once
 
-#include "goliath/engine.hpp"
-
 #include <cstdint>
 #include <span>
+#include <volk.h>
 
 namespace engine::descriptor {
-    static constexpr uint64_t null_set = (uint64_t)-1;
-    extern VkDescriptorSetLayout empty_set;
-
-    uint64_t new_set(VkDescriptorSetLayout layout);
-    void bind_set(uint64_t id, VkPipelineBindPoint bind_point, VkPipelineLayout layout, uint32_t set);
-    void update_set(uint64_t id, std::span<VkWriteDescriptorSet> writes);
-
-    void begin_update(uint64_t id);
-    void end_update();
-
-    void update_ubo(uint32_t binding, std::span<uint8_t> ubo);
-    void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view, VkSampler sampler);
-    void update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view);
-
     struct Binding {
         enum Type {
             SampledImage = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -36,10 +21,13 @@ namespace engine::descriptor {
 
 namespace engine {
     template <descriptor::Binding... Bindings>
-    struct DescriptorSet {
-        static VkDescriptorSetLayout create(VkDescriptorSetLayoutCreateFlags flags = 0) {
-            VkDescriptorSetLayoutBinding bindings[sizeof...(Bindings)]{};
+    class DescriptorSet {
+      private:
+        std::array<VkDescriptorSetLayoutBinding, sizeof...(Bindings)> bindings{};
+        VkDescriptorSetLayoutCreateInfo info{};
 
+      public:
+        DescriptorSet(VkDescriptorSetLayoutCreateFlags flags = 0) {
             uint32_t i = 0;
             auto f = [&](descriptor::Binding binding) {
                 bindings[i].binding = i;
@@ -51,17 +39,33 @@ namespace engine {
             };
             (f(Bindings), ...);
 
-            VkDescriptorSetLayoutCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             info.bindingCount = sizeof...(Bindings);
-            info.pBindings = bindings;
+            info.pBindings = bindings.data();
             info.flags = flags;
+        }
 
-            VkDescriptorSetLayout set_layout;
-            vkCreateDescriptorSetLayout(device, &info, nullptr, &set_layout);
-            return set_layout;
+        operator VkDescriptorSetLayoutCreateInfo() {
+            return info;
         }
     };
+}
 
-    void destroy_descriptor_set_layout(VkDescriptorSetLayout set_layout);
+namespace engine::descriptor {
+    static constexpr uint64_t null_set = (uint64_t)-1;
+    extern VkDescriptorSetLayout empty_set;
+
+    uint64_t new_set(VkDescriptorSetLayout layout);
+    void bind_set(uint64_t id, VkPipelineBindPoint bind_point, VkPipelineLayout layout, uint32_t set);
+    void update_set(uint64_t id, std::span<VkWriteDescriptorSet> writes);
+
+    void begin_update(uint64_t id);
+    void end_update();
+
+    void update_ubo(uint32_t binding, std::span<uint8_t> ubo);
+    void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view, VkSampler sampler);
+    void update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view);
+
+    VkDescriptorSetLayout create_layout(const VkDescriptorSetLayoutCreateInfo& info);
+    void destroy_layout(VkDescriptorSetLayout layout);
 }

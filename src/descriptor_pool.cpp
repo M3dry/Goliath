@@ -1,7 +1,7 @@
 #include "goliath/descriptor_pool.hpp"
 #include "descriptor_pool_.hpp"
-#include "goliath/engine.hpp"
 #include "engine_.hpp"
+#include "goliath/engine.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -187,10 +187,6 @@ namespace engine {
 
         ubo_offset = 0;
     }
-
-    void destroy_descriptor_set_layout(VkDescriptorSetLayout set_layout) {
-        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
-    }
 }
 
 namespace engine::descriptor {
@@ -237,5 +233,15 @@ namespace engine::descriptor {
 
     void update_storage_image(uint32_t binding, VkImageLayout layout, VkImageView view) {
         get_frame_descriptor_pool().update_storage_image(binding, layout, view);
+    }
+
+    VkDescriptorSetLayout create_layout(const VkDescriptorSetLayoutCreateInfo& info) {
+        VkDescriptorSetLayout layout;
+        vkCreateDescriptorSetLayout(device, &info, nullptr, &layout);
+        return layout;
+    }
+
+    void destroy_layout(VkDescriptorSetLayout set_layout) {
+        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
     }
 }

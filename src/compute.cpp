@@ -110,7 +110,7 @@ namespace engine::compute {
         return res;
     }
 
-    void destroy(const ComputePipeline& pipeline) {
+    void destroy(ComputePipeline& pipeline) {
         vkDestroyPipelineLayout(device, pipeline._pipeline_layout, nullptr);
         vkDestroyPipeline(device, pipeline._pipeline, nullptr);
     }

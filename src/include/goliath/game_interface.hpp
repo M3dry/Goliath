@@ -44,6 +44,31 @@ extern "C" namespace engine::game_interface {
     };
 
     struct EngineService {
+        struct SamplerServicePtrs {
+            VkSampler (*create)(const Sampler* prototype);
+            void (*destroy)(VkSampler sampler);
+        };
+
+        class SamplerService {
+          private:
+            SamplerServicePtrs _ptrs;
+
+          public:
+            SamplerService(SamplerServicePtrs ptrs) : _ptrs(ptrs) {}
+            SamplerService() {}
+            operator SamplerServicePtrs() const {
+                return _ptrs;
+            }
+
+            VkSampler create(const Sampler& prototype) const {
+                return _ptrs.create(&prototype);
+            }
+
+            void destroy(VkSampler sampler) const {
+                _ptrs.destroy(sampler);
+            }
+        };
+
         struct SamplersServicePtrs {
             uint32_t (*add)(const Sampler* new_sampler);
             void (*remove)(uint32_t ix);
@@ -441,7 +466,14 @@ extern "C" namespace engine::game_interface {
         };
 
         struct VisBufferServicePtrs {
-            void (*resize)(glm::uvec2 new_dims, bool material_count_changed);
+            VkDescriptorSetLayout* shading_layout;
+
+            VisBuffer (*create)(glm::uvec2 dimensions);
+            void (*resize)(VisBuffer* visbuffer, glm::uvec2 new_dims);
+            void (*destroy)(VisBuffer* visbuffer);
+
+            void (*push_material)(VisBuffer* visbuffer, uint16_t n);
+            void (*pop_material)(VisBuffer* visbuffer, uint16_t n);
         };
 
         class VisBufferService {
@@ -455,8 +487,28 @@ extern "C" namespace engine::game_interface {
                 return _ptrs;
             }
 
-            void resize(glm::uvec2 new_dims, bool material_count_changed) const {
-                return _ptrs.resize(new_dims, material_count_changed);
+            VkDescriptorSetLayout shading_layout() const {
+                return *_ptrs.shading_layout;
+            }
+
+            VisBuffer create(glm::uvec2 dimensions) const {
+                return _ptrs.create(dimensions);
+            }
+
+            void resize(VisBuffer& visbuffer, glm::uvec2 new_dims) const {
+                return _ptrs.resize(&visbuffer, new_dims);
+            }
+
+            void destroy(VisBuffer& visbuffer) const {
+                _ptrs.destroy(&visbuffer);
+            }
+
+            void push_material(VisBuffer& visbuffer, uint16_t n = 1) const {
+                _ptrs.push_material(&visbuffer, n);
+            }
+
+            void pop_material(VisBuffer& visbuffer, uint16_t n = 1) const {
+                _ptrs.pop_material(&visbuffer, n);
             }
         };
 
@@ -548,7 +600,8 @@ extern "C" namespace engine::game_interface {
             }
 
             Buffer create(const char* name, uint32_t size, VkBufferUsageFlags usage,
-                          std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags = 0) const {
+                          std::optional<std::pair<void**, bool*>> host,
+                          VmaAllocationCreateFlags alloc_flags = 0) const {
                 return _ptrs.create(name, size, usage, host.has_value(), host.has_value() ? host->first : nullptr,
                                     host.has_value() ? host->second : nullptr, alloc_flags);
             }
@@ -558,11 +611,37 @@ extern "C" namespace engine::game_interface {
             }
         };
 
+        struct DescriptorServicePtrs {
+            VkDescriptorSetLayout (*create_layout)(const VkDescriptorSetLayoutCreateInfo* info);
+            void (*destroy_layout)(VkDescriptorSetLayout set_layout);
+        };
+
+        class DescriptorService {
+          private:
+            DescriptorServicePtrs _ptrs;
+
+          public:
+            DescriptorService(DescriptorServicePtrs ptrs) : _ptrs(ptrs) {}
+            DescriptorService() {}
+            operator DescriptorServicePtrs() const {
+                return _ptrs;
+            }
+
+            VkDescriptorSetLayout create_layout(const VkDescriptorSetLayoutCreateInfo& info) const {
+                return _ptrs.create_layout(&info);
+            }
+
+            void destroy_layout(VkDescriptorSetLayout set_layout) const {
+                _ptrs.destroy_layout(set_layout);
+            }
+        };
+
         uint32_t frame_ix;
         uint32_t frames_in_flight;
         VkDescriptorSetLayout empty_set;
         EngineState (*get_engine_state)();
 
+        SamplerService sampler;
         SamplersService samplers;
         TransportService transport;
         TexturesService textures;
@@ -576,6 +655,7 @@ extern "C" namespace engine::game_interface {
         CullingService culling;
         TextureService texture;
         BufferService buffer;
+        DescriptorService descriptor;
     };
 
     struct TickServicePtrs {
@@ -659,7 +739,8 @@ extern "C" namespace engine::game_interface {
                 _ptrs.end_update();
             }
 
-            void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view, VkSampler sampler) const {
+            void update_sampled_image(uint32_t binding, VkImageLayout layout, VkImageView view,
+                                      VkSampler sampler) const {
                 _ptrs.update_sampled_image(binding, layout, view, sampler);
             }
 
@@ -760,13 +841,14 @@ extern "C" namespace engine::game_interface {
                 return {};
             }
 
-            void clear_buffers(Buffer& draw_ids, Buffer& indirect_draws,
-                               VkAccessFlags2 draw_ids_src_access = VK_ACCESS_2_SHADER_READ_BIT,
-                               VkPipelineStageFlags2 draw_ids_src_stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                               VkAccessFlags2 indirect_draws_access = VK_ACCESS_2_SHADER_READ_BIT |
-                                                                      VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                               VkPipelineStageFlags2 indirect_draws_stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                                                                            VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT) const {
+            void
+            clear_buffers(Buffer& draw_ids, Buffer& indirect_draws,
+                          VkAccessFlags2 draw_ids_src_access = VK_ACCESS_2_SHADER_READ_BIT,
+                          VkPipelineStageFlags2 draw_ids_src_stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                          VkAccessFlags2 indirect_draws_access = VK_ACCESS_2_SHADER_READ_BIT |
+                                                                 VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                          VkPipelineStageFlags2 indirect_draws_stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                                                       VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT) const {
                 return _ptrs.clear_buffers(&draw_ids, &indirect_draws, draw_ids_src_access, draw_ids_src_stage,
                                            indirect_draws_access, indirect_draws_stage);
             }
@@ -809,7 +891,8 @@ extern "C" namespace engine::game_interface {
                 _ptrs.draw(&pipeline, &params);
             }
 
-            void draw_indirect(const GraphicsPipeline& pipeline, const GraphicsPipeline::DrawIndirectParams& params) const {
+            void draw_indirect(const GraphicsPipeline& pipeline,
+                               const GraphicsPipeline::DrawIndirectParams& params) const {
                 _ptrs.draw_indirect(&pipeline, &params);
             }
 
@@ -861,85 +944,49 @@ extern "C" namespace engine::game_interface {
         };
 
         struct VisBufferServicePtrs {
-            VkImageView (*view)();
-            VkImage (*image)();
+            void (*clear_buffers)(VisBuffer* visbuffer, uint32_t current_frame);
 
-            VkImageMemoryBarrier2 (*transition_to_attachement)();
-            VkImageMemoryBarrier2 (*transition_to_general)();
-
-            RenderingAttachement (*attach)();
-
-            void (*prepare_for_draw)();
-            void (*count_materials)(uint64_t draw_id_addr);
-            void (*get_offsets)();
-            void (*write_fragment_ids)(uint64_t draw_id_addr);
-            visbuffer::Shading (*shade)(VkImageView target);
-            void (*clear_buffers)();
-            void (*push_material)(uint16_t n);
-            void (*pop_material)(uint16_t n);
+            void (*prepare_for_draw)(VisBuffer* visbuffer, uint32_t current_frame);
+            void (*count_materials)(VisBuffer* visbuffer, uint64_t draw_id_addr, uint32_t current_frame);
+            void (*get_offsets)(VisBuffer* visbuffer, uint32_t current_frame);
+            void (*write_fragment_ids)(VisBuffer* visbuffer, uint64_t draw_id_addr, uint32_t current_frame);
+            visbuffer::Shading (*shade)(VisBuffer* visbuffer, VkImageView target, uint32_t current_frame);
         };
 
         class VisBufferService {
           private:
             VisBufferServicePtrs _ptrs;
+            uint32_t current_frame;
 
           public:
-            VisBufferService(VisBufferServicePtrs ptrs) : _ptrs(ptrs) {}
+            VisBufferService(VisBufferServicePtrs ptrs, uint32_t current_frame) : _ptrs(ptrs), current_frame(current_frame) {}
             VisBufferService() {}
             operator VisBufferServicePtrs() const {
                 return _ptrs;
             }
 
-            VkImageView view() const {
-                return _ptrs.view();
+            void clear_buffers(VisBuffer& visbuffer) {
+                _ptrs.clear_buffers(&visbuffer, current_frame);
             }
 
-            VkImage image() const {
-                return _ptrs.image();
+            void prepare_for_draw(VisBuffer& visbuffer) {
+                _ptrs.prepare_for_draw(&visbuffer, current_frame);
             }
 
-            VkImageMemoryBarrier2 transition_to_attachement() const {
-                return _ptrs.transition_to_attachement();
+            void count_materials(VisBuffer& visbuffer, uint64_t draw_id_addr) {
+                _ptrs.count_materials(&visbuffer, draw_id_addr, current_frame);
             }
 
-            VkImageMemoryBarrier2 transition_to_general() const {
-                return transition_to_general();
+            void get_offsets(VisBuffer& visbuffer) {
+                _ptrs.get_offsets(&visbuffer, current_frame);
             }
 
-            RenderingAttachement attach() const {
-                return _ptrs.attach();
+            void write_fragment_ids(VisBuffer& visbuffer, uint64_t draw_id_addr) {
+                _ptrs.write_fragment_ids(&visbuffer, draw_id_addr, current_frame);
             }
 
-            void prepare_for_draw() const {
-                _ptrs.prepare_for_draw();
-            }
-
-            void count_materials(uint64_t draw_id_addr) const {
-                _ptrs.count_materials(draw_id_addr);
-            }
-
-            void get_offsets() const {
-                get_offsets();
-            }
-
-            void write_fragment_ids(uint64_t draw_id_addr) const {
-                _ptrs.write_fragment_ids(draw_id_addr);
-            }
-
-            visbuffer::Shading shade(VkImageView target) const {
-                return _ptrs.shade(target);
-            }
-
-            void clear_buffers() const {
-                _ptrs.clear_buffers();
-            }
-
-            void push_material(uint16_t n = 1) const {
-                _ptrs.push_material(n);
-            }
-
-            void pop_material(uint16_t n) const {
-                _ptrs.pop_material(n);
+            visbuffer::Shading shade(VisBuffer& visbuffer, VkImageView target) {
+                return _ptrs.shade(&visbuffer, target, current_frame);
             }
         };
 
@@ -1029,6 +1076,8 @@ extern "C" namespace engine::game_interface {
     void make_engine_service(EngineService*);
     void make_frame_service(FrameService*);
     void make_tick_service(TickService*);
+
+    void update_frame_service(FrameService*, uint32_t current_frame);
 
     void start(const GameConfig& config, const AssetPaths& asset_paths, uint32_t argc, char** argv);
 }
