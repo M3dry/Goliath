@@ -102,7 +102,7 @@ namespace engine::event {
         return mouse_delta;
     }
 
-    glm::vec2 get_mouse_aboslute() {
+    glm::vec2 get_mouse_absolute() {
         return mouse_absolute;
     }
 

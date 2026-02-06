@@ -561,7 +561,7 @@ namespace engine {
         _drawing_prepared = false;
         VK_CHECK(vkEndCommandBuffer(frame.cmd_buf));
 
-        VkSemaphoreSubmitInfo extra_wait_space;
+        VkSemaphoreSubmitInfo extra_wait_space{};
         if (extra_waits.size() == 0) {
             extra_waits = {&extra_wait_space, 1};
         }
