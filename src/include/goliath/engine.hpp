@@ -76,6 +76,7 @@ namespace engine {
     bool models_to_save();
     bool materials_to_save();
     bool textures_to_save();
+    bool scenes_to_save();
 
     bool drawing_prepared();
 }

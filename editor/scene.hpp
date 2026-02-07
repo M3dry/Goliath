@@ -1,55 +1,13 @@
 #pragma once
 
-#include "goliath/models.hpp"
-#include <filesystem>
-#include <glm/ext/matrix_float4x4.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/vector_float3.hpp>
-#include <string>
-#include <vector>
+#include <cstddef>
 
 namespace scene {
-    struct Instance {
-        engine::models::gid model_gid;
-        std::string name;
+    extern size_t selected_instance;
 
-        glm::mat4 transform;
-    };
-
-    struct Scene {
-        std::string name;
-
-        std::vector<engine::models::gid> used_models;
-        std::vector<std::vector<size_t>> instances_of_used_models;
-
-        std::vector<Instance> instances{};
-        size_t selected_instance = (size_t)-1;
-        uint32_t ref_count = 0;
-
-        void acquire();
-        void release();
-
-        void destroy();
-
-        void add_model(engine::models::gid gid);
-        void add_instance(Instance instance);
-
-        void remove_instance(size_t ix);
-    };
-
-    void load(std::filesystem::path scenes_json, bool* parser_error);
-    void save(std::filesystem::path scenes_json);
-
+    void load();
     void destroy();
 
-    void emplace_scene(std::string name);
-    // false - couldn't remove scene since it's the only scene
-    bool remove_scene(size_t ix);
-    void move_to(size_t ix, size_t dest);
-
-    Scene& selected_scene();
-    uint32_t selected_scene_ix();
-    void select_scene(uint32_t ix);
-
-    std::span<Scene> get_scenes();
+    size_t selected_scene();
+    void select_scene(size_t scene_ix);
 }

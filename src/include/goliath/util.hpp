@@ -8,6 +8,9 @@
 
 #include <volk.h>
 
+#define XSTR(x) STR(x)
+#define STR(x) #x
+
 #if defined(_WIN32)
 #define EXPORT __declspec(dllexport)
 #else

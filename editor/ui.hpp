@@ -5,7 +5,6 @@
 #include "goliath/texture.hpp"
 #include "imgui.h"
 #include "goliath/models.hpp"
-#include "scene.hpp"
 #include <vulkan/vulkan_core.h>
 
 namespace ui {
@@ -23,8 +22,8 @@ namespace ui {
     void models_pane();
     void model_entry(engine::models::gid gid);
 
-    void instances_pane(glm::mat4* transforms);
-    size_t instance_entry(scene::Scene& current_scene, size_t ix, glm::mat4& transform);
+    void instances_pane();
+    size_t instance_entry(size_t scene_ix, size_t instance_ix);
 
     void transform_pane(engine::Camera& cam);
 

@@ -12,6 +12,7 @@
 #include "goliath/models.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/scenes.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport2.hpp"
@@ -63,7 +64,8 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, uint32_t f
                                                   .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
                                               VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                                               VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                                  VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
         image_views[i] =
             engine::gpu_image_view::create(engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT));
@@ -72,17 +74,17 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, uint32_t f
 
 void update_target(engine::GPUImage* images, VkImageView* image_views, uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
-        images[i] =
-            engine::gpu_image::upload(std::format("Target texture #{}", i).c_str(),
-                                      engine::GPUImageInfo{}
-                                          .format(VK_FORMAT_R32G32B32A32_SFLOAT)
-                                          .width(engine::swapchain_extent.width)
-                                          .height(engine::swapchain_extent.height)
-                                          .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                          .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                                          .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
-                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        images[i] = engine::gpu_image::upload(
+            std::format("Target texture #{}", i).c_str(),
+            engine::GPUImageInfo{}
+                .format(VK_FORMAT_R32G32B32A32_SFLOAT)
+                .width(engine::swapchain_extent.width)
+                .height(engine::swapchain_extent.height)
+                .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
         image_views[i] =
             engine::gpu_image_view::create(engine::GPUImageView{images[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
@@ -90,8 +92,8 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, uint32_t 
 }
 
 void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, engine::GPUImage* target_images,
-             VkImageView* target_image_views, engine::GraphicsPipeline& visbuffer_raster_pipeline, engine::VisBuffer& visbuffer,
-             engine::GraphicsPipeline& grid_pipeline) {
+             VkImageView* target_image_views, engine::GraphicsPipeline& visbuffer_raster_pipeline,
+             engine::VisBuffer& visbuffer, engine::GraphicsPipeline& grid_pipeline) {
     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
         engine::gpu_image_view::destroy(depth_image_views[i]);
         engine::gpu_image::destroy(depth_images[i]);
@@ -219,17 +221,7 @@ int main(int argc, char** argv) {
     }
     engine::models::load(*models_registry_json);
 
-    bool scene_parse_error = false;
-    scene::load(project::scenes_file, &scene_parse_error);
-    if (scene_parse_error) {
-        printf("Scenes weren't loaded");
-        return 0;
-    }
-
-    scene::selected_scene().acquire();
-
-    size_t scene_count = 0;
-    size_t current_scene = -1;
+    scene::load();
 
     NFD_Init();
     engine::culling::init(8192);
@@ -268,10 +260,10 @@ int main(int argc, char** argv) {
     free(pbr_spv_data);
 
     auto pbr_shading_set_layout = engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
-        .count = 1,
-        .type = engine::descriptor::Binding::UBO,
-        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-    }>{});
+                                                                        .count = 1,
+                                                                        .type = engine::descriptor::Binding::UBO,
+                                                                        .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                    }>{});
     auto pbr_pipeline =
         engine::compute::create(engine::ComputePipelineBuilder{}
                                     .shader(pbr_module)
@@ -317,16 +309,17 @@ int main(int argc, char** argv) {
     auto postprocessing_module = engine::shader::create({postprocessing_spv_data, postprocessing_spv_size});
     free(postprocessing_spv_data);
 
-    auto postprocessing_set_layout = engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
-                                                               .count = 1,
-                                                               .type = engine::descriptor::Binding::StorageImage,
-                                                               .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                           },
-                                                           engine::descriptor::Binding{
-                                                               .count = 1,
-                                                               .type = engine::descriptor::Binding::StorageImage,
-                                                               .stages = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                           }>{});
+    auto postprocessing_set_layout =
+        engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
+                                                                    .count = 1,
+                                                                    .type = engine::descriptor::Binding::StorageImage,
+                                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                },
+                                                                engine::descriptor::Binding{
+                                                                    .count = 1,
+                                                                    .type = engine::descriptor::Binding::StorageImage,
+                                                                    .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                                }>{});
     auto postprocessing_pipeline = engine::compute::create(engine::ComputePipelineBuilder{}
                                                                .shader(postprocessing_module)
                                                                .descriptor_layout(0, postprocessing_set_layout)
@@ -357,19 +350,6 @@ int main(int argc, char** argv) {
             std::format("indirect draw buffer #{}", i).c_str(),
             sizeof(engine::culling::CulledDrawCommand) * max_draw_size,
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
-    }
-
-    constexpr uint32_t max_transform_size = 1024;
-    uint32_t transform_buffer_sizes[2]{};
-    engine::Buffer transform_buffers[engine::frames_in_flight];
-    glm::mat4* transforms[2] = {
-        (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
-        (glm::mat4*)malloc(sizeof(glm::mat4) * max_transform_size),
-    };
-    for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        transform_buffers[i] = engine::Buffer::create(
-            std::format("transforms buffer #{}", i).c_str(), sizeof(glm::mat4) * 1024,
-            VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
     glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
@@ -469,12 +449,17 @@ int main(int argc, char** argv) {
                 };
             }
 
+            if (engine::scenes::want_to_save()) {
+                std::ofstream o{project::scenes_file};
+                o << engine::scenes::save();
+            }
+
             engine::event::update_tick();
         }
 
         if (engine::prepare_frame()) {
-            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline, visbuffer,
-                    grid_pipeline);
+            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
+                    visbuffer, grid_pipeline);
         }
 
         engine::transport2::ticket transform_buffer_ticket{};
@@ -526,10 +511,8 @@ int main(int argc, char** argv) {
             }
             ImGui::EndMainMenuBar();
 
-            transforms[engine::get_current_frame()][0] = glm::identity<glm::mat4>();
-
             if (ImGui::Begin("Instances")) {
-                ui::instances_pane(transforms[engine::get_current_frame()]);
+                ui::instances_pane();
             }
             ImGui::End();
 
@@ -556,14 +539,6 @@ int main(int argc, char** argv) {
 
             engine::prepare_draw();
 
-            auto& transform_buffer = transform_buffers[engine::get_current_frame()];
-            if (scene::selected_scene().instances.size() != 0) {
-                transform_buffer_ticket = engine::transport2::upload(
-                    true, transforms[engine::get_current_frame()], std::nullopt,
-                    scene::selected_scene().instances.size() * sizeof(glm::mat4), transform_buffer, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-            }
-
             VkClearColorValue target_clear_color{};
             target_clear_color.float32[0] = 36.0f / 255.0f;
             target_clear_color.float32[1] = 36.0f / 255.0f;
@@ -583,18 +558,15 @@ int main(int argc, char** argv) {
             engine::visbuffer::clear_buffers(visbuffer, engine::get_current_frame());
 
             engine::culling::bind_flatten();
-            auto curr_scene = scene::selected_scene();
-            uint32_t transform_ix = 0;
-            for (auto i = 0; i < curr_scene.used_models.size(); i++) {
-                auto mgid = curr_scene.used_models[i];
-                if (*engine::models::is_loaded(mgid) != engine::models::LoadState::OnGPU) continue;
+            auto instance_transforms =
+                engine::scenes::get_instance_transforms_buffer(scene::selected_scene(), transform_buffer_ticket);
+            auto instance_models = engine::scenes::get_instance_models(scene::selected_scene());
+            for (auto i = 0; i < instance_models.size(); i++) {
+                auto mgid = instance_models[i];
+                if (auto state = engine::models::is_loaded(mgid); !state || *state != engine::models::LoadState::OnGPU)
+                    continue;
 
-                for (const auto& _ : curr_scene.instances_of_used_models[i]) {
-                    auto res =
-                        engine::culling::flatten(mgid, transform_buffer.address(), transform_ix * sizeof(glm::mat4));
-
-                    transform_ix++;
-                }
+                auto res = engine::culling::flatten(mgid, instance_transforms.address(), i * sizeof(glm::mat4));
             }
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
@@ -660,7 +632,8 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
-            auto shading = engine::visbuffer::shade(visbuffer, target_image_views[engine::get_current_frame()], engine::get_current_frame());
+            auto shading = engine::visbuffer::shade(visbuffer, target_image_views[engine::get_current_frame()],
+                                                    engine::get_current_frame());
             auto mats_buffer = engine::materials::get_buffer().address();
             if (mats_buffer != 0) {
                 for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
@@ -749,7 +722,8 @@ int main(int argc, char** argv) {
             engine::descriptor::begin_update(pp_set);
             engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
                                                      target_image_views[engine::get_current_frame()]);
-            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, visbuffer.image_views[engine::get_current_frame()]);
+            engine::descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL,
+                                                     visbuffer.image_views[engine::get_current_frame()]);
             engine::descriptor::end_update();
 
             uint8_t postprocessing_push_constant[PostprocessingPC::size]{};
@@ -837,8 +811,8 @@ int main(int argc, char** argv) {
         std::array<VkSemaphoreSubmitInfo, 2> waits{};
         waits[1] = engine::transport2::wait_on({&transform_buffer_ticket, 1});
         if (engine::next_frame(waits)) {
-            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline, visbuffer,
-                    grid_pipeline);
+            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
+                    visbuffer, grid_pipeline);
 
             engine::increment_frame();
         }
@@ -875,8 +849,6 @@ int main(int argc, char** argv) {
 
         draw_id_buffers[i].destroy();
         indirect_draw_buffers[i].destroy();
-        transform_buffers[i].destroy();
-        free(transforms[i]);
     }
 
     free(target_images);
@@ -887,7 +859,6 @@ int main(int argc, char** argv) {
 
     ui::destroy();
 
-    scene::selected_scene().release();
     scene::destroy();
 
     engine::culling::destroy();

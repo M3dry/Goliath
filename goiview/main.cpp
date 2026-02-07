@@ -62,7 +62,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
         .clear_color = {0, 0, 0, 255},
 
         .funcs = GameFunctions{
-            .init = [](const AssetPaths* asset_paths, const EngineService* es, auto argc, auto** argv) -> void* {
+            .init = [](const EngineService* es, auto argc, auto** argv) -> void* {
                 auto* state = (State*)malloc(sizeof(State));
 
                 auto engine_state = es->get_engine_state();
@@ -133,7 +133,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
             .tick = [](void*, const auto* ts, const auto* es) {},
             .draw_imgui = [](void*, const auto* es) {},
             .render = [](void* _state, VkCommandBuffer cmd_buf, const FrameService* fs, const EngineService* es,
-                         auto* wait_count) -> VkSemaphoreSubmitInfo* {
+                         VkSemaphoreSubmitInfo* waits) -> uint32_t {
                 auto* state = (State*)_state;
                 if (es->transport.is_uploaded(state->image_ticket)) {
                     fs->rendering.begin(engine::RenderPass{}.add_color_attachment(
@@ -168,8 +168,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                     fs->rendering.end();
                 }
 
-                *wait_count = 0;
-                return nullptr;
+                return 0;
             },
         },
     };

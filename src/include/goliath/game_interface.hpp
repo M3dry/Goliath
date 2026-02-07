@@ -21,6 +21,8 @@
 extern "C" namespace engine::game_interface {
     struct GameConfig;
 
+    using MainFn = GameConfig();
+
     struct EngineState {
         GLFWwindow** window;
 
@@ -1033,13 +1035,13 @@ extern "C" namespace engine::game_interface {
         const char* textures_dir;
     };
 
-    using InitFn = void*(const AssetPaths*, const EngineService*, uint32_t, char**);
+    using InitFn = void*(const EngineService*, uint32_t, char**);
     using DestroyFn = void(void*, const EngineService*);
     using ResizeFn = void(void*, EngineService*);
     using TickFn = void(void*, const TickService*, const EngineService*);
     using DrawImGuiFn = void(void*, const EngineService*);
     using RenderFn =
-        VkSemaphoreSubmitInfo*(void*, VkCommandBuffer, const FrameService*, const EngineService*, uint32_t*);
+        uint32_t(void*, VkCommandBuffer, const FrameService*, const EngineService*, VkSemaphoreSubmitInfo*);
 
     struct GameFunctions {
         InitFn* init;
@@ -1060,6 +1062,7 @@ extern "C" namespace engine::game_interface {
         const char* name;
         uint32_t tps;
         bool fullscreen;
+        VkImageUsageFlags target_usage;
         VkFormat target_format;
         VkImageLayout target_start_layout;
         VkImageLayout target_end_layout;
@@ -1069,6 +1072,8 @@ extern "C" namespace engine::game_interface {
         glm::uvec2 target_dimensions;
         BlitStrategy target_blit_strategy;
         glm::vec4 clear_color;
+
+        uint32_t max_wait_count;
 
         GameFunctions funcs;
     };
@@ -1083,3 +1088,4 @@ extern "C" namespace engine::game_interface {
 }
 
 #define GAME_INTERFACE_MAIN _goliath_main_
+#define GAME_INTERFACE_MAIN_SYM XSTR(GAME_INTERFACE_MAIN)

@@ -12,6 +12,7 @@
 #include "goliath/models.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/samplers.hpp"
+#include "goliath/scenes.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/textures.hpp"
@@ -23,8 +24,8 @@
 
 void engine::game_interface::make_engine_service(EngineService* serv) {
     EngineService::SamplerServicePtrs sampler_service{};
-    sampler_service.create = [](const Sampler* prototype) { return engine::sampler::create(*prototype); };
-    sampler_service.destroy = [](VkSampler sampler) { engine::sampler::destroy(sampler); };
+    sampler_service.create = [](const Sampler* prototype) { return sampler::create(*prototype); };
+    sampler_service.destroy = [](VkSampler sampler) { sampler::destroy(sampler); };
 
     EngineService::SamplersServicePtrs samplers_service{};
     samplers_service.add = [](const Sampler* new_sampler) { return samplers::add(*new_sampler); };
@@ -180,21 +181,13 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
 
     EngineService::VisBufferServicePtrs visbuffer_service{};
     visbuffer_service.shading_layout = &visbuffer::shading_layout;
-    visbuffer_service.create = [](glm::uvec2 dimensions) {
-        return visbuffer::create(dimensions);
-    };
+    visbuffer_service.create = [](glm::uvec2 dimensions) { return visbuffer::create(dimensions); };
     visbuffer_service.resize = [](VisBuffer* visbuffer, glm::uvec2 new_dimensions) {
         visbuffer::resize(*visbuffer, new_dimensions);
     };
-    visbuffer_service.destroy = [](VisBuffer* visbuffer) {
-        visbuffer::destroy(*visbuffer);
-    };
-    visbuffer_service.push_material = [](VisBuffer* visbuffer, uint16_t n) {
-        visbuffer::push_material(*visbuffer, n);
-    };
-    visbuffer_service.pop_material = [](VisBuffer* visbuffer, uint16_t n) {
-        visbuffer::pop_material(*visbuffer, n);
-    };
+    visbuffer_service.destroy = [](VisBuffer* visbuffer) { visbuffer::destroy(*visbuffer); };
+    visbuffer_service.push_material = [](VisBuffer* visbuffer, uint16_t n) { visbuffer::push_material(*visbuffer, n); };
+    visbuffer_service.pop_material = [](VisBuffer* visbuffer, uint16_t n) { visbuffer::pop_material(*visbuffer, n); };
 
     EngineService::CullingServicePtrs culling_service{};
     culling_service.resize = culling::resize;
@@ -216,9 +209,9 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
     texture_service.destroy_view = gpu_image_view::destroy;
 
     EngineService::DescriptorServicePtrs descriptor_service{};
-    descriptor_service.destroy_layout = engine::descriptor::destroy_layout;
+    descriptor_service.destroy_layout = descriptor::destroy_layout;
     descriptor_service.create_layout = [](const VkDescriptorSetLayoutCreateInfo* info) {
-        return engine::descriptor::create_layout(*info);
+        return descriptor::create_layout(*info);
     };
 
     serv->frame_ix = 0;
@@ -409,6 +402,9 @@ void engine::game_interface::update_frame_service(FrameService* fs, uint32_t cur
 
 void engine::game_interface::start(const GameConfig& config, const AssetPaths& asset_paths, uint32_t argc,
                                    char** argv) {
+    std::vector<VkSemaphoreSubmitInfo> waits{};
+    waits.reserve(config.max_wait_count + 1);
+
     init(Init{
         .window_name = config.name,
         .fullscreen = config.fullscreen,
@@ -417,6 +413,62 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
         .models_directory =
             asset_paths.models_dir == nullptr ? std::nullopt : std::make_optional(asset_paths.models_dir),
     });
+
+    if (asset_paths.textures_reg != nullptr) {
+        auto tex_reg_json = util::read_json(asset_paths.textures_reg);
+        if (!tex_reg_json.has_value() && tex_reg_json.error() == util::ReadJsonErr::FileErr &&
+            !std::filesystem::exists(asset_paths.textures_reg)) {
+            tex_reg_json = nlohmann::json{
+                {"textures", nlohmann::json::array()},
+                {"samplers", nlohmann::json::array()},
+            };
+        } else if (!tex_reg_json.has_value()) {
+            printf("Texture registry file is corrupted\n");
+            exit(-1);
+        }
+
+        samplers::load((*tex_reg_json)["samplers"]);
+        textures::load((*tex_reg_json)["textures"]);
+    }
+
+    if (asset_paths.materials != nullptr) {
+        auto mats_json = util::read_json(asset_paths.materials);
+        if (!mats_json.has_value() && mats_json.error() == util::ReadJsonErr::FileErr &&
+            !std::filesystem::exists(asset_paths.materials)) {
+            mats_json = materials::default_json();
+        } else if (!mats_json.has_value()) {
+            printf("materials.json file is corrupted\n");
+            exit(-1);
+        }
+
+        materials::load(*mats_json);
+    }
+
+    if (asset_paths.models_reg != nullptr) {
+        auto models_registry_json = util::read_json(asset_paths.models_reg);
+        if (!models_registry_json.has_value() && models_registry_json.error() == util::ReadJsonErr::FileErr &&
+            !std::filesystem::exists(asset_paths.models_reg)) {
+            models_registry_json = nlohmann::json::array();
+        } else if (!models_registry_json.has_value()) {
+            printf("Models registry file is corrupted\n");
+            exit(-1);
+        }
+
+        models::load(*models_registry_json);
+    }
+
+    if (asset_paths.scenes != nullptr) {
+        auto scenes_json = util::read_json(asset_paths.scenes);
+        if (!scenes_json.has_value() && scenes_json.error() == util::ReadJsonErr::FileErr &&
+            !std::filesystem::exists(asset_paths.scenes)) {
+            scenes_json = scenes::default_json();
+        } else if (!scenes_json.has_value()) {
+            printf("Models registry file is corrupted\n");
+            exit(-1);
+        }
+
+        scenes::load(*scenes_json);
+    }
 
     EngineService engine_service;
     make_engine_service(&engine_service);
@@ -431,39 +483,36 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
     GPUImage* targets = (GPUImage*)malloc(sizeof(GPUImage) * frames_in_flight);
     VkImageView* target_views = (VkImageView*)malloc(sizeof(VkImageView) * frames_in_flight);
 
-    std::memset(targets, 0, sizeof(engine::GPUImage) * frames_in_flight);
+    std::memset(targets, 0, sizeof(GPUImage) * frames_in_flight);
     std::memset(target_views, 0, sizeof(VkImageView) * frames_in_flight);
 
     auto update_targets = [&config](GPUImage* targets, VkImageView* target_views, glm::ivec2& target_dimensions) {
-        target_dimensions.x =
-            config.target_dimensions.x == 0 ? engine::swapchain_extent.width : config.target_dimensions.x;
-        target_dimensions.y =
-            config.target_dimensions.y == 0 ? engine::swapchain_extent.height : config.target_dimensions.y;
+        target_dimensions.x = config.target_dimensions.x == 0 ? swapchain_extent.width : config.target_dimensions.x;
+        target_dimensions.y = config.target_dimensions.y == 0 ? swapchain_extent.height : config.target_dimensions.y;
         for (size_t i = 0; i < frames_in_flight; i++) {
-            engine::gpu_image_view::destroy(target_views[i]);
-            engine::gpu_image::destroy(targets[i]);
+            gpu_image_view::destroy(target_views[i]);
+            gpu_image::destroy(targets[i]);
 
-            targets[i] =
-                gpu_image::upload(std::format("Target image #{}", i).c_str(),
-                                  GPUImageInfo{}
+            targets[i] = gpu_image::upload(std::format("Target image #{}", i).c_str(),
+                                           GPUImageInfo{}
 
-                                      .format(config.target_format)
-                                      .width(target_dimensions.x)
-                                      .height(target_dimensions.y)
-                                      .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                      .new_layout(config.target_start_layout)
-                                      .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT),
-                                  config.target_finish_stage, config.target_finish_access);
+                                               .format(config.target_format)
+                                               .width(target_dimensions.x)
+                                               .height(target_dimensions.y)
+                                               .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                               .new_layout(config.target_start_layout)
+                                               .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+                                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT | config.target_usage),
+                                           config.target_finish_stage, config.target_finish_access);
 
-            target_views[i] =
-                engine::gpu_image_view::create(engine::GPUImageView{targets[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+            target_views[i] = gpu_image_view::create(GPUImageView{targets[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
         }
     };
 
     update_targets(targets, target_views, target_dimension);
 
-    auto user_data = config.funcs.init(&asset_paths, &engine_service, argc, argv);
+    auto user_data = config.funcs.init(&engine_service, argc, argv);
 
     double accum = 0;
     double last_time = glfwGetTime();
@@ -476,8 +525,8 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
         last_time = time;
         accum += frame_time;
 
-        auto state = engine::event::poll();
-        if (state == engine::event::Minimized) {
+        auto state = event::poll();
+        if (state == event::Minimized) {
             glfwWaitEventsTimeout(0.05);
             continue;
         }
@@ -489,10 +538,10 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
 
             config.funcs.tick(user_data, &tick_service, &engine_service);
 
-            engine::event::update_tick();
+            event::update_tick();
         }
 
-        if (engine::prepare_frame()) {
+        if (prepare_frame()) {
             if (config.target_dimensions == glm::uvec2{0, 0}) update_targets(targets, target_views, target_dimension);
             if (config.funcs.resize != nullptr) config.funcs.resize(user_data, &engine_service);
         }
@@ -503,12 +552,12 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
 
         prepare_draw();
 
-        uint32_t wait_count = 0;
         frame_service.target = targets[engine_service.frame_ix].image;
         frame_service.target_view = target_views[engine_service.frame_ix];
         frame_service.target_dimensions = target_dimension;
-        update_frame_service(&frame_service, engine::get_current_frame());
-        auto wait_infos = config.funcs.render(user_data, get_cmd_buf(), &frame_service, &engine_service, &wait_count);
+        update_frame_service(&frame_service, get_current_frame());
+        auto wait_count =
+            config.funcs.render(user_data, get_cmd_buf(), &frame_service, &engine_service, waits.data() + 1) + 1;
 
         VkImageMemoryBarrier2 swapchain_barrier{};
         swapchain_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -723,7 +772,7 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
         synchronization::apply_barrier(target_barrier);
         synchronization::end_barriers();
 
-        if (engine::next_frame({wait_infos, wait_count})) {
+        if (next_frame({waits.data(), wait_count})) {
             if (config.target_dimensions == glm::uvec2{0, 0}) update_targets(targets, target_views, target_dimension);
             if (config.funcs.resize != nullptr) config.funcs.resize(user_data, &engine_service);
             increment_frame();
@@ -734,11 +783,11 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
 
     config.funcs.destroy(user_data, &engine_service);
     for (size_t i = 0; i < frames_in_flight; i++) {
-        engine::gpu_image_view::destroy(target_views[i]);
-        engine::gpu_image::destroy(targets[i]);
+        gpu_image_view::destroy(target_views[i]);
+        gpu_image::destroy(targets[i]);
     }
     free(target_views);
     free(targets);
 
-    engine::destroy();
+    destroy();
 }

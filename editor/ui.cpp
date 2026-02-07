@@ -2,6 +2,7 @@
 
 #include "ImGuizmo/ImGuizmo.h"
 #include "goliath/materials.hpp"
+#include "goliath/scenes.hpp"
 #include "state.hpp"
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
@@ -19,7 +20,6 @@
 #include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
-#include "project.hpp"
 #include "scene.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
@@ -60,7 +60,7 @@ namespace ui {
     glm::vec2 game_image_dims{0.0f};
 
     struct SelectedInstance {
-        uint32_t scene;
+        size_t scene;
         size_t instance;
         float timer = 0.1;
 
@@ -71,19 +71,19 @@ namespace ui {
 
     std::optional<SelectedInstance> transform_value_changed{};
 
-    void update_instance_transform(scene::Scene& scene) {
-        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene_ix() &&
-            transform_value_changed->instance == scene.selected_instance) {
+    void update_instance_transform() {
+        if (transform_value_changed && transform_value_changed->scene == scene::selected_scene() &&
+            transform_value_changed->instance == scene::selected_instance) {
             transform_value_changed->reset_timer();
             return;
         } else if (transform_value_changed != std::nullopt) {
-            scene::save(project::scenes_file);
+            engine::scenes::modified(transform_value_changed->scene);
             return;
         }
 
         transform_value_changed = {
-            scene::selected_scene_ix(),
-            scene.selected_instance,
+            scene::selected_scene(),
+            scene::selected_instance,
         };
     }
 
@@ -107,7 +107,7 @@ namespace ui {
     void tick(float dt) {
         if (transform_value_changed) {
             if ((transform_value_changed->timer -= dt) <= 0) {
-                scene::save(project::scenes_file);
+                engine::scenes::modified(-1);
                 transform_value_changed = std::nullopt;
             }
         }
@@ -152,16 +152,17 @@ namespace ui {
 
             game_window_image =
                 engine::gpu_image::upload(std::format("Game window texture #{}", curr_frame).c_str(),
-                                         engine::GPUImageInfo{}
-                                             .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                                             .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                             .width(avail.x)
-                                             .height(avail.y)
-                                             .format(VK_FORMAT_R8G8B8A8_UNORM)
-                                             .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT), VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                                          engine::GPUImageInfo{}
+                                              .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                              .width(avail.x)
+                                              .height(avail.y)
+                                              .format(VK_FORMAT_R8G8B8A8_UNORM)
+                                              .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),
+                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-            game_window_image_view =
-                engine::gpu_image_view::create(engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+            game_window_image_view = engine::gpu_image_view::create(
+                engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
 
             game_window_texture = ImGui_ImplVulkan_AddTexture(game_window_sampler, game_window_image_view,
                                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -206,8 +207,7 @@ namespace ui {
                 cam.update_matrices();
             }
 
-            auto& scene = scene::selected_scene();
-            if (scene.selected_instance != -1) {
+            if (scene::selected_instance != -1) {
                 auto win_pos = ImGui::GetWindowPos();
 
                 changed = false;
@@ -222,9 +222,13 @@ namespace ui {
                 changed |= ImGuizmo::Manipulate(
                     glm::value_ptr(cam._view), glm::value_ptr(proj),
                     ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
-                    glm::value_ptr(scene.instances[scene.selected_instance].transform));
+                    glm::value_ptr(
+                        engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance]));
 
-                if (changed) update_instance_transform(scene);
+                if (changed) {
+                    engine::scenes::update_transforms_buffer(scene::selected_scene());
+                    update_instance_transform();
+                }
             }
         }
         ImGui::End();
@@ -368,9 +372,7 @@ namespace ui {
 
         std::vector<std::pair<engine::models::gid, uint32_t>> matches{};
         if (state::models_search_scope == 0) {
-            auto& scene = scene::selected_scene();
-
-            for (const auto& gid : scene.used_models) {
+            for (const auto& gid : engine::scenes::get_used_models(scene::selected_scene())) {
                 auto score = score_search(state::models_query, **engine::models::get_name(gid));
                 if (score > std::numeric_limits<int32_t>::min()) {
                     matches.emplace_back(gid, score);
@@ -404,69 +406,75 @@ namespace ui {
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
         if (ImGui::Button("+")) {
-            scene::selected_scene().add_instance(scene::Instance{
-                .model_gid = gid,
-                .name = **engine::models::get_name(gid),
-                .transform = glm::identity<glm::mat4>(),
-            });
+            engine::scenes::add_instance(scene::selected_scene(), **engine::models::get_name(gid),
+                                         glm::identity<glm::mat4>(), gid);
+            scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
         }
 
         ImGui::PopID();
     }
 
-    void instances_pane(glm::mat4* transforms) {
-        auto& scene = scene::selected_scene();
-        for (size_t i = 0; i < scene.instances.size(); i++) {
-            i = instance_entry(scene, i, *(transforms + i));
+    void instances_pane() {
+        for (size_t i = 0; i < engine::scenes::get_instance_names(scene::selected_scene()).size(); i++) {
+            i = instance_entry(scene::selected_scene(), i);
         }
     }
 
-    size_t instance_entry(scene::Scene& current_scene, size_t ix, glm::mat4& transform) {
-        ImGui::PushID(ix);
-        auto& inst = current_scene.instances[ix];
+    size_t instance_entry(size_t scene_ix, size_t instance_ix) {
+        ImGui::PushID(instance_ix);
 
-        if (ImGui::Selectable("", current_scene.selected_instance == ix,
+        auto& inst_name = engine::scenes::get_instance_names(scene_ix)[instance_ix];
+        auto& inst_transform = engine::scenes::get_instance_transforms(scene_ix)[instance_ix];
+
+        if (ImGui::Selectable("", scene::selected_instance == instance_ix,
                               ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
                               ImVec2(0.0, ImGui::GetFrameHeight()))) {
-            current_scene.selected_instance = current_scene.selected_instance == ix ? -1 : ix;
+            scene::selected_instance = scene::selected_instance == instance_ix ? -1 : instance_ix;
         }
 
         ImGui::SameLine();
-        ImGui::InputText("##name", &inst.name);
+        ImGui::InputText("##name", &inst_name);
         if (ImGui::IsItemClicked()) {
-            current_scene.selected_instance = ix;
+            scene::selected_instance = instance_ix;
         }
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
         if (ImGui::Button("X")) {
-            current_scene.remove_instance(ix);
+            engine::scenes::remove_instance(scene_ix, instance_ix);
 
-            ix--;
+            if (scene::selected_instance == -1) {
+
+            } else if (scene::selected_instance == instance_ix) {
+                scene::selected_instance = -1;
+            } else if (scene::selected_instance > instance_ix) {
+                scene::selected_instance--;
+            }
+
+            instance_ix--;
             ImGui::PopID();
-            return ix;
+            return instance_ix;
         }
 
-        transform = inst.transform;
-
         ImGui::PopID();
-        return ix;
+
+        return instance_ix;
     }
 
     void transform_pane(engine::Camera& cam) {
-        auto& scene = scene::selected_scene();
-        if (scene.selected_instance == -1) return;
-        auto& instance = scene.instances[scene.selected_instance];
+        if (scene::selected_instance == -1) return;
+        auto& inst_name = engine::scenes::get_instance_names(scene::selected_scene())[scene::selected_instance];
+        auto& inst = engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance];
 
         glm::vec3 translate{};
         glm::vec3 rotate{};
         glm::vec3 scale{};
-        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(instance.transform), glm::value_ptr(translate),
-                                              glm::value_ptr(rotate), glm::value_ptr(scale));
+        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(inst), glm::value_ptr(translate), glm::value_ptr(rotate),
+                                              glm::value_ptr(scale));
 
         bool value_changed = false;
 
-        value_changed |= ImGui::InputText("name: ", &instance.name);
+        value_changed |= ImGui::InputText("name: ", &inst_name);
 
         value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(translate), 0.1f, 0.0f, 0.0f, "%.2f");
 
@@ -477,24 +485,25 @@ namespace ui {
         value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(scale), 0.1f, 0.0f, 0.0f, "%.2f");
 
         ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate),
-                                                glm::value_ptr(scale), glm::value_ptr(instance.transform));
+                                                glm::value_ptr(scale), glm::value_ptr(inst));
 
         if (!value_changed) return;
 
-        update_instance_transform(scene);
+        engine::scenes::update_transforms_buffer(scene::selected_scene());
+        update_instance_transform();
     }
 
     void scene_pane() {
         if (ImGui::Button("+")) {
-            scene::emplace_scene("New scene");
-            scene::select_scene(scene::get_scenes().size() - 1);
+            engine::scenes::add("New scene");
+            scene::select_scene(engine::scenes::get_names().size() - 1);
         }
 
-        auto scenes = scene::get_scenes();
+        auto scenes = engine::scenes::get_names();
         for (size_t i = 0; i < scenes.size(); i++) {
             ImGui::PushID(i);
 
-            if (ImGui::Selectable("", i == scene::selected_scene_ix(),
+            if (ImGui::Selectable("", i == scene::selected_scene(),
                                   ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
                                   ImVec2(0.0, ImGui::GetFrameHeight()))) {
                 scene::select_scene(i);
@@ -502,12 +511,12 @@ namespace ui {
 
             ImGui::SameLine();
             if (ImGui::Button("X") && scenes.size() != 1) {
-                auto selected_ix = scene::selected_scene_ix();
-                if (selected_ix == i) selected_ix = i == 0 ? 0 : i - 1;
-                else if (selected_ix > i) selected_ix--;
-                scene::select_scene(selected_ix);
+                auto selected_scene = scene::selected_scene();
+                if (selected_scene == i) selected_scene = i == 0 ? 0 : i - 1;
+                else if (selected_scene > i) selected_scene--;
+                scene::select_scene(selected_scene);
 
-                scene::remove_scene(i);
+                engine::scenes::remove(i);
 
                 i--;
                 ImGui::PopID();
@@ -516,19 +525,17 @@ namespace ui {
 
             ImGui::SameLine();
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-            ImGui::InputText("##name", &scenes[i].name);
+            ImGui::InputText("##name", &scenes[i]);
 
             ImGui::PopID();
         }
     }
 
     void selected_model_materials_pane() {
-        const auto& curr_scene = scene::selected_scene();
-        auto instance_ix = curr_scene.selected_instance;
-        if (instance_ix == -1) return;
+        if (scene::selected_instance == -1) return;
 
-        const auto& inst = curr_scene.instances[instance_ix];
-        const auto model_ = engine::models::get_cpu_model(inst.model_gid);
+        const auto model_ = engine::models::get_cpu_model(
+            engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance]);
         if (!model_.has_value() || model_.value() == nullptr) return;
         const auto& model = **model_;
 

@@ -365,6 +365,7 @@ namespace engine::transport2 {
     uint32_t current_task_queue = 0;
     std::array<std::deque<task>, 2> task_queues{};
     std::mutex task_queue_lock{};
+    std::mutex full_task_queue_lock{};
 
     std::mutex graphics_barriers_lock{};
 
@@ -388,6 +389,8 @@ namespace engine::transport2 {
 
     void thread() {
         while (!stop_worker) {
+            std::lock_guard lock{full_task_queue_lock};
+
             task_queue_lock.lock();
             auto& task_queue = task_queues[current_task_queue];
             current_task_queue = (current_task_queue + 1) % task_queues.size();
@@ -738,6 +741,46 @@ namespace engine::transport2 {
         }
 
         return ticket;
+    }
+
+    void unqueue(ticket t, bool free) {
+        {
+            std::lock_guard lock{task_queue_lock};
+            auto& task_queue = task_queues[current_task_queue];
+
+            for (size_t i = 0; i < task_queue.size(); i++) {
+                if (task_queue[i].ticket_id != t.id()) continue;
+                if (ticket_timelines[t.id()].first != t.gen()) return;
+
+                auto task = task_queue[i];
+                task_queue.erase(task_queue.begin() + i);
+
+                if (free && task.owning) {
+                    (*task.owning)(task.src);
+                }
+                return;
+            }
+        }
+
+        {
+            std::lock_guard lock1{full_task_queue_lock};
+            std::lock_guard lock2{task_queue_lock};
+
+            auto& task_queue = task_queues[(current_task_queue + 1) % task_queues.size()];
+
+            for (size_t i = 0; i < task_queue.size(); i++) {
+                if (task_queue[i].ticket_id != t.id()) continue;
+                if (ticket_timelines[t.id()].first != t.gen()) return;
+
+                auto task = task_queue[i];
+                task_queue.erase(task_queue.begin() + i);
+
+                if (free && task.owning) {
+                    (*task.owning)(task.src);
+                }
+                return;
+            }
+        }
     }
 
     uint64_t get_timeline() {

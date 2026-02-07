@@ -40,6 +40,8 @@ namespace engine::transport2 {
     ticket upload(bool priority, VkFormat format, VkExtent3D dimension, void* src, std::optional<FreeFn*> own, VkImage dst,
                   VkImageSubresourceLayers dst_layers, VkOffset3D dst_offset, VkImageLayout current_layout, VkImageLayout dst_layout, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access);
 
+    void unqueue(ticket t, bool free = false);
+
     uint64_t get_timeline();
     uint64_t get_timeline(ticket t);
 }

@@ -92,6 +92,7 @@ SET(ENGINE_SOURCES
     exvar.cpp
     dyn_module.cpp
     game_interface.cpp
+    scenes.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}
