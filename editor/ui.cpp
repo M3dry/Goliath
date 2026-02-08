@@ -128,7 +128,7 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
-    void game_window(engine::Camera& cam) {
+    bool game_window(engine::Camera& cam) {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
         auto& game_window_image = game_window_images[curr_frame];
@@ -140,6 +140,8 @@ namespace ui {
         if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
             node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode | ImGuiDockNodeFlags_NoTabBar;
         }
+
+        bool focused = ImGui::IsWindowFocused();
 
         ImVec2 win_pos = ImGui::GetWindowPos();
         ImVec2 avail = ImGui::GetWindowSize();
@@ -233,6 +235,8 @@ namespace ui {
         }
         ImGui::End();
         ImGui::PopStyleVar();
+
+        return focused;
     }
 
     bool skipped_game_window() {

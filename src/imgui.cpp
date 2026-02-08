@@ -26,6 +26,11 @@ namespace engine::imgui {
 
     void enable(bool v) {
         state = v;
+
+        if (!state) {
+            auto& io = ImGui::GetIO();
+            io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        }
     }
 
     void init() {

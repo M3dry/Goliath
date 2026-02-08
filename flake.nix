@@ -38,8 +38,12 @@
 
               julia
 
-              xorg.libX11
-              xorg.libXrandr
+              xorg.libX11.dev
+              xorg.libXrandr.dev
+              xorg.libXcursor.dev
+              xorg.libXinerama.dev
+              xorg.libXi.dev
+              xorg.libXext.dev
               wayland
               wayland-scanner
               libdecor
@@ -57,8 +61,7 @@
             export CC=clang
             export CXX=clang++
 
-            # needed for stupid renderdoc to work
-            export LD_LIBRARY_PATH="${pkgs.xorg.libX11}/lib:${pkgs.xorg.libXext}/lib:${pkgs.xorg.libXi}/lib:${pkgs.xorg.libXrandr}/lib:${pkgs.vulkan-loader}/lib:${pkgs.lib.makeLibraryPath [pkgs.wayland pkgs.libxkbcommon pkgs.libdecor]}"
+            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.vulkan-loader pkgs.xorg.libX11 pkgs.xorg.libXrandr pkgs.xorg.libXcursor pkgs.xorg.libXinerama pkgs.xorg.libXi pkgs.xorg.libXext pkgs.wayland pkgs.libxkbcommon pkgs.libdecor]}"
           '';
         };
       }

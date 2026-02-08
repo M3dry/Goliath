@@ -15,7 +15,33 @@
 #include <vector>
 #include <vulkan/vulkan_core.h>
 
+struct FormatInfo {
+    uint32_t blockWidth;
+    uint32_t blockHeight;
+    uint32_t bytesPerBlock;
+};
+
+FormatInfo get_format_info(VkFormat format) {
+    switch (format) {
+        case VK_FORMAT_R8_UNORM: return {1, 1, 1};
+        case VK_FORMAT_R8G8_UNORM: return {1, 1, 2};
+        case VK_FORMAT_R8G8B8_UNORM: return {1, 1, 3};
+        case VK_FORMAT_R8G8B8A8_UNORM:
+        case VK_FORMAT_R8G8B8A8_SRGB: return {1, 1, 4};
+        case VK_FORMAT_R16_UNORM: return {1, 1, 2};
+        case VK_FORMAT_R16G16_UNORM: return {1, 1, 4};
+        case VK_FORMAT_R16G16B16_UNORM: return {1, 1, 6};
+        case VK_FORMAT_R16G16B16A16_UNORM: return {1, 1, 8};
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK: return {4, 4, 8};
+        case VK_FORMAT_R32G32B32_SFLOAT:
+        case VK_FORMAT_R32G32B32_UINT: return {1, 1, 12};
+        default: fprintf(stderr, "invalid format: %d", format); assert(false && "Unsupported format");
+    }
+}
+
 namespace engine::transport2 {
+    std::mutex full_upload_lock{};
+
     std::vector<VkBufferMemoryBarrier2> transport_queue_buffer_barriers{};
     std::vector<VkImageMemoryBarrier2> transport_queue_image_barriers{};
 
@@ -76,6 +102,7 @@ namespace engine::transport2 {
 
             uint32_t src_row_length;
 
+            VkFormat format;
             VkImageLayout new_layout;
         };
 
@@ -96,7 +123,10 @@ namespace engine::transport2 {
                     if constexpr (std::same_as<BufferDst, Dst>) {
                         return dst.src_size;
                     } else {
-                        const uint32_t texel_size = 4;
+                        auto info = get_format_info(dst.format);
+                        assert(info.blockWidth == 1 && info.blockHeight == 1 && "Compressed formats not supported right now");
+
+                        const uint32_t texel_size = info.bytesPerBlock;
                         return dst.extent.width * dst.extent.height * texel_size;
                     }
                 },
@@ -112,7 +142,10 @@ namespace engine::transport2 {
                     } else {
                         uint8_t* real_src = (uint8_t*)src + src_offset;
 
-                        uint32_t texel_size = 4;
+                        auto info = get_format_info(dst.format);
+                        assert(info.blockWidth == 1 && info.blockHeight == 1 && "Compressed formats not supported right now");
+
+                        const uint32_t texel_size = info.bytesPerBlock;
 
                         const auto packed_row_length = dst.extent.width * texel_size;
 
@@ -142,12 +175,6 @@ namespace engine::transport2 {
                         rest[0].dst_stage = dst_stage;
                         rest[0].dst_access = dst_access;
 
-                        ticket_id = get_free_ticket().id();
-                        owning = std::nullopt;
-                        last = false;
-
-                        dst.src_size = budget;
-
                         rest[0].dst = BufferDst{
                             .src_size = dst.src_size - budget,
                             .buffer = dst.buffer,
@@ -155,9 +182,17 @@ namespace engine::transport2 {
                             .initial_offset = dst.initial_offset,
                         };
 
+                        ticket_id = get_free_ticket().id();
+                        owning = std::nullopt;
+                        last = false;
+                        dst.src_size = budget;
+
                         return false;
                     } else {
-                        const uint32_t texel_size = 4;
+                        auto info = get_format_info(dst.format);
+                        assert(info.blockWidth == 1 && info.blockHeight == 1 && "Compressed formats not supported right now");
+
+                        const uint32_t texel_size = info.bytesPerBlock;
                         if (budget < texel_size) return true;
 
                         rest.emplace_back();
@@ -365,7 +400,6 @@ namespace engine::transport2 {
     uint32_t current_task_queue = 0;
     std::array<std::deque<task>, 2> task_queues{};
     std::mutex task_queue_lock{};
-    std::mutex full_task_queue_lock{};
 
     std::mutex graphics_barriers_lock{};
 
@@ -389,7 +423,7 @@ namespace engine::transport2 {
 
     void thread() {
         while (!stop_worker) {
-            std::lock_guard lock{full_task_queue_lock};
+            std::lock_guard lock{full_upload_lock};
 
             task_queue_lock.lock();
             auto& task_queue = task_queues[current_task_queue];
@@ -504,16 +538,19 @@ namespace engine::transport2 {
 
             VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, cmd_buf_fence));
 
-            synchronization::submit_from_another_thread(graphics_queue_buffer_barriers, graphics_queue_image_barriers, {}, VkSemaphoreSubmitInfo{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .semaphore = transport_graphics_semaphore,
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            }, VkSemaphoreSubmitInfo{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .semaphore = timeline_semaphore,
-                .value = ++timeline_counter,
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            });
+            synchronization::submit_from_another_thread(graphics_queue_buffer_barriers, graphics_queue_image_barriers,
+                                                        {},
+                                                        VkSemaphoreSubmitInfo{
+                                                            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                                            .semaphore = transport_graphics_semaphore,
+                                                            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                                        },
+                                                        VkSemaphoreSubmitInfo{
+                                                            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                                            .semaphore = timeline_semaphore,
+                                                            .value = ++timeline_counter,
+                                                            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                                        });
 
             graphics_queue_buffer_barriers.clear();
             graphics_queue_image_barriers.clear();
@@ -675,25 +712,28 @@ namespace engine::transport2 {
                   VkImageLayout dst_layout, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access) {
         auto ticket = get_free_ticket();
 
-        transport_queue_image_barriers.emplace_back(VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = VK_ACCESS_2_NONE,
-            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            .oldLayout = current_layout,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .image = dst,
-            .subresourceRange =
-                VkImageSubresourceRange{
-                    .aspectMask = dst_layers.aspectMask,
-                    .baseMipLevel = dst_layers.mipLevel,
-                    .levelCount = 1,
-                    .baseArrayLayer = dst_layers.baseArrayLayer,
-                    .layerCount = dst_layers.layerCount,
-                },
-        });
+        {
+            std::lock_guard lock{full_upload_lock};
+            transport_queue_image_barriers.emplace_back(VkImageMemoryBarrier2{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext = nullptr,
+                .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                .srcAccessMask = VK_ACCESS_2_NONE,
+                .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                .oldLayout = current_layout,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .image = dst,
+                .subresourceRange =
+                    VkImageSubresourceRange{
+                        .aspectMask = dst_layers.aspectMask,
+                        .baseMipLevel = dst_layers.mipLevel,
+                        .levelCount = 1,
+                        .baseArrayLayer = dst_layers.baseArrayLayer,
+                        .layerCount = dst_layers.layerCount,
+                    },
+            });
+        }
 
         std::vector<task> tasks{};
         tasks.reserve(dst_layers.layerCount);
@@ -717,6 +757,7 @@ namespace engine::transport2 {
 
                         .src_row_length = dimension.width,
 
+                        .format = format,
                         .new_layout = dst_layout,
                     },
                 .src = src,
@@ -763,7 +804,7 @@ namespace engine::transport2 {
         }
 
         {
-            std::lock_guard lock1{full_task_queue_lock};
+            std::lock_guard lock1{full_upload_lock};
             std::lock_guard lock2{task_queue_lock};
 
             auto& task_queue = task_queues[(current_task_queue + 1) % task_queues.size()];

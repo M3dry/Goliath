@@ -19,6 +19,7 @@
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "project.hpp"
 #include "scene.hpp"
 #include "state.hpp"
@@ -374,95 +375,7 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        while (accum >= dt) {
-            accum -= dt;
-
-            ui::tick(dt);
-
-            cam.set_projection(engine::camera::Perspective{
-                .fov = glm::radians(fov),
-                .aspect_ratio = 16.0f / 10.0f,
-            });
-
-            if (engine::event::was_released(GLFW_KEY_L)) {
-                lock_cam = !lock_cam;
-                exvar_reg.modified();
-
-                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
-                engine::imgui::enable(lock_cam);
-            }
-
-            glm::vec3 movement{0.0f};
-            if (engine::event::is_held(GLFW_KEY_W)) {
-                movement.z -= 1.0f;
-            }
-            if (engine::event::is_held(GLFW_KEY_S)) {
-                movement.z += 1.0f;
-            }
-            if (engine::event::is_held(GLFW_KEY_A)) {
-                movement.x -= 1.0f;
-            }
-            if (engine::event::is_held(GLFW_KEY_D)) {
-                movement.x += 1.0f;
-            }
-            bool moved = movement.x != 0.0f || movement.z != 0.0f;
-
-            if (moved) {
-                auto forward = cam.forward();
-                auto right = cam.right();
-                auto normalized_movement = glm::normalize(movement);
-
-                cam.position += movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
-                exvar_reg.modified();
-            }
-
-            auto mouse_delta = engine::event::get_mouse_delta();
-            if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
-                cam.rotate(sensitivity * glm::radians(-mouse_delta.x), sensitivity * glm::radians(-mouse_delta.y));
-            }
-
-            cam.update_matrices();
-
-            if (state::want_to_save() || exvar_reg.want_to_save()) {
-                std::ofstream o{project::editor_state};
-                o << nlohmann::json{
-                    {"state", state::save()},
-                    {"exvars", exvar_reg.save()},
-                };
-            }
-
-            if (engine::models_to_save()) {
-                std::ofstream o{project::models_registry};
-                o << engine::models::save();
-            }
-
-            if (engine::materials_to_save()) {
-                std::ofstream o{project::materials};
-                o << engine::materials::save();
-            }
-
-            if (engine::textures_to_save()) {
-                std::ofstream o{project::textures_registry};
-                o << nlohmann::json{
-                    {"textures", engine::textures::save()},
-                    {"samplers", engine::samplers::save()},
-                };
-            }
-
-            if (engine::scenes::want_to_save()) {
-                std::ofstream o{project::scenes_file};
-                o << engine::scenes::save();
-            }
-
-            engine::event::update_tick();
-        }
-
-        if (engine::prepare_frame()) {
-            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
-                    visbuffer, grid_pipeline);
-        }
-
-        engine::transport2::ticket transform_buffer_ticket{};
+        ImGuiWindow* scene_window = nullptr;
         {
             engine::imgui::begin();
             ui::begin();
@@ -473,7 +386,15 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            ui::game_window(cam);
+            ;
+            if ((ui::game_window(cam) || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
+                ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                lock_cam = !lock_cam;
+                exvar_reg.modified();
+
+                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                engine::imgui::enable(lock_cam);
+            }
 
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -536,7 +457,92 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             engine::imgui::end();
+        }
 
+        while (accum >= dt) {
+            accum -= dt;
+
+            ui::tick(dt);
+
+            cam.set_projection(engine::camera::Perspective{
+                .fov = glm::radians(fov),
+                .aspect_ratio = 16.0f / 10.0f,
+            });
+
+            glm::vec3 movement{0.0f};
+            if (!lock_cam) {
+                if (engine::event::is_held(ImGuiKey_W)) {
+                    movement.z -= 1.0f;
+                }
+                if (engine::event::is_held(ImGuiKey_S)) {
+                    movement.z += 1.0f;
+                }
+                if (engine::event::is_held(ImGuiKey_A)) {
+                    movement.x -= 1.0f;
+                }
+                if (engine::event::is_held(ImGuiKey_D)) {
+                    movement.x += 1.0f;
+                }
+            }
+            bool moved = movement.x != 0.0f || movement.z != 0.0f;
+
+            if (moved) {
+                auto forward = cam.forward();
+                auto right = cam.right();
+                auto normalized_movement = glm::normalize(movement);
+
+                cam.position += movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
+                exvar_reg.modified();
+            }
+
+            auto mouse_delta = engine::event::get_mouse_delta();
+            if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
+                cam.rotate(sensitivity * glm::radians(-mouse_delta.x), sensitivity * glm::radians(-mouse_delta.y));
+            }
+
+            cam.update_matrices();
+
+            if (state::want_to_save() || exvar_reg.want_to_save()) {
+                std::ofstream o{project::editor_state};
+                o << nlohmann::json{
+                    {"state", state::save()},
+                    {"exvars", exvar_reg.save()},
+                };
+            }
+
+            if (engine::models_to_save()) {
+                std::ofstream o{project::models_registry};
+                o << engine::models::save();
+            }
+
+            if (engine::materials_to_save()) {
+                std::ofstream o{project::materials};
+                o << engine::materials::save();
+            }
+
+            if (engine::textures_to_save()) {
+                std::ofstream o{project::textures_registry};
+                o << nlohmann::json{
+                    {"textures", engine::textures::save()},
+                    {"samplers", engine::samplers::save()},
+                };
+            }
+
+            if (engine::scenes::want_to_save()) {
+                std::ofstream o{project::scenes_file};
+                o << engine::scenes::save();
+            }
+
+            engine::event::update_tick();
+        }
+
+        if (engine::prepare_frame()) {
+            rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
+                    visbuffer, grid_pipeline);
+        }
+
+        engine::transport2::ticket transform_buffer_ticket{};
+        {
             engine::prepare_draw();
 
             VkClearColorValue target_clear_color{};

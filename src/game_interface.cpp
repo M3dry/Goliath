@@ -214,6 +214,18 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
         return descriptor::create_layout(*info);
     };
 
+    EngineService::ScenesServicePtrs scenes_service{};
+    scenes_service.acquire = engine::scenes::acquire;
+    scenes_service.release = engine::scenes::release;
+    scenes_service.instance_transforms_buffer = [](size_t scene_ix, transport2::ticket* ticket) {
+        return engine::scenes::get_instance_transforms_buffer(scene_ix, *ticket);
+    };
+    scenes_service.used_models = [](size_t scene_ix, size_t* count) {
+        auto sp = engine::scenes::get_used_models(scene_ix);
+        *count = sp.size();
+        return sp.data();
+    };
+
     serv->frame_ix = 0;
     serv->frames_in_flight = frames_in_flight;
     serv->empty_set = descriptor::empty_set;
@@ -259,6 +271,7 @@ void engine::game_interface::make_engine_service(EngineService* serv) {
     serv->culling = culling_service;
     serv->texture = texture_service;
     serv->descriptor = descriptor_service;
+    serv->scenes = scenes_service;
 }
 
 void engine::game_interface::make_frame_service(FrameService* serv) {

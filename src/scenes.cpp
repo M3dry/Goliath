@@ -104,20 +104,20 @@ namespace engine::scenes {
         return nlohmann::json{{"names", scene_names}, {"instance_names", instance_namess}, {"scenes", scenes}};
     }
 
-    void acquire(size_t i) {
-        scene_ref_counts[i]++;
+    void acquire(size_t scene_ix) {
+        scene_ref_counts[scene_ix]++;
 
-        update_transforms_buffer(i);
+        update_transforms_buffer(scene_ix);
 
-        auto& scene = scenes[i];
+        auto& scene = scenes[scene_ix];
         engine::models::acquire(scene.used_models.data(), scene.used_models.size());
     }
 
-    void release(size_t i) {
-        if (scene_ref_counts[i] == 0) return;
-        scene_ref_counts[i]--;
+    void release(size_t scene_ix) {
+        if (scene_ref_counts[scene_ix] == 0) return;
+        scene_ref_counts[scene_ix]--;
 
-        auto& scene = scenes[i];
+        auto& scene = scenes[scene_ix];
         scene.instance_transforms_buffer.destroy();
         scene.instance_transforms_buffer = Buffer{};
         scene.instance_transforms_buffer_ticket = {};
@@ -223,7 +223,7 @@ namespace engine::scenes {
         return instance_namess[scene_ix];
     }
 
-    std::span<models::gid> get_instance_models(size_t scene_ix) {
+    std::span<const models::gid> get_instance_models(size_t scene_ix) {
         return scenes[scene_ix].instance_models;
     }
 
@@ -236,7 +236,7 @@ namespace engine::scenes {
         return scenes[scene_ix].instance_transforms_buffer;
     }
 
-    std::span<models::gid> get_used_models(size_t scene_ix) {
+    std::span<const models::gid> get_used_models(size_t scene_ix) {
         return scenes[scene_ix].used_models;
     }
 

@@ -37,4 +37,3 @@ std::expected<nlohmann::json, engine::util::ReadJsonErr> engine::util::read_json
         return std::unexpected(ReadJsonErr::ParseErr);
     }
 }
-

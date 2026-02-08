@@ -10,6 +10,7 @@
 #include "goliath/textures.hpp"
 #include "goliath/transport2.hpp"
 #include "goliath/visbuffer.hpp"
+#include "imgui.h"
 #include <cstdint>
 #include <expected>
 #include <glm/ext/vector_float2.hpp>
@@ -638,6 +639,44 @@ extern "C" namespace engine::game_interface {
             }
         };
 
+        struct ScenesServicePtrs {
+            void (*acquire)(size_t scene_ix);
+            void (*release)(size_t scene_ix);
+
+            Buffer (*instance_transforms_buffer)(size_t scene_ix, transport2::ticket* ticket);
+            const models::gid* (*used_models)(size_t scene_ix, size_t* count);
+        };
+
+        class ScenesService {
+          private:
+            ScenesServicePtrs _ptrs;
+
+          public:
+            ScenesService(ScenesServicePtrs ptrs) : _ptrs(ptrs) {}
+            ScenesService() {}
+            operator ScenesServicePtrs() const {
+                return _ptrs;
+            }
+
+            void acquire(size_t scene_ix) {
+                _ptrs.acquire(scene_ix);
+            }
+
+            void release(size_t scene_ix) {
+                _ptrs.release(scene_ix);
+            }
+
+            Buffer instance_transforms_buffer(size_t scene_ix, transport2::ticket& ticket) {
+                return _ptrs.instance_transforms_buffer(scene_ix, &ticket);
+            }
+
+            std::span<const models::gid> used_models(size_t scene_ix) {
+                size_t count;
+                auto ptr = _ptrs.used_models(scene_ix, &count);
+                return {ptr, count};
+            }
+        };
+
         uint32_t frame_ix;
         uint32_t frames_in_flight;
         VkDescriptorSetLayout empty_set;
@@ -658,11 +697,12 @@ extern "C" namespace engine::game_interface {
         TextureService texture;
         BufferService buffer;
         DescriptorService descriptor;
+        ScenesService scenes;
     };
 
     struct TickServicePtrs {
-        bool (*is_held)(uint32_t code);
-        bool (*was_released)(uint32_t code);
+        bool (*is_held)(ImGuiKey code);
+        bool (*was_released)(ImGuiKey code);
 
         glm::vec2 (*get_mouse_delta)();
         glm::vec2 (*get_mouse_absolute)();
@@ -679,11 +719,11 @@ extern "C" namespace engine::game_interface {
             return _ptrs;
         }
 
-        bool is_held(uint32_t code) const {
+        bool is_held(ImGuiKey code) const {
             return _ptrs.is_held(code);
         }
 
-        bool was_released(uint32_t code) const {
+        bool was_released(ImGuiKey code) const {
             return _ptrs.was_released(code);
         }
 
@@ -961,7 +1001,8 @@ extern "C" namespace engine::game_interface {
             uint32_t current_frame;
 
           public:
-            VisBufferService(VisBufferServicePtrs ptrs, uint32_t current_frame) : _ptrs(ptrs), current_frame(current_frame) {}
+            VisBufferService(VisBufferServicePtrs ptrs, uint32_t current_frame)
+                : _ptrs(ptrs), current_frame(current_frame) {}
             VisBufferService() {}
             operator VisBufferServicePtrs() const {
                 return _ptrs;
