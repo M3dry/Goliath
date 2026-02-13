@@ -54,6 +54,7 @@ namespace ui {
     engine::GPUImage game_window_images[engine::frames_in_flight]{};
     VkImageView game_window_image_views[engine::frames_in_flight]{};
     VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
+    VkDescriptorSet game_window_textures_freeup[engine::frames_in_flight]{};
     std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
     VkSampler game_window_sampler;
     glm::vec2 game_image_offset{0.0f};
@@ -101,6 +102,7 @@ namespace ui {
             engine::gpu_image::destroy(game_window_images[i]);
             engine::gpu_image_view::destroy(game_window_image_views[i]);
             ImGui_ImplVulkan_RemoveTexture(game_window_textures[i]);
+            ImGui_ImplVulkan_RemoveTexture(game_window_textures_freeup[i]);
         }
     }
 
@@ -147,10 +149,12 @@ namespace ui {
         ImVec2 avail = ImGui::GetWindowSize();
         skip_game_window = avail.x <= 0 || avail.y <= 0;
 
+        ImGui_ImplVulkan_RemoveTexture(game_window_textures_freeup[engine::get_current_frame()]);
+        game_window_textures_freeup[engine::get_current_frame()] = nullptr;
         if ((avail.x != game_window_.x || avail.y != game_window_.y) && !skip_game_window) {
             engine::gpu_image::destroy(game_window_image);
             engine::gpu_image_view::destroy(game_window_image_view);
-            ImGui_ImplVulkan_RemoveTexture(game_window_texture);
+            game_window_textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] = game_window_texture;
 
             game_window_image =
                 engine::gpu_image::upload(std::format("Game window texture #{}", curr_frame).c_str(),

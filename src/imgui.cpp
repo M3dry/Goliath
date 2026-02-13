@@ -54,7 +54,7 @@ namespace engine::imgui {
         imgui_info.Queue = graphics_queue;
         imgui_info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE;
         imgui_info.MinImageCount = 2;
-        imgui_info.ImageCount = 2;
+        imgui_info.ImageCount = swapchain_images.size();
         imgui_info.Allocator = nullptr;
         imgui_info.CheckVkResultFn = check_vk_result;
         imgui_info.PipelineInfoMain = ImGui_ImplVulkan_PipelineInfo{

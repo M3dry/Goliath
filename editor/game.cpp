@@ -2,8 +2,11 @@
 #include "goliath/dyn_module.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/game_interface.hpp"
+#include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
+#include "imgui.h"
+#include "imgui_impl_vulkan.h"
 #include <vulkan/vulkan_core.h>
 
 void rebuild_target(engine::GPUImage* targets, VkImageView* target_views, glm::uvec2 target_dimensions,
@@ -43,7 +46,7 @@ std::expected<Game, Game::Err> Game::load(const char* plugin_file) {
     }
 
     Game game = Game::make(((engine::game_interface::MainFn*)(*f))());
-    engine::dyn_module::destroy(*mod);
+    game.mod = *mod;
 
     return game;
 }
@@ -77,9 +80,55 @@ void Game::unload() {
         engine::gpu_image::destroy(targets[i]);
         engine::gpu_image_view::destroy(target_views[i]);
     }
+    if (mod) engine::dyn_module::destroy(*mod);
 }
 
-void Game::state_tick(glm::uvec2 game_window_dims) {
+void Game::init(uint32_t argc, char** argv) {
+    if (!destroyed_state) assert(false);
+    destroyed_state = false;
+
+    user_state = config.funcs.init(&es, argc, argv);
+}
+
+void Game::destroy() {
+    if (destroyed_state) return;
+    config.funcs.destroy(user_state, &es);
+}
+
+void Game::resize() {
+    auto resize = config.funcs.resize;
+    if (resize == nullptr) return;
+
+    resize(user_state, &es);
+}
+
+void Game::tick(bool focused) {
+    if (focused) {
+        engine::game_interface::TickServicePtrs ptrs{
+            .is_held = [](auto x) { return false; },
+            .was_released = [](auto x) { return false; },
+
+            .get_mouse_delta = []() {
+                return glm::vec2{};
+            },
+            .get_mouse_absolute = []() {
+                return glm::vec2{};
+            },
+        };
+
+        ts = ptrs;
+    } else {
+        engine::game_interface::make_tick_service(&ts);
+    }
+
+    config.funcs.tick(user_state, &ts, &es);
+}
+
+void Game::draw_game_imgui() {
+    config.funcs.draw_imgui(user_state, &es);
+}
+
+uint32_t Game::render(glm::uvec2 game_window_dims) {
     es.frame_ix = engine::get_current_frame();
 
     auto current_frame = engine::get_current_frame();
@@ -92,36 +141,15 @@ void Game::state_tick(glm::uvec2 game_window_dims) {
         target_dimensions = game_window_dims;
         rebuild_target(targets.data(), target_views.data(), target_dimensions, config);
     }
-}
 
-void Game::init(uint32_t argc, char** argv) {
-    user_state = config.funcs.init(&es, argc, argv);
-}
-
-void Game::destroy() {
-    config.funcs.destroy(user_state, &es);
-}
-
-void Game::resize() {
-    auto resize = config.funcs.resize;
-    if (resize == nullptr) return;
-
-    resize(user_state, &es);
-}
-
-void Game::tick() {
-    config.funcs.tick(user_state, &ts, &es);
-}
-
-void Game::draw_imgui() {
-    config.funcs.draw_imgui(user_state, &es);
-}
-
-uint32_t Game::render() {
     return config.funcs.render(user_state, engine::get_cmd_buf(), &fs, &es, waits.data() + 1) + 1;
 }
 
 void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
+    auto final_stage = out.current_stage;
+    auto final_access = out.current_access;
+    auto final_layout = out.current_layout;
+
     engine::synchronization::begin_barriers();
     engine::synchronization::apply_barrier(out.transition(
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
@@ -141,13 +169,14 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
 
     vkCmdClearColorImage(engine::get_cmd_buf(), out.image, out.current_layout, &clear, 1, &range);
 
+    auto current_frame = engine::get_current_frame();
+    auto src = targets[current_frame];
+
     engine::synchronization::begin_barriers();
     engine::synchronization::apply_barrier(out.transition(
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
+    engine::synchronization::apply_barrier(src.transition(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT));
     engine::synchronization::end_barriers();
-
-    auto current_frame = engine::get_current_frame();
-    auto src = targets[current_frame];
 
     VkImageBlit2 region{};
     if (config.target_dimensions == glm::uvec2{0, 0} ||
@@ -191,7 +220,7 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
                     },
                     VkOffset3D{
                         .x = (int32_t)out_dims.x,
-                        .y = (int32_t)out_dims.x,
+                        .y = (int32_t)out_dims.y,
                         .z = 1,
                     },
                 },
@@ -267,8 +296,83 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
     vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
 
     engine::synchronization::begin_barriers();
-    engine::synchronization::apply_barrier(out.transition(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                                          VK_ACCESS_2_SHADER_SAMPLED_READ_BIT));
+    engine::synchronization::apply_barrier(out.transition(final_layout,
+                                                          final_stage,
+                                                          final_access));
+    engine::synchronization::apply_barrier(src.transition(config.target_start_layout,
+                                                          config.target_finish_stage,
+                                                          config.target_finish_access));
     engine::synchronization::end_barriers();
+}
+
+VkSampler GameView::sampler = nullptr;
+
+GameView::GameView() {
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        dimensions[i].x = -1;
+        dimensions[i].y = -1;
+    }
+}
+
+bool GameView::draw_pane() {
+    auto curr_frame = engine::get_current_frame();
+
+    bool focused = ImGui::IsWindowFocused();
+    ImVec2 win_pos = ImGui::GetWindowPos();
+    ImVec2 avail = ImGui::GetWindowSize();
+    skipped_window = avail.x <= 0 || avail.y <= 0;
+
+    ImGui_ImplVulkan_RemoveTexture(textures_freeup[engine::get_current_frame()]);
+    textures_freeup[engine::get_current_frame()] = nullptr;
+
+    auto& dims = dimensions[curr_frame];
+    if ((avail.x != dims.x || avail.y != dims.y) && !skipped_window) {
+        auto& image = images[curr_frame];
+        auto& view = views[curr_frame];
+        auto& texture = textures[curr_frame];
+
+        engine::gpu_image::destroy(image);
+        engine::gpu_image_view::destroy(view);
+        textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] = texture;
+
+        image = engine::gpu_image::upload(std::format("GameView window texture #{}", curr_frame).c_str(),
+                                          engine::GPUImageInfo{}
+                                              .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                              .width(avail.x)
+                                              .height(avail.y)
+                                              .format(engine::swapchain_format)
+                                              .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),
+                                          VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+        view = engine::gpu_image_view::create(engine::GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+        texture = ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        dims.x = avail.x;
+        dims.y = avail.y;
+    }
+
+    if (!skipped_window) {
+        auto dim = dimensions[engine::get_current_frame()];
+        ImGui::Image(textures[engine::get_current_frame()], ImVec2{(float)dim.x, (float)dim.y});
+    }
+
+    return focused;
+}
+
+void GameView::blit(Game& game) {
+    auto curr_frame = engine::get_current_frame();
+    game.blit_game_target(images[curr_frame], dimensions[curr_frame]);
+}
+
+void GameView::init() {
+    sampler = engine::samplers::get(engine::samplers::add(engine::Sampler{}));
+}
+
+void GameView::destroy() {
+    for (size_t i = 0; i < engine::frames_in_flight; i++) {
+        engine::gpu_image::destroy(images[i]);
+        engine::gpu_image_view::destroy(views[i]);
+        ImGui_ImplVulkan_RemoveTexture(textures[i]);
+        ImGui_ImplVulkan_RemoveTexture(textures_freeup[i]);
+    }
 }

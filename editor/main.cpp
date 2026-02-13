@@ -1,4 +1,5 @@
 #include "exvars.hpp"
+#include "game.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
@@ -52,6 +53,12 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+struct LoadedGame {
+    bool focused;
+    Game game;
+    float time_accum;
+};
 
 void update_depth(engine::GPUImage* images, VkImageView* image_views, uint32_t frames_in_flight) {
     for (std::size_t i = 0; i < frames_in_flight; i++) {
@@ -174,6 +181,10 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+    GameView::init();
+
+    std::optional<LoadedGame> game{};
+    GameView game_viewport{};
 
     auto state_json = engine::util::read_json(project::editor_state);
     if (!state_json.has_value()) {
@@ -226,6 +237,22 @@ int main(int argc, char** argv) {
 
     NFD_Init();
     engine::culling::init(8192);
+
+    if (argc >= 2) {
+        auto game_ = Game::load(argv[1]);
+        if (!game_) {
+            printf("Game load error: %d\n", game_.error());
+            return -1;
+        }
+
+        game = LoadedGame{
+            .focused = false,
+            .game = *game_,
+            .time_accum = 0,
+        };
+
+        game->game.init(argc - 2, argv + 2);
+    }
 
     auto visbuffer = engine::visbuffer::create({engine::swapchain_extent.width, engine::swapchain_extent.height});
 
@@ -368,6 +395,9 @@ int main(int argc, char** argv) {
         double frame_time = time - last_time;
         last_time = time;
         accum += frame_time;
+        if (game) {
+            game->time_accum += frame_time;
+        }
 
         auto state = engine::event::poll();
         if (state == engine::event::Minimized) {
@@ -386,7 +416,6 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            ;
             if ((ui::game_window(cam) || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
                 ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 lock_cam = !lock_cam;
@@ -394,6 +423,22 @@ int main(int argc, char** argv) {
 
                 glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                 engine::imgui::enable(lock_cam);
+            }
+
+            if (game) {
+                game->game.draw_game_imgui();
+
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
+                ImGui::Begin("Game viewport", nullptr,
+                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+                if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
+                    node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
+                }
+
+                game->focused = game_viewport.draw_pane();
+
+                ImGui::End();
+                ImGui::PopStyleVar();
             }
 
             if (ImGui::BeginMainMenuBar()) {
@@ -536,14 +581,28 @@ int main(int argc, char** argv) {
             engine::event::update_tick();
         }
 
+        if (game) {
+            const auto dt = (1000.0 / game->game.config.tps) / 1000.0;
+            while (game->time_accum >= dt) {
+                game->time_accum -= dt;
+                game->game.tick(game->focused);
+            }
+        }
+
         if (engine::prepare_frame()) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
+
+            if (game) game->game.resize();
         }
 
         engine::transport2::ticket transform_buffer_ticket{};
         {
             engine::prepare_draw();
+
+            if (game && !game_viewport.skipped_window) {
+                game->game.render(game_viewport.dimensions[engine::get_current_frame()]);
+            }
 
             VkClearColorValue target_clear_color{};
             target_clear_color.float32[0] = 36.0f / 255.0f;
@@ -763,7 +822,6 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
-            auto game_window_image = ui::get_window_image();
             VkImageBlit2 blit_region{};
             blit_region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
             blit_region.srcOffsets[0] = VkOffset3D{
@@ -790,6 +848,8 @@ int main(int argc, char** argv) {
             blit_info.regionCount = 1;
             blit_info.pRegions = &blit_region;
             auto game_window_barrier = ui::blit_game_window(blit_info);
+
+            if (game && !game_viewport.skipped_window) game_viewport.blit(game->game);
 
             engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
                 engine::RenderingAttachement{}
@@ -819,6 +879,8 @@ int main(int argc, char** argv) {
         if (engine::next_frame(waits)) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
+
+            if (game) game->game.resize();
 
             engine::increment_frame();
         }
@@ -862,6 +924,11 @@ int main(int argc, char** argv) {
 
     free(depth_image_views);
     free(depth_images);
+
+    game_viewport.destroy();
+    if (game) {
+        game->game.unload();
+    }
 
     ui::destroy();
 

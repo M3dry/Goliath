@@ -525,7 +525,7 @@ void engine::game_interface::start(const GameConfig& config, const AssetPaths& a
 
     update_targets(targets, target_views, target_dimension);
 
-    auto user_data = config.funcs.init(&engine_service, argc, argv);
+    auto user_data = config.funcs.init(&engine_service, argc - 1, argv + 1);
 
     double accum = 0;
     double last_time = glfwGetTime();

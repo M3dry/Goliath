@@ -698,6 +698,24 @@ extern "C" namespace engine::game_interface {
         BufferService buffer;
         DescriptorService descriptor;
         ScenesService scenes;
+
+        GraphicsPipelineBuilder make_graphics_builder() const {
+            auto builder = GraphicsPipelineBuilder{};
+            builder._set_layout[0] = empty_set;
+            builder._set_layout[1] = empty_set;
+            builder._set_layout[2] = empty_set;
+            builder._set_layout[3] = empty_set;
+            return builder;
+        }
+
+        ComputePipelineBuilder make_compute_builder() const {
+            auto builder = ComputePipelineBuilder{};
+            builder._set_layout[0] = empty_set;
+            builder._set_layout[1] = empty_set;
+            builder._set_layout[2] = empty_set;
+            builder._set_layout[3] = empty_set;
+            return builder;
+        }
     };
 
     struct TickServicePtrs {
@@ -1064,6 +1082,13 @@ extern "C" namespace engine::game_interface {
         SynchronizationService synchronization;
         VisBufferService visbuffer;
         TexturePoolService texture_pool;
+
+        RenderPass make_renderpass() const {
+            return RenderPass{}.render_area(VkRect2D{
+                .offset = VkOffset2D{0,0},
+                .extent = {target_dimensions.x, target_dimensions.y},
+            });
+        }
     };
 
     struct AssetPaths {

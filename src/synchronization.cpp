@@ -49,6 +49,8 @@ namespace engine::synchronization {
     void submit_from_another_thread(std::span<VkBufferMemoryBarrier2> bufs, std::span<VkImageMemoryBarrier2> images,
                                     std::span<VkMemoryBarrier2> general, std::optional<VkSemaphoreSubmitInfo> wait_info,
                                     std::optional<VkSemaphoreSubmitInfo> signal_info) {
+        std::lock_guard lock{graphics_queue_lock};
+
         VK_CHECK(vkWaitForFences(device, 1, &barriers_cmd_buf_fence, true, UINT64_MAX));
         VK_CHECK(vkResetFences(device, 1, &barriers_cmd_buf_fence));
         VK_CHECK(vkResetCommandBuffer(barriers_cmd_buf, 0));
@@ -82,8 +84,6 @@ namespace engine::synchronization {
         submit_info.pCommandBufferInfos = &cmd_info;
         submit_info.signalSemaphoreInfoCount = signal_info ? 1 : 0;
         submit_info.pSignalSemaphoreInfos = signal_info ? &*signal_info : nullptr;
-
-        std::lock_guard lock{graphics_queue_lock};
         VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, barriers_cmd_buf_fence));
     }
 }

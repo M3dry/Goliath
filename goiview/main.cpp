@@ -70,7 +70,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                 glfwSetWindowAttrib(*engine_state.window, GLFW_RESIZABLE, GLFW_TRUE);
                 glfwSetWindowAttrib(*engine_state.window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
-                auto [image_data, metadata] = read_goi(argv[1]);
+                auto [image_data, metadata] = read_goi(argv[0]);
                 state->metadata = metadata;
 
                 state->image =
@@ -107,7 +107,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                                                                  }>{});
 
                 state->pipeline = es->rendering
-                                      .create_pipeline(engine::GraphicsPipelineBuilder{}
+                                      .create_pipeline(es->make_graphics_builder()
                                                            .vertex(image_vertex_module)
                                                            .fragment(image_fragment_module)
                                                            .push_constant_size(ImagePC::size)
@@ -136,7 +136,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                          VkSemaphoreSubmitInfo* waits) -> uint32_t {
                 auto* state = (State*)_state;
                 if (es->transport.is_uploaded(state->image_ticket)) {
-                    fs->rendering.begin(engine::RenderPass{}.add_color_attachment(
+                    fs->rendering.begin(fs->make_renderpass().add_color_attachment(
                         engine::RenderingAttachement{}
                             .set_image(fs->target_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                             .set_load_op(engine::LoadOp::Clear)
