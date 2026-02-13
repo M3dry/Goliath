@@ -221,7 +221,7 @@ namespace ui {
                 ImGuizmo::AllowAxisFlip(false);
                 ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
                                   win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
-                ImGuizmo::SetDrawlist();
+                // ImGuizmo::SetDrawlist();
 
                 auto proj = cam._projection;
                 proj[1][1] *= -1;

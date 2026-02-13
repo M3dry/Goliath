@@ -19,12 +19,12 @@
 [submodule "editor/ImGuizmo"]
 	path = editor/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo
-[submodule "editor/ImViewGuizmo"]
-	path = editor/ImViewGuizmo
-	url = https://github.com/Ka1serM/ImViewGuizmo
 [submodule "src/glfw"]
 	path = src/glfw
 	url = https://github.com/glfw/glfw
 [submodule "src/tinygltf"]
 	path = src/tinygltf
 	url = https://github.com/syoyo/tinygltf.git
+[submodule "editor/ImViewGuizmo"]
+	path = editor/ImViewGuizmo
+	url = https://github.com/M3dry/ImViewGuizmo
