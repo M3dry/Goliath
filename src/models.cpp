@@ -16,6 +16,7 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::models {
+    bool want_save = false;
     bool init_called = false;
     std::filesystem::path models_directory;
 
@@ -204,6 +205,8 @@ namespace engine::models {
             return found;
         });
 
+        initialized |= want_save;
+        want_save = false;
         return initialized;
     }
 
@@ -477,6 +480,10 @@ namespace engine::models {
 
     std::span<std::string> get_names() {
         return names;
+    }
+
+    void modified() {
+        want_save = true;
     }
 }
 

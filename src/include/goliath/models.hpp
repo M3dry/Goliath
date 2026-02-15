@@ -62,6 +62,8 @@ namespace engine::models {
     void release(const gid* gids, uint32_t count);
 
     std::span<std::string> get_names();
+
+    void modified();
 }
 
 namespace engine::culling {

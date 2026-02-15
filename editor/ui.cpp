@@ -439,6 +439,8 @@ namespace ui {
 
         std::sort(matches.begin(), matches.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
 
+        ImGui::Separator();
+
         if (ImGui::BeginTable("##search_results", 2,
                               ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingStretchSame)) {
             uint32_t i = 0;
@@ -455,7 +457,7 @@ namespace ui {
                 draw_list->ChannelsSetCurrent(1);
 
                 ImGui::BeginGroup();
-                std::visit([&i](auto gid) { assets_entry(gid, i); }, gid);
+                std::visit([&i](auto gid) { assets_entry_pre(gid, i); }, gid);
                 ImGui::EndGroup();
 
                 ImVec2 content_size = ImGui::GetItemRectSize();
@@ -466,14 +468,17 @@ namespace ui {
                 draw_list->AddRectFilled(
                     start_pos, ImVec2(start_pos.x + available_width, start_pos.y + content_size.y),
                     ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_HeaderHovered : ImGuiCol_Header));
-
-                draw_list->ChannelsMerge();
-
                 if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                     std::visit([](auto gid) { assets_entry_drag_preview(gid); }, gid);
 
                     ImGui::EndDragDropSource();
                 }
+
+                ImGui::BeginGroup();
+                std::visit([&i](const auto& gid) { assets_entry_post(gid, i); }, gid);
+                ImGui::EndGroup();
+
+                draw_list->ChannelsMerge();
 
                 ImGui::PopID();
                 i++;
@@ -483,24 +488,77 @@ namespace ui {
         }
     }
 
-    void assets_entry(engine::models::gid gid, uint32_t ix) {
-        auto name = *engine::models::get_name(gid);
+    void assets_entry_pre(engine::models::gid gid, uint32_t ix) {
+        const auto& name = **engine::models::get_name(gid);
+        ImGui::TextWrapped("%s", name.c_str());
+        if (ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = name;
+                rename_dst = [gid](const auto& str) {
+                    if (auto name = engine::models::get_name(gid); name) {
+                        **name = str;
+                        engine::models::modified();
+                    }
+                };
+            }
 
-        if (ImGui::InputText("##name", name)) {
-            printf("TODO: rename saving\n");
+            ImGui::EndPopup();
+        }
+    }
+
+    void assets_entry_pre(engine::textures::gid gid, uint32_t ix) {
+        const auto& name = **engine::textures::get_name(gid);
+        ImGui::TextWrapped("%s", name.c_str());
+    }
+
+    void assets_entry_post(engine::models::gid gid, uint32_t ix) {
+        const auto& name = **engine::models::get_name(gid);
+
+        bool add = false;
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+            add = true;
         }
 
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button("+")) {
-            engine::scenes::add_instance(scene::selected_scene(), **engine::models::get_name(gid),
-                                         glm::identity<glm::mat4>(), gid);
+        if (ImGui::BeginPopupContextItem("ModelEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = name;
+                rename_dst = [gid](const auto& str) {
+                    if (auto name = engine::models::get_name(gid); name) {
+                        **name = str;
+                        engine::models::modified();
+                    }
+                };
+            }
+
+            if (ImGui::MenuItem("Add to scene")) {
+                add = true;
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (add) {
+            engine::scenes::add_instance(scene::selected_scene(), name, glm::identity<glm::mat4>(), gid);
             scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
         }
     }
 
-    void assets_entry(engine::textures::gid gid, uint32_t ix) {
-        ImGui::TextWrapped("%s", (**engine::textures::get_name(gid)).c_str());
+    void assets_entry_post(engine::textures::gid gid, uint32_t ix) {
+        const auto& name = **engine::textures::get_name(gid);
+
+        if (ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = name;
+                rename_dst = [gid](const auto& str) {
+                    if (auto name = engine::textures::get_name(gid); name) {
+                        **name = str;
+                        engine::textures::modified();
+                    }
+                };
+            }
+
+            ImGui::EndPopup();
+        }
     }
 
     void assets_entry_drag_preview(engine::models::gid gid) {
@@ -516,11 +574,12 @@ namespace ui {
 
         auto scenes = engine::scenes::get_names();
         if (ImGui::BeginCombo("##scene_picker", scenes[scene::selected_scene()].c_str())) {
-            if (ImGui::Button("New scene##new_scene")) {
+            if (ImGui::Button("New scene##new_scene", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
                 engine::scenes::add("New scene");
                 scene::select_scene(scenes.size());
 
                 scenes = engine::scenes::get_names();
+                ImGui::CloseCurrentPopup();
             }
             ImGui::Separator();
 
@@ -567,48 +626,52 @@ namespace ui {
         }
         to_delete.clear();
 
+        ImGui::Separator();
+
+        size_t counter = 0;
         for (size_t i = 0; i < engine::scenes::get_instance_names(scene::selected_scene()).size(); i++) {
+            ImGui::PushID(counter);
+
             i = instance_entry(scene::selected_scene(), i);
+
+            ImGui::PopID();
+            counter++;
         }
     }
 
     size_t instance_entry(size_t scene_ix, size_t instance_ix) {
-        ImGui::PushID(instance_ix);
-
         auto& inst_name = engine::scenes::get_instance_names(scene_ix)[instance_ix];
-        auto& inst_transform = engine::scenes::get_instance_transforms(scene_ix)[instance_ix];
 
-        if (ImGui::Selectable("", scene::selected_instance == instance_ix,
-                              ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                              ImVec2(0.0, ImGui::GetFrameHeight()))) {
+        if (ImGui::Selectable("", scene::selected_instance == instance_ix, ImGuiSelectableFlags_SpanAllColumns)) {
             scene::selected_instance = scene::selected_instance == instance_ix ? -1 : instance_ix;
         }
+        if (ImGui::BeginPopupContextItem("InstanceEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = inst_name;
+                rename_dst = [scene_ix, instance_ix](const auto& str) {
+                    engine::scenes::get_instance_names(scene_ix)[instance_ix] = str;
+                    engine::scenes::modified(scene_ix);
+                };
+            }
+            if (ImGui::MenuItem("Delete")) {
+                engine::scenes::remove_instance(scene_ix, instance_ix);
+                if (scene::selected_instance == -1) {
 
-        ImGui::SameLine();
-        ImGui::InputText("##name", &inst_name);
-        if (ImGui::IsItemClicked()) {
-            scene::selected_instance = instance_ix;
-        }
+                } else if (scene::selected_instance == instance_ix) {
+                    scene::selected_instance = -1;
+                } else if (scene::selected_instance > instance_ix) {
+                    scene::selected_instance--;
+                }
 
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-        if (ImGui::Button("X")) {
-            engine::scenes::remove_instance(scene_ix, instance_ix);
-
-            if (scene::selected_instance == -1) {
-
-            } else if (scene::selected_instance == instance_ix) {
-                scene::selected_instance = -1;
-            } else if (scene::selected_instance > instance_ix) {
-                scene::selected_instance--;
+                ImGui::EndPopup();
+                return instance_ix - 1;
             }
 
-            instance_ix--;
-            ImGui::PopID();
-            return instance_ix;
+            ImGui::EndPopup();
         }
 
-        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", inst_name.c_str());
 
         return instance_ix;
     }

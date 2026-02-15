@@ -20,8 +20,10 @@ namespace ui {
     engine::GPUImage get_window_image();
 
     void assets_pane();
-    void assets_entry(engine::models::gid gid, uint32_t ix);
-    void assets_entry(engine::textures::gid gid, uint32_t ix);
+    void assets_entry_pre(engine::models::gid gid, uint32_t ix);
+    void assets_entry_pre(engine::textures::gid gid, uint32_t ix);
+    void assets_entry_post(engine::models::gid gid, uint32_t ix);
+    void assets_entry_post(engine::textures::gid gid, uint32_t ix);
     void assets_entry_drag_preview(engine::models::gid gid);
     void assets_entry_drag_preview(engine::textures::gid gid);
 

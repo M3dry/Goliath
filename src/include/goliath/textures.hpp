@@ -58,4 +58,6 @@ namespace engine::textures {
 
     const TexturePool& get_texture_pool();
     std::span<std::string> get_names();
+
+    void modified();
 }

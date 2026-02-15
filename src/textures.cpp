@@ -18,6 +18,7 @@ struct Metadata {
 };
 
 namespace engine::textures {
+    bool want_save = false;
     bool init_called = false;
     std::filesystem::path texture_directory{};
 
@@ -259,6 +260,8 @@ namespace engine::textures {
             return found;
         });
 
+        initialized |= want_save;
+        want_save = false;
         return initialized;
     }
 
@@ -561,5 +564,9 @@ namespace engine::textures {
 
     std::span<std::string> get_names() {
         return names;
+    }
+
+    void modified() {
+        want_save = true;
     }
 }
