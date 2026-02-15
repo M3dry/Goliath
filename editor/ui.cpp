@@ -773,47 +773,57 @@ namespace ui {
         bool modified = false;
         size_t offset = 0;
 
-        constexpr auto im = engine::imgui_reflection::Input{};
-        for (size_t i = 0; i < schema.attributes.size(); i++) {
-            auto& name = schema.names[i];
+        float avail = ImGui::GetContentRegionAvail().x;
+        float item_width = 500.0f;
+        int columns = std::min(std::max(1, int(avail / item_width)), 4);
 
-            engine::material::visit(
-                [&]<typename Attr>() {
-                    auto* data_ptr = (Attr*)(data.data() + offset);
+        if (ImGui::BeginTable("grid", columns)) {
+            constexpr auto im = engine::imgui_reflection::Input{};
+            for (size_t i = 0; i < schema.attributes.size(); i++) {
+                auto& name = schema.names[i];
 
-                    if constexpr (engine::util::is_vec_v<Attr>) {
-                        using VecData = engine::util::vec_data<Attr>;
+                ImGui::TableNextColumn();
+                ImGui::PushItemWidth(std::max<float>(item_width - ImGui::CalcTextSize(name.c_str()).x, 0));
+                engine::material::visit(
+                    [&]<typename Attr>() {
+                        auto* data_ptr = (Attr*)(data.data() + offset);
 
-                        engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
-                                                        {VecData::dimension, 1});
-                    } else if constexpr (engine::util::is_mat_v<Attr>) {
-                        using MatData = engine::util::mat_data<Attr>;
+                        if constexpr (engine::util::is_vec_v<Attr>) {
+                            using VecData = engine::util::vec_data<Attr>;
 
-                        engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
-                                                        MatData::dimension);
-                    } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
-                        // ImGui::Text("%s %s", (**engine::textures::get_name(*data_ptr)).c_str(), name.c_str());
-                        ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr),
-                                         ImGuiInputTextFlags_ReadOnly);
-                        if (ImGui::BeginDragDropTarget()) {
-                            if (auto payload = ImGui::AcceptDragDropPayload("texture");
-                                payload != nullptr && payload->IsDelivery()) {
-                                auto gid = *(engine::textures::gid*)payload->Data;
+                            engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
+                                                            {VecData::dimension, 1});
+                        } else if constexpr (engine::util::is_mat_v<Attr>) {
+                            using MatData = engine::util::mat_data<Attr>;
 
-                                *data_ptr = gid;
-                                // TODO: acquire texture @gid, then release current texture @*data_ptr - move material
-                                // textures from gpu group to a separate thing
+                            engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
+                                                            MatData::dimension);
+                        } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
+                            ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr),
+                                             ImGuiInputTextFlags_ReadOnly);
+                            if (ImGui::BeginDragDropTarget()) {
+                                if (auto payload = ImGui::AcceptDragDropPayload("texture");
+                                    payload != nullptr && payload->IsDelivery()) {
+                                    auto gid = *(engine::textures::gid*)payload->Data;
+
+                                    *data_ptr = gid;
+                                    // TODO: acquire texture @gid, then release current texture @*data_ptr - move material
+                                    // textures from gpu group to a separate thing
+                                }
+
+                                ImGui::EndDragDropTarget();
                             }
-
-                            ImGui::EndDragDropTarget();
+                        } else {
+                            engine::imgui_reflection::input(name.c_str(), im, data_ptr);
                         }
-                    } else {
-                        engine::imgui_reflection::input(name.c_str(), im, data_ptr);
-                    }
 
-                    offset += sizeof(Attr);
-                },
-                schema.attributes[i]);
+                        offset += sizeof(Attr);
+                    },
+                    schema.attributes[i]);
+                ImGui::PopItemWidth();
+            }
+
+            ImGui::EndTable();
         }
 
         return modified;
