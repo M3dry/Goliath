@@ -487,11 +487,6 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            // if (ImGui::Begin("Scenes", nullptr)) {
-            //     ui::scene_pane();
-            // }
-            // ImGui::End();
-
             if (ImGui::Begin("Transformation")) {
                 ui::transform_pane(cam);
             }
@@ -501,6 +496,8 @@ int main(int argc, char** argv) {
                 ui::selected_model_materials_pane();
             }
             ImGui::End();
+
+            ui::rename_popup();
 
             engine::imgui::end();
         }

@@ -183,7 +183,7 @@ namespace engine::scenes {
     }
 
     void remove(size_t scene_ix) {
-        if (scenes.size() >= scene_ix) return;
+        if (scenes.size() <= scene_ix) return;
         destroy(scene_ix);
 
         scene_names.erase(scene_names.begin() + scene_ix);

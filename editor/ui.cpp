@@ -73,6 +73,10 @@ namespace ui {
 
     std::optional<SelectedInstance> transform_value_changed{};
 
+    std::string rename_tmp{};
+    using RenameDstFn = std::function<void(const std::string&)>;
+    RenameDstFn rename_dst{};
+
     void update_instance_transform() {
         if (transform_value_changed && transform_value_changed->scene == scene::selected_scene() &&
             transform_value_changed->instance == scene::selected_instance) {
@@ -508,6 +512,8 @@ namespace ui {
     }
 
     void instances_pane() {
+        static std::vector<size_t> to_delete{};
+
         auto scenes = engine::scenes::get_names();
         if (ImGui::BeginCombo("##scene_picker", scenes[scene::selected_scene()].c_str())) {
             if (ImGui::Button("New scene##new_scene")) {
@@ -524,6 +530,22 @@ namespace ui {
                     scene::select_scene(i);
                 }
 
+                if (ImGui::BeginPopupContextItem("SceneEntryContextMenu")) {
+                    if (ImGui::MenuItem("Rename")) {
+                        rename_tmp = scenes[i];
+                        rename_dst = [i](const auto& str) {
+                            engine::scenes::get_name(i) = str;
+                            engine::scenes::modified(i);
+                        };
+                    }
+
+                    if (ImGui::MenuItem("Delete")) {
+                        to_delete.emplace_back(i);
+                    }
+
+                    ImGui::EndPopup();
+                }
+
                 if (scene::selected_scene() == i) {
                     ImGui::SetItemDefaultFocus();
                 }
@@ -533,6 +555,17 @@ namespace ui {
 
             ImGui::EndCombo();
         }
+
+        size_t off = 0;
+        for (auto ix : to_delete) {
+            if (engine::scenes::get_names().size() > 1) engine::scenes::remove(ix - off);
+
+            if (scene::selected_scene() == ix) {
+                scene::select_scene(ix == 0 ? 0 : ix - 1);
+            }
+            off++;
+        }
+        to_delete.clear();
 
         for (size_t i = 0; i < engine::scenes::get_instance_names(scene::selected_scene()).size(); i++) {
             i = instance_entry(scene::selected_scene(), i);
@@ -697,13 +730,16 @@ namespace ui {
                                                         MatData::dimension);
                     } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
                         // ImGui::Text("%s %s", (**engine::textures::get_name(*data_ptr)).c_str(), name.c_str());
-                        ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr), ImGuiInputTextFlags_ReadOnly);
+                        ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr),
+                                         ImGuiInputTextFlags_ReadOnly);
                         if (ImGui::BeginDragDropTarget()) {
-                            if (auto payload = ImGui::AcceptDragDropPayload("texture"); payload != nullptr && payload->IsDelivery()) {
+                            if (auto payload = ImGui::AcceptDragDropPayload("texture");
+                                payload != nullptr && payload->IsDelivery()) {
                                 auto gid = *(engine::textures::gid*)payload->Data;
 
                                 *data_ptr = gid;
-                                // TODO: acquire texture @gid, then release current texture @*data_ptr - move material textures from gpu group to a separate thing
+                                // TODO: acquire texture @gid, then release current texture @*data_ptr - move material
+                                // textures from gpu group to a separate thing
                             }
 
                             ImGui::EndDragDropTarget();
@@ -718,5 +754,34 @@ namespace ui {
         }
 
         return modified;
+    }
+
+    void rename_popup() {
+        if (rename_dst != nullptr) {
+            ImGui::OpenPopup("RenamePopup");
+        }
+
+        if (ImGui::BeginPopupModal("RenamePopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            assert(rename_dst != nullptr);
+
+            ImGui::Text("Rename:");
+            ImGui::InputText("##rename", &rename_tmp);
+
+            if (ImGui::Button("Rename")) {
+                rename_dst(rename_tmp);
+                rename_tmp = "";
+                rename_dst = nullptr;
+
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                rename_dst = nullptr;
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
     }
 }

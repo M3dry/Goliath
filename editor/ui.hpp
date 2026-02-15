@@ -34,4 +34,6 @@ namespace ui {
 
     void selected_model_materials_pane();
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);
+
+    void rename_popup();
 }
