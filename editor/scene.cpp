@@ -37,8 +37,12 @@ namespace scene {
     }
 
     void select_scene(size_t scene_ix) {
+        if (scene_ix == selected_scene_ix) return;
+
         engine::scenes::release(selected_scene_ix);
         selected_scene_ix = scene_ix;
         engine::scenes::acquire(selected_scene_ix);
+
+        selected_instance = -1;
     }
 }

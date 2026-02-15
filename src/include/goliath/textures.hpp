@@ -57,4 +57,5 @@ namespace engine::textures {
     void release(const gid* gids, uint32_t count);
 
     const TexturePool& get_texture_pool();
+    std::span<std::string> get_names();
 }

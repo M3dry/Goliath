@@ -3,6 +3,7 @@
 #include "ImGuizmo/ImGuizmo.h"
 #include "goliath/materials.hpp"
 #include "goliath/scenes.hpp"
+#include "goliath/textures.hpp"
 #include "state.hpp"
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
@@ -154,7 +155,8 @@ namespace ui {
         if ((avail.x != game_window_.x || avail.y != game_window_.y) && !skip_game_window) {
             engine::gpu_image::destroy(game_window_image);
             engine::gpu_image_view::destroy(game_window_image_view);
-            game_window_textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] = game_window_texture;
+            game_window_textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] =
+                game_window_texture;
 
             game_window_image =
                 engine::gpu_image::upload(std::format("Game window texture #{}", curr_frame).c_str(),
@@ -179,6 +181,17 @@ namespace ui {
         if (!skip_game_window) {
             ImVec2 cursor = ImGui::GetCursorPos();
             ImGui::Image(game_window_texture, game_window_);
+            if (ImGui::BeginDragDropTarget()) {
+                auto payload = ImGui::AcceptDragDropPayload("model");
+                if (payload != nullptr && payload->IsDelivery()) {
+                    auto gid = *(engine::models::gid*)payload->Data;
+
+                    engine::scenes::add_instance(scene::selected_scene(), **engine::models::get_name(gid),
+                                                 glm::identity<glm::mat4>(), gid);
+                    scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
+                }
+                ImGui::EndDragDropTarget();
+            }
 
             ImVec2 gizmo_offset{win_pos.x + cursor.x, win_pos.y + cursor.y};
             avail.x -= cursor.x;
@@ -221,7 +234,7 @@ namespace ui {
                 ImGuizmo::AllowAxisFlip(false);
                 ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
                                   win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
-                // ImGuizmo::SetDrawlist();
+                ImGuizmo::SetDrawlist();
 
                 auto proj = cam._projection;
                 proj[1][1] *= -1;
@@ -352,59 +365,121 @@ namespace ui {
         return game_window_images[engine::get_current_frame()];
     }
 
-    void models_pane() {
+    using scored_entry = std::pair<std::variant<engine::models::gid, engine::textures::gid>, int32_t>;
+
+    void score_models(bool current_scene, const std::string& query, std::vector<scored_entry>& out) {
+        if (current_scene) {
+            for (const auto& gid : engine::scenes::get_used_models(scene::selected_scene())) {
+                auto score = score_search(query, **engine::models::get_name(gid));
+                if (score > std::numeric_limits<int32_t>::min()) {
+                    out.emplace_back(gid, score);
+                }
+            }
+        } else {
+            auto names = engine::models::get_names();
+            for (uint32_t i = 0; i < names.size(); i++) {
+                auto score = score_search(query, names[i]);
+                if (score > std::numeric_limits<int32_t>::min()) {
+                    out.emplace_back(engine::models::gid{engine::models::get_generation(i), i}, score);
+                }
+            }
+        }
+    }
+
+    void score_textures(bool current_scene, const std::string& query, std::vector<scored_entry>& out) {
+        if (current_scene) {
+
+        } else {
+            auto names = engine::textures::get_names();
+            for (uint32_t i = 0; i < names.size(); i++) {
+                auto score = score_search(query, names[i]);
+                if (score > std::numeric_limits<int32_t>::min()) {
+                    out.emplace_back(engine::textures::gid{engine::textures::get_generation(i), i}, score);
+                }
+            }
+        }
+    }
+
+    void assets_pane() {
         if (ImGui::InputText("##search", &state::models_query)) {
             state::modified_value();
         }
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-        std::array<const char*, 2> combo_values = {
-            "Scene models",
-            "All models",
-        };
-        if (ImGui::BeginCombo("##combo", combo_values[state::models_search_scope], ImGuiComboFlags_NoPreview)) {
+        std::array<const char*, 3> combo_values = {"All assets", "Models", "Textues"};
+        if (ImGui::BeginCombo("##scope", combo_values[state::assets_scope], ImGuiComboFlags_NoPreview)) {
             for (size_t i = 0; i < combo_values.size(); i++) {
-                if (ImGui::Selectable(combo_values[i], state::models_search_scope == i)) {
-                    state::models_search_scope = i;
+                if (ImGui::Selectable(combo_values[i], state::assets_scope == i)) {
+                    state::assets_scope = i;
                     state::modified_value();
                 }
 
-                if (state::models_search_scope == i) {
+                if (state::assets_scope == i) {
                     ImGui::SetItemDefaultFocus();
                 }
             }
 
+            ImGui::Separator();
+            ImGui::Checkbox("Current scene only", &state::assets_scene_only_scope);
             ImGui::EndCombo();
         }
 
-        std::vector<std::pair<engine::models::gid, uint32_t>> matches{};
-        if (state::models_search_scope == 0) {
-            for (const auto& gid : engine::scenes::get_used_models(scene::selected_scene())) {
-                auto score = score_search(state::models_query, **engine::models::get_name(gid));
-                if (score > std::numeric_limits<int32_t>::min()) {
-                    matches.emplace_back(gid, score);
-                }
-            }
-        } else {
-            const auto& names = engine::models::get_names();
-            for (uint32_t i = 0; i < names.size(); i++) {
-                auto score = score_search(state::models_query, names[i]);
-                if (score > std::numeric_limits<int32_t>::min()) {
-                    matches.emplace_back(engine::models::gid{engine::models::get_generation(i), i}, score);
-                }
-            }
+        std::vector<scored_entry> matches{};
+        if (state::assets_scope == 0 || state::assets_scope == 1) {
+            score_models(state::assets_scene_only_scope, state::models_query, matches);
+        }
+        if (state::assets_scope == 0 || state::assets_scope == 2) {
+            score_textures(state::assets_scene_only_scope, state::models_query, matches);
         }
 
         std::sort(matches.begin(), matches.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
 
-        for (auto [gid, _] : matches) {
-            model_entry(gid);
+        if (ImGui::BeginTable("##search_results", 2,
+                              ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingStretchSame)) {
+            uint32_t i = 0;
+            for (auto [gid, _] : matches) {
+                ImGui::PushID(i);
+                if (i % 2 == 0) ImGui::TableNextRow();
+
+                ImGui::TableNextColumn();
+                ImVec2 start_pos = ImGui::GetCursorScreenPos();
+                float available_width = ImGui::GetContentRegionAvail().x;
+
+                auto* draw_list = ImGui::GetWindowDrawList();
+                draw_list->ChannelsSplit(2);
+                draw_list->ChannelsSetCurrent(1);
+
+                ImGui::BeginGroup();
+                std::visit([&i](auto gid) { assets_entry(gid, i); }, gid);
+                ImGui::EndGroup();
+
+                ImVec2 content_size = ImGui::GetItemRectSize();
+
+                draw_list->ChannelsSetCurrent(0);
+                ImGui::SetCursorScreenPos(start_pos);
+                ImGui::InvisibleButton("##drag_surface", ImVec2(available_width, content_size.y));
+                draw_list->AddRectFilled(
+                    start_pos, ImVec2(start_pos.x + available_width, start_pos.y + content_size.y),
+                    ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_HeaderHovered : ImGuiCol_Header));
+
+                draw_list->ChannelsMerge();
+
+                if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                    std::visit([](auto gid) { assets_entry_drag_preview(gid); }, gid);
+
+                    ImGui::EndDragDropSource();
+                }
+
+                ImGui::PopID();
+                i++;
+            }
+
+            ImGui::EndTable();
         }
     }
 
-    void model_entry(engine::models::gid gid) {
-        ImGui::PushID(gid.value);
+    void assets_entry(engine::models::gid gid, uint32_t ix) {
         auto name = *engine::models::get_name(gid);
 
         if (ImGui::InputText("##name", name)) {
@@ -418,11 +493,47 @@ namespace ui {
                                          glm::identity<glm::mat4>(), gid);
             scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
         }
+    }
 
-        ImGui::PopID();
+    void assets_entry(engine::textures::gid gid, uint32_t ix) {
+        ImGui::TextWrapped("%s", (**engine::textures::get_name(gid)).c_str());
+    }
+
+    void assets_entry_drag_preview(engine::models::gid gid) {
+        ImGui::SetDragDropPayload("model", &gid, sizeof(gid));
+    }
+
+    void assets_entry_drag_preview(engine::textures::gid gid) {
+        ImGui::SetDragDropPayload("texture", &gid, sizeof(gid));
     }
 
     void instances_pane() {
+        auto scenes = engine::scenes::get_names();
+        if (ImGui::BeginCombo("##scene_picker", scenes[scene::selected_scene()].c_str())) {
+            if (ImGui::Button("New scene##new_scene")) {
+                engine::scenes::add("New scene");
+                scene::select_scene(scenes.size());
+
+                scenes = engine::scenes::get_names();
+            }
+            ImGui::Separator();
+
+            for (size_t i = 0; i < scenes.size(); i++) {
+                ImGui::PushID(i);
+                if (ImGui::Selectable(scenes[i].c_str(), i == scene::selected_scene())) {
+                    scene::select_scene(i);
+                }
+
+                if (scene::selected_scene() == i) {
+                    ImGui::SetItemDefaultFocus();
+                }
+
+                ImGui::PopID();
+            }
+
+            ImGui::EndCombo();
+        }
+
         for (size_t i = 0; i < engine::scenes::get_instance_names(scene::selected_scene()).size(); i++) {
             i = instance_entry(scene::selected_scene(), i);
         }
@@ -501,43 +612,43 @@ namespace ui {
         update_instance_transform();
     }
 
-    void scene_pane() {
-        if (ImGui::Button("+")) {
-            engine::scenes::add("New scene");
-            scene::select_scene(engine::scenes::get_names().size() - 1);
-        }
-
-        auto scenes = engine::scenes::get_names();
-        for (size_t i = 0; i < scenes.size(); i++) {
-            ImGui::PushID(i);
-
-            if (ImGui::Selectable("", i == scene::selected_scene(),
-                                  ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-                                  ImVec2(0.0, ImGui::GetFrameHeight()))) {
-                scene::select_scene(i);
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("X") && scenes.size() != 1) {
-                auto selected_scene = scene::selected_scene();
-                if (selected_scene == i) selected_scene = i == 0 ? 0 : i - 1;
-                else if (selected_scene > i) selected_scene--;
-                scene::select_scene(selected_scene);
-
-                engine::scenes::remove(i);
-
-                i--;
-                ImGui::PopID();
-                continue;
-            }
-
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-            ImGui::InputText("##name", &scenes[i]);
-
-            ImGui::PopID();
-        }
-    }
+    // void scene_pane() {
+    //     if (ImGui::Button("+")) {
+    //         engine::scenes::add("New scene");
+    //         scene::select_scene(engine::scenes::get_names().size() - 1);
+    //     }
+    //
+    //     auto scenes = engine::scenes::get_names();
+    //     for (size_t i = 0; i < scenes.size(); i++) {
+    //         ImGui::PushID(i);
+    //
+    //         if (ImGui::Selectable("", i == scene::selected_scene(),
+    //                               ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
+    //                               ImVec2(0.0, ImGui::GetFrameHeight()))) {
+    //             scene::select_scene(i);
+    //         }
+    //
+    //         ImGui::SameLine();
+    //         if (ImGui::Button("X") && scenes.size() != 1) {
+    //             auto selected_scene = scene::selected_scene();
+    //             if (selected_scene == i) selected_scene = i == 0 ? 0 : i - 1;
+    //             else if (selected_scene > i) selected_scene--;
+    //             scene::select_scene(selected_scene);
+    //
+    //             engine::scenes::remove(i);
+    //
+    //             i--;
+    //             ImGui::PopID();
+    //             continue;
+    //         }
+    //
+    //         ImGui::SameLine();
+    //         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
+    //         ImGui::InputText("##name", &scenes[i]);
+    //
+    //         ImGui::PopID();
+    //     }
+    // }
 
     void selected_model_materials_pane() {
         if (scene::selected_instance == -1) return;
@@ -585,7 +696,18 @@ namespace ui {
                         engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
                                                         MatData::dimension);
                     } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
-                        // TODO: texture picker
+                        // ImGui::Text("%s %s", (**engine::textures::get_name(*data_ptr)).c_str(), name.c_str());
+                        ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr), ImGuiInputTextFlags_ReadOnly);
+                        if (ImGui::BeginDragDropTarget()) {
+                            if (auto payload = ImGui::AcceptDragDropPayload("texture"); payload != nullptr && payload->IsDelivery()) {
+                                auto gid = *(engine::textures::gid*)payload->Data;
+
+                                *data_ptr = gid;
+                                // TODO: acquire texture @gid, then release current texture @*data_ptr - move material textures from gpu group to a separate thing
+                            }
+
+                            ImGui::EndDragDropTarget();
+                        }
                     } else {
                         engine::imgui_reflection::input(name.c_str(), im, data_ptr);
                     }

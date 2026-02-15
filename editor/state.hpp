@@ -6,7 +6,8 @@
 
 namespace state {
     extern std::string models_query;
-    extern int models_search_scope;
+    extern int assets_scope;
+    extern bool assets_scene_only_scope;
 
     nlohmann::json default_json();
 

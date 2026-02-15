@@ -19,15 +19,18 @@ namespace ui {
     ImVec2 game_window_size();
     engine::GPUImage get_window_image();
 
-    void models_pane();
-    void model_entry(engine::models::gid gid);
+    void assets_pane();
+    void assets_entry(engine::models::gid gid, uint32_t ix);
+    void assets_entry(engine::textures::gid gid, uint32_t ix);
+    void assets_entry_drag_preview(engine::models::gid gid);
+    void assets_entry_drag_preview(engine::textures::gid gid);
 
     void instances_pane();
     size_t instance_entry(size_t scene_ix, size_t instance_ix);
 
     void transform_pane(engine::Camera& cam);
 
-    void scene_pane();
+    // void scene_pane();
 
     void selected_model_materials_pane();
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);

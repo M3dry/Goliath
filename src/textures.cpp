@@ -558,4 +558,8 @@ namespace engine::textures {
 
         return texture_pool;
     }
+
+    std::span<std::string> get_names() {
+        return names;
+    }
 }

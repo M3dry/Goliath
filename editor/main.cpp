@@ -482,18 +482,19 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if (ImGui::Begin("Models")) {
-                ui::models_pane();
+            if (ImGui::Begin("Assets")) {
+                ui::assets_pane();
             }
             ImGui::End();
 
-            if (ImGui::Begin("Scenes", nullptr)) {
-                ui::scene_pane();
-            }
-            ImGui::End();
+            // if (ImGui::Begin("Scenes", nullptr)) {
+            //     ui::scene_pane();
+            // }
+            // ImGui::End();
 
-            ImGui::Begin("Transformation");
-            ui::transform_pane(cam);
+            if (ImGui::Begin("Transformation")) {
+                ui::transform_pane(cam);
+            }
             ImGui::End();
 
             if (ImGui::Begin("Materials")) {
