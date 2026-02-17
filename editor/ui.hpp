@@ -38,4 +38,7 @@ namespace ui {
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);
 
     void rename_popup();
+
+    void scenes_settings_pane();
+    void scene_settings_pane(size_t scene_ix);
 }

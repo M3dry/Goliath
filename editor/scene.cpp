@@ -4,27 +4,25 @@
 #include "project.hpp"
 
 namespace scene {
-    struct SceneInfo {
-        size_t selected_instance = -1;
-        CameraInfo cam_info;
-    };
-
     bool want_save = false;
     size_t selected_scene_ix = 0;
-    std::vector<SceneInfo> infos{};
+    std::vector<size_t> selected_instances{};
+    std::vector<CameraInfo> camera_infos{};
 
     void to_json(nlohmann::json& j, const CameraInfo& info) {
         j = nlohmann::json{
             {"cam", info.cam},
+            {"fov", info.fov},
             {"sensitivity", info.sensitivity},
             {"movement_speed", info.movement_speed},
         };
     }
 
-    void from_json(const nlohmann::json& j, CameraInfo& v) {
-        j["cam"].get_to(v.cam);
-        j["sensitivity"].get_to(v.sensitivity);
-        j["movement_speed"].get_to(v.movement_speed);
+    void from_json(const nlohmann::json& j, CameraInfo& info) {
+        j["cam"].get_to(info.cam);
+        j["fov"].get_to(info.fov);
+        j["sensitivity"].get_to(info.sensitivity);
+        j["movement_speed"].get_to(info.movement_speed);
     }
 
     void load(nlohmann::json j) {
@@ -41,9 +39,8 @@ namespace scene {
 
         engine::scenes::load(*scenes_json);
         selected_scene_ix = j["selected_scene"];
-        for (auto info : j["infos"]) {
-            infos.emplace_back(info["selected_instance"], info["cam_info"]);
-        }
+        j["selected_instances"].get_to(selected_instances);
+        camera_infos = j["camera_infos"];
 
         if (engine::scenes::get_names().size() == 0) {
             add("Default");
@@ -53,25 +50,18 @@ namespace scene {
     }
 
     nlohmann::json save() {
-        auto j = nlohmann::json::array();
-
-        for (const auto& info : infos) {
-            j.emplace_back(nlohmann::json{
-                {"selected_instance", info.selected_instance},
-                {"cam_info", info.cam_info},
-            });
-        }
-
         return nlohmann::json{
             {"selected_scene", selected_scene()},
-            {"infos", j},
+            {"selected_instances", selected_instances},
+            {"camera_infos", camera_infos},
         };
     }
 
     nlohmann::json default_json() {
         return nlohmann::json{
             {"selected_scene", 0},
-            {"infos", nlohmann::json::array()},
+            {"selected_instances", nlohmann::json::array()},
+            {"camera_infos", nlohmann::json::array()},
         };
     }
 
@@ -103,18 +93,19 @@ namespace scene {
     }
 
     size_t selected_instance() {
-        return infos[selected_scene()].selected_instance;
+        return selected_instances[selected_scene()];
     }
 
     void select_instance(size_t instance_ix) {
-        infos[selected_scene()].selected_instance = instance_ix;
+        selected_instances[selected_scene()] = instance_ix;
         want_save = true;
     }
 
     void add(std::string name) {
         engine::scenes::add(name);
         select_scene(engine::scenes::get_names().size() - 1);
-        infos.emplace_back(-1);
+        selected_instances.emplace_back(-1);
+        camera_infos.emplace_back();
 
         want_save = true;
     }
@@ -123,7 +114,7 @@ namespace scene {
         if (engine::scenes::get_names().size() <= 1) return;
 
         engine::scenes::remove(scene_ix);
-        infos.erase(infos.begin() + scene_ix);
+        selected_instances.erase(selected_instances.begin() + scene_ix);
         if (scene::selected_scene() == scene_ix) {
             scene::select_scene(scene_ix == 0 ? 0 : scene_ix - 1);
         }
@@ -153,11 +144,15 @@ namespace scene {
     }
 
     CameraInfo camera() {
-        return infos[selected_scene()].cam_info;
+        return camera_infos[selected_scene()];
     }
 
-    void update_camera(CameraInfo &cam) {
+    void update_camera(CameraInfo& cam) {
         want_save = true;
-        infos[selected_scene()].cam_info = cam;
+        camera_infos[selected_scene()] = cam;
+    }
+
+    CameraInfo& get_camera_infos(size_t scene_ix) {
+        return camera_infos[scene_ix];
     }
 }

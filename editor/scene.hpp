@@ -46,6 +46,8 @@ namespace scene {
     void add_instance(engine::models::gid model);
     void remove_instance(size_t instance_ix);
 
-    CameraInfo camera(size_t scene_ix = -1);
+    CameraInfo camera();
     void update_camera(CameraInfo& cam);
+
+    CameraInfo& get_camera_infos(size_t scene_ix);
 }

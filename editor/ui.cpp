@@ -77,6 +77,8 @@ namespace ui {
     using RenameDstFn = std::function<void(const std::string&)>;
     RenameDstFn rename_dst{};
 
+    std::optional<size_t> open_scenes_settings{};
+
     void update_instance_transform() {
         if (transform_value_changed && transform_value_changed->scene == scene::selected_scene() &&
             transform_value_changed->instance == scene::selected_instance()) {
@@ -573,12 +575,18 @@ namespace ui {
 
         auto scenes = engine::scenes::get_names();
         if (ImGui::BeginCombo("##scene_picker", scenes[scene::selected_scene()].c_str())) {
-            if (ImGui::Button("New scene##new_scene", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+            auto button_size = ImVec2(ImGui::GetContentRegionAvail().x / 2.0f, 0);
+            if (ImGui::Button("New scene##new_scene", ImVec2(ImGui::GetContentRegionAvail().x / 2.0f, 0))) {
                 scene::add("New scene");
 
                 scenes = engine::scenes::get_names();
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::SameLine();
+            if (ImGui::Button("Settings##settings", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+                open_scenes_settings = -1;
+            }
+
             ImGui::Separator();
 
             for (size_t i = 0; i < scenes.size(); i++) {
@@ -751,8 +759,8 @@ namespace ui {
                                     auto gid = *(engine::textures::gid*)payload->Data;
 
                                     *data_ptr = gid;
-                                    // TODO: acquire texture @gid, then release current texture @*data_ptr - move material
-                                    // textures from gpu group to a separate thing
+                                    // TODO: acquire texture @gid, then release current texture @*data_ptr - move
+                                    // material textures from gpu group to a separate thing
                                 }
 
                                 ImGui::EndDragDropTarget();
@@ -800,5 +808,67 @@ namespace ui {
 
             ImGui::EndPopup();
         }
+    }
+
+    void scenes_settings_pane() {
+        if (!open_scenes_settings) return;
+
+        bool opened = true;
+        if (ImGui::Begin("Scene settings", &opened)) {
+            if (*open_scenes_settings == -1) {
+                const auto& names = engine::scenes::get_names();
+
+                for (size_t i = 0; i < names.size(); i++) {
+                    if (ImGui::CollapsingHeader(names[i].c_str(),
+                                                (i == scene::selected_scene() ? ImGuiTreeNodeFlags_DefaultOpen
+                                                                              : ImGuiTreeNodeFlags_None))) {
+                        scene_settings_pane(i);
+                    }
+                }
+            } else {
+                scene_settings_pane(*open_scenes_settings);
+            }
+        }
+        ImGui::End();
+        if (!opened) open_scenes_settings = std::nullopt;
+    }
+
+    void scene_settings_pane(size_t scene_ix) {
+        auto& name = engine::scenes::get_name(scene_ix);
+        auto& info = scene::get_camera_infos(scene_ix);
+
+        static glm::vec3 look_at{0};
+        bool changed = false;
+        bool update_matrices = false;
+
+        changed |= ImGui::InputText("Name", &name);
+        changed |= ImGui::DragFloat("Sensitivity", &info.sensitivity, 0.05f, 0.0f, 1.0f, "%.2f");
+        changed |= ImGui::DragFloat("Movement speed", &info.movement_speed, 0.1f, 0.0f, 10.0f, "%.1f");
+        auto fov_changed = ImGui::DragFloat("FOV", &info.fov, 1.0f, 0.0f, 180.0f, "%.1f");
+        changed |= fov_changed;
+        update_matrices |= ImGui::DragFloat3("Position", glm::value_ptr(info.cam.position), 0.5f);
+        changed |= update_matrices;
+
+        ImGui::InputFloat3("##look_at", glm::value_ptr(look_at));
+        ImGui::SameLine();
+        if (ImGui::Button("Look at")) {
+            info.cam.look_at(look_at);
+            look_at = {};
+            update_matrices = true;
+        }
+
+        if (fov_changed) {
+            info.cam.set_projection(engine::camera::Perspective{
+                .fov = glm::radians(info.fov),
+                .aspect_ratio = 16.0f / 9.0f,
+            });
+            update_matrices = true;
+        }
+
+        if (update_matrices) {
+            info.cam.update_matrices();
+        }
+
+        if (changed) scene::modified();
     }
 }

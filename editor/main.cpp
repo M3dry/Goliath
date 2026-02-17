@@ -502,6 +502,7 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             ui::rename_popup();
+            ui::scenes_settings_pane();
 
             engine::imgui::end();
         }
