@@ -4,19 +4,6 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <vulkan/vulkan_core.h>
 
-namespace glm {
-    void to_json(nlohmann::json& j, const glm::mat4& mat) {
-        j = std::span{glm::value_ptr(mat), 16};
-    }
-
-    void from_json(const nlohmann::json& j, glm::mat4& mat) {
-        std::array<float, 16> arr{};
-        j.get_to(arr);
-
-        std::memcpy(glm::value_ptr(mat), arr.data(), sizeof(float) * arr.size());
-    }
-}
-
 namespace engine::scenes {
     struct Scene {
         std::vector<models::gid> used_models;

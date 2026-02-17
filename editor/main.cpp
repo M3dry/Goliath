@@ -140,25 +140,26 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
-    EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
+    // EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
-    EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
-    EXVAR_DRAG(exvar_reg, "Editor/Camera/movement speed", float, movement_speed, = 0.5f, 0.0f, 1.0f);
+    // EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
+    // EXVAR_DRAG(exvar_reg, "Editor/Camera/movement speed", float, movement_speed, = 0.5f, 0.0f, 1.0f);
 
     EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
     EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
 
-    glm::vec3 look_at{0.0f};
-    engine::Camera cam{};
-    cam.set_projection(engine::camera::Perspective{
-        .fov = glm::radians(fov),
-        .aspect_ratio = 16.0f / 10.0f,
-    });
-    cam.position = glm::vec3{10.0f};
-    cam.look_at(look_at);
-    cam.update_matrices();
+    // glm::vec3 look_at{0.0f};
+    // engine::Camera cam{};
+    // cam.set_projection(engine::camera::Perspective{
+    //     // .fov = glm::radians(fov),
+    //     .fov = glm::radians(90.0f),
+    //     .aspect_ratio = 16.0f / 10.0f,
+    // });
+    // cam.position = glm::vec3{10.0f};
+    // cam.look_at(look_at);
+    // cam.update_matrices();
 
-    exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
+    // exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
 
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
@@ -191,6 +192,7 @@ int main(int argc, char** argv) {
         state_json = nlohmann::json{
             {"state", state::default_json()},
             {"exvars", nlohmann::json::array()},
+            {"scenes", scene::default_json()},
         };
     }
 
@@ -233,7 +235,7 @@ int main(int argc, char** argv) {
     }
     engine::models::load(*models_registry_json);
 
-    scene::load();
+    scene::load((*state_json)["scenes"]);
 
     NFD_Init();
     engine::culling::init(8192);
@@ -405,6 +407,8 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        auto cam_info = scene::camera();
+
         ImGuiWindow* scene_window = nullptr;
         {
             engine::imgui::begin();
@@ -416,7 +420,7 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if ((ui::game_window(cam) || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
+            if ((ui::game_window() || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
                 ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 lock_cam = !lock_cam;
                 exvar_reg.modified();
@@ -488,7 +492,7 @@ int main(int argc, char** argv) {
             ImGui::End();
 
             if (ImGui::Begin("Transformation")) {
-                ui::transform_pane(cam);
+                ui::transform_pane();
             }
             ImGui::End();
 
@@ -507,10 +511,10 @@ int main(int argc, char** argv) {
 
             ui::tick(dt);
 
-            cam.set_projection(engine::camera::Perspective{
-                .fov = glm::radians(fov),
-                .aspect_ratio = 16.0f / 10.0f,
-            });
+            // cam.set_projection(engine::camera::Perspective{
+            //     .fov = glm::radians(fov),
+            //     .aspect_ratio = 16.0f / 10.0f,
+            // });
 
             glm::vec3 movement{0.0f};
             if (!lock_cam) {
@@ -530,26 +534,28 @@ int main(int argc, char** argv) {
             bool moved = movement.x != 0.0f || movement.z != 0.0f;
 
             if (moved) {
-                auto forward = cam.forward();
-                auto right = cam.right();
+                auto forward = cam_info.cam.forward();
+                auto right = cam_info.cam.right();
                 auto normalized_movement = glm::normalize(movement);
 
-                cam.position += movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
+                cam_info.cam.position += cam_info.movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
                 exvar_reg.modified();
             }
 
             auto mouse_delta = engine::event::get_mouse_delta();
             if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
-                cam.rotate(sensitivity * glm::radians(-mouse_delta.x), sensitivity * glm::radians(-mouse_delta.y));
+                cam_info.cam.rotate(cam_info.sensitivity * glm::radians(-mouse_delta.x), cam_info.sensitivity * glm::radians(-mouse_delta.y));
             }
 
-            cam.update_matrices();
+            cam_info.cam.update_matrices();
+            scene::update_camera(cam_info);
 
-            if (state::want_to_save() || exvar_reg.want_to_save()) {
+            if (state::want_to_save() || exvar_reg.want_to_save() || scene::want_to_save()) {
                 std::ofstream o{project::editor_state};
                 o << nlohmann::json{
                     {"state", state::save()},
                     {"exvars", exvar_reg.save()},
+                    {"scenes", scene::save()},
                 };
             }
 
@@ -655,7 +661,7 @@ int main(int argc, char** argv) {
 
             uint8_t visbuffer_raster_pc[VisbufferRasterPC::size];
             VisbufferRasterPC::write(visbuffer_raster_pc, draw_id_buffer.address(), indirect_draw_buffer.address(),
-                                     cam.view_projection());
+                                     cam_info.cam.view_projection());
 
             visbuffer_raster_pipeline.bind();
             visbuffer_raster_pipeline.draw_indirect_count(engine::GraphicsPipeline::DrawIndirectCountParams{
@@ -708,10 +714,10 @@ int main(int argc, char** argv) {
                                  draw_id_buffer.address(), mat_id, mats_buffer);
 
                     PBRShadingSet shading_set_data{
-                        .cam_pos = cam.position,
+                        .cam_pos = cam_info.cam.position,
                         .light_pos = light_position,
                         .light_intensity = light_intensity,
-                        .view_proj_matrix = cam.view_projection(),
+                        .view_proj_matrix = cam_info.cam.view_projection(),
                     };
 
                     auto pbr_shading_set = engine::descriptor::new_set(pbr_shading_set_layout);
@@ -759,8 +765,8 @@ int main(int argc, char** argv) {
                                           .set_load_op(engine::LoadOp::Load)
                                           .set_store_op(engine::StoreOp::NoStore)));
             uint8_t grid_pc[GridPC::size]{};
-            auto vp = cam.view_projection();
-            GridPC::write(grid_pc, glm::inverse(vp), vp, cam.position,
+            auto vp = cam_info.cam.view_projection();
+            GridPC::write(grid_pc, glm::inverse(vp), vp, cam_info.cam.position,
                           glm::vec2{engine::swapchain_extent.width, engine::swapchain_extent.height});
 
             grid_pipeline.bind();

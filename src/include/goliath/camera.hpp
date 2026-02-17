@@ -2,7 +2,11 @@
 
 #include <glm/ext/quaternion_float.hpp>
 #include <glm/ext/vector_float3.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <numbers>
+#include "goliath/util.hpp"
+
+#include <nlohmann/json.hpp>
 
 namespace engine::camera {
     struct Perspective {
@@ -43,4 +47,22 @@ namespace engine {
 
         void update_matrices();
     };
+
+    inline void to_json(nlohmann::json& j, const Camera& c) {
+        j = nlohmann::json{
+            {"position", c.position},
+            {"orientation", c._orientation},
+            {"projection", c._projection},
+            {"view", c._view},
+        };
+    }
+
+    inline void from_json(const nlohmann::json& j, Camera& c) {
+        j["position"].get_to(c.position);
+        j["orientation"].get_to(c._orientation);
+        j["projection"].get_to(c._projection);
+        j["view"].get_to(c._view);
+
+        c._view_projection = c._projection * c._view;
+    }
 }

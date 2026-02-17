@@ -1,10 +1,11 @@
 #pragma once
 
-#include "GLFW/glfw3.h"
 #include <cmath>
 #include <expected>
 #include <filesystem>
 #include <glm/detail/qualifier.hpp>
+#include <glm/ext/matrix_float4x4.hpp>
+#include <glm/ext/quaternion_float.hpp>
 #include <nlohmann/json.hpp>
 
 #include <volk.h>
@@ -89,4 +90,47 @@ namespace engine::util {
         using Component = T;
         static constexpr std::array<size_t, 2> dimension = {N, M};
     };
+}
+
+namespace glm {
+    inline void to_json(nlohmann::json& j, const glm::vec3& v) {
+        j = nlohmann::json::array({v.x, v.y, v.z});
+    }
+
+    inline void from_json(const nlohmann::json& j, glm::vec3& v) {
+        v.x = j.at(0).get<float>();
+        v.y = j.at(1).get<float>();
+        v.z = j.at(2).get<float>();
+    }
+
+    inline void to_json(nlohmann::json& j, const glm::quat& q) {
+        j = nlohmann::json::array({q.x, q.y, q.z, q.w});
+    }
+
+    inline void from_json(const nlohmann::json& j, glm::quat& q) {
+        q.x = j.at(0).get<float>();
+        q.y = j.at(1).get<float>();
+        q.z = j.at(2).get<float>();
+        q.w = j.at(3).get<float>();
+    }
+
+    inline void to_json(nlohmann::json& j, const glm::mat4& m) {
+        j = nlohmann::json::array();
+
+        for (int col = 0; col < 4; ++col) {
+            for (int row = 0; row < 4; ++row) {
+                j.push_back(m[col][row]);
+            }
+        }
+    }
+
+    inline void from_json(const nlohmann::json& j, glm::mat4& m) {
+        int k = 0;
+
+        for (int col = 0; col < 4; ++col) {
+            for (int row = 0; row < 4; ++row) {
+                m[col][row] = j.at(k++).get<float>();
+            }
+        }
+    }
 }

@@ -79,7 +79,7 @@ namespace ui {
 
     void update_instance_transform() {
         if (transform_value_changed && transform_value_changed->scene == scene::selected_scene() &&
-            transform_value_changed->instance == scene::selected_instance) {
+            transform_value_changed->instance == scene::selected_instance()) {
             transform_value_changed->reset_timer();
             return;
         } else if (transform_value_changed != std::nullopt) {
@@ -89,7 +89,7 @@ namespace ui {
 
         transform_value_changed = {
             scene::selected_scene(),
-            scene::selected_instance,
+            scene::selected_instance(),
         };
     }
 
@@ -114,7 +114,7 @@ namespace ui {
     void tick(float dt) {
         if (transform_value_changed) {
             if ((transform_value_changed->timer -= dt) <= 0) {
-                engine::scenes::modified(-1);
+                engine::scenes::modified(transform_value_changed->scene);
                 transform_value_changed = std::nullopt;
             }
         }
@@ -135,7 +135,7 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
-    bool game_window(engine::Camera& cam) {
+    bool game_window() {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
         auto& game_window_image = game_window_images[curr_frame];
@@ -189,10 +189,7 @@ namespace ui {
                 auto payload = ImGui::AcceptDragDropPayload("model");
                 if (payload != nullptr && payload->IsDelivery()) {
                     auto gid = *(engine::models::gid*)payload->Data;
-
-                    engine::scenes::add_instance(scene::selected_scene(), **engine::models::get_name(gid),
-                                                 glm::identity<glm::mat4>(), gid);
-                    scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
+                    scene::add_instance(gid);
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -208,9 +205,10 @@ namespace ui {
 
             static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
 
-            glm::mat4 view_gizmo = GL_TO_GIZMO * cam.view() * GIZMO_TO_GL;
+            auto cam_info = scene::camera();
+            glm::mat4 view_gizmo = GL_TO_GIZMO * cam_info.cam.view() * GIZMO_TO_GL;
             auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
-            auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam.position, 1.0f}};
+            auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam_info.cam.position, 1.0f}};
 
             bool changed =
                 ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
@@ -223,14 +221,15 @@ namespace ui {
                                                   gizmo_offset.y + (avail.y - scale * 50 - 10 - scale * 50 - 10)});
 
             if (changed) {
-                cam._orientation =
+                cam_info.cam._orientation =
                     glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
-                cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
+                cam_info.cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
 
-                cam.update_matrices();
+                cam_info.cam.update_matrices();
+                scene::update_camera(cam_info);
             }
 
-            if (scene::selected_instance != -1) {
+            if (scene::selected_instance() != -1) {
                 auto win_pos = ImGui::GetWindowPos();
 
                 changed = false;
@@ -240,16 +239,17 @@ namespace ui {
                                   win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
                 ImGuizmo::SetDrawlist();
 
-                auto proj = cam._projection;
+                auto proj = cam_info.cam._projection;
                 proj[1][1] *= -1;
                 changed |= ImGuizmo::Manipulate(
-                    glm::value_ptr(cam._view), glm::value_ptr(proj),
+                    glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj),
                     ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
                     glm::value_ptr(
-                        engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance]));
+                        engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()]));
 
                 if (changed) {
                     engine::scenes::update_transforms_buffer(scene::selected_scene());
+                    scene::update_camera(cam_info);
                     update_instance_transform();
                 }
             }
@@ -538,8 +538,7 @@ namespace ui {
         }
 
         if (add) {
-            engine::scenes::add_instance(scene::selected_scene(), name, glm::identity<glm::mat4>(), gid);
-            scene::selected_instance = engine::scenes::get_instance_names(scene::selected_scene()).size() - 1;
+            scene::add_instance(gid);
         }
     }
 
@@ -570,13 +569,12 @@ namespace ui {
     }
 
     void instances_pane() {
-        static std::vector<size_t> to_delete{};
+        size_t to_delete = -1;
 
         auto scenes = engine::scenes::get_names();
         if (ImGui::BeginCombo("##scene_picker", scenes[scene::selected_scene()].c_str())) {
             if (ImGui::Button("New scene##new_scene", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
-                engine::scenes::add("New scene");
-                scene::select_scene(scenes.size());
+                scene::add("New scene");
 
                 scenes = engine::scenes::get_names();
                 ImGui::CloseCurrentPopup();
@@ -599,7 +597,7 @@ namespace ui {
                     }
 
                     if (ImGui::MenuItem("Delete")) {
-                        to_delete.emplace_back(i);
+                        to_delete = i;
                     }
 
                     ImGui::EndPopup();
@@ -615,16 +613,7 @@ namespace ui {
             ImGui::EndCombo();
         }
 
-        size_t off = 0;
-        for (auto ix : to_delete) {
-            if (engine::scenes::get_names().size() > 1) engine::scenes::remove(ix - off);
-
-            if (scene::selected_scene() == ix) {
-                scene::select_scene(ix == 0 ? 0 : ix - 1);
-            }
-            off++;
-        }
-        to_delete.clear();
+        if (to_delete != -1) scene::remove(to_delete);
 
         ImGui::Separator();
 
@@ -642,8 +631,8 @@ namespace ui {
     size_t instance_entry(size_t scene_ix, size_t instance_ix) {
         auto& inst_name = engine::scenes::get_instance_names(scene_ix)[instance_ix];
 
-        if (ImGui::Selectable("", scene::selected_instance == instance_ix, ImGuiSelectableFlags_SpanAllColumns)) {
-            scene::selected_instance = scene::selected_instance == instance_ix ? -1 : instance_ix;
+        if (ImGui::Selectable("", scene::selected_instance() == instance_ix, ImGuiSelectableFlags_SpanAllColumns)) {
+            scene::select_instance(scene::selected_instance() == instance_ix ? -1 : instance_ix);
         }
         if (ImGui::BeginPopupContextItem("InstanceEntryContextMenu")) {
             if (ImGui::MenuItem("Rename")) {
@@ -654,14 +643,7 @@ namespace ui {
                 };
             }
             if (ImGui::MenuItem("Delete")) {
-                engine::scenes::remove_instance(scene_ix, instance_ix);
-                if (scene::selected_instance == -1) {
-
-                } else if (scene::selected_instance == instance_ix) {
-                    scene::selected_instance = -1;
-                } else if (scene::selected_instance > instance_ix) {
-                    scene::selected_instance--;
-                }
+                scene::remove_instance(instance_ix);
 
                 ImGui::EndPopup();
                 return instance_ix - 1;
@@ -676,10 +658,10 @@ namespace ui {
         return instance_ix;
     }
 
-    void transform_pane(engine::Camera& cam) {
-        if (scene::selected_instance == -1) return;
-        auto& inst_name = engine::scenes::get_instance_names(scene::selected_scene())[scene::selected_instance];
-        auto& inst = engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance];
+    void transform_pane() {
+        if (scene::selected_instance() == -1) return;
+        auto& inst_name = engine::scenes::get_instance_names(scene::selected_scene())[scene::selected_instance()];
+        auto& inst = engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()];
 
         glm::vec3 translate{};
         glm::vec3 rotate{};
@@ -708,49 +690,11 @@ namespace ui {
         update_instance_transform();
     }
 
-    // void scene_pane() {
-    //     if (ImGui::Button("+")) {
-    //         engine::scenes::add("New scene");
-    //         scene::select_scene(engine::scenes::get_names().size() - 1);
-    //     }
-    //
-    //     auto scenes = engine::scenes::get_names();
-    //     for (size_t i = 0; i < scenes.size(); i++) {
-    //         ImGui::PushID(i);
-    //
-    //         if (ImGui::Selectable("", i == scene::selected_scene(),
-    //                               ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SpanAllColumns,
-    //                               ImVec2(0.0, ImGui::GetFrameHeight()))) {
-    //             scene::select_scene(i);
-    //         }
-    //
-    //         ImGui::SameLine();
-    //         if (ImGui::Button("X") && scenes.size() != 1) {
-    //             auto selected_scene = scene::selected_scene();
-    //             if (selected_scene == i) selected_scene = i == 0 ? 0 : i - 1;
-    //             else if (selected_scene > i) selected_scene--;
-    //             scene::select_scene(selected_scene);
-    //
-    //             engine::scenes::remove(i);
-    //
-    //             i--;
-    //             ImGui::PopID();
-    //             continue;
-    //         }
-    //
-    //         ImGui::SameLine();
-    //         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-    //         ImGui::InputText("##name", &scenes[i]);
-    //
-    //         ImGui::PopID();
-    //     }
-    // }
-
     void selected_model_materials_pane() {
-        if (scene::selected_instance == -1) return;
+        if (scene::selected_instance() == -1) return;
 
         const auto model_ = engine::models::get_cpu_model(
-            engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance]);
+            engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance()]);
         if (!model_.has_value() || model_.value() == nullptr) return;
         const auto& model = **model_;
 

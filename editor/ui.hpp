@@ -13,7 +13,7 @@ namespace ui {
     void tick(float dt);
     void begin();
 
-    bool game_window(engine::Camera& cam);
+    bool game_window();
     bool skipped_game_window();
     std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);
     ImVec2 game_window_size();
@@ -30,7 +30,7 @@ namespace ui {
     void instances_pane();
     size_t instance_entry(size_t scene_ix, size_t instance_ix);
 
-    void transform_pane(engine::Camera& cam);
+    void transform_pane();
 
     // void scene_pane();
 
