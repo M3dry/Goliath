@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace engine {
     class DescriptorPool {

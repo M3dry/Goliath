@@ -252,9 +252,10 @@ namespace engine::scenes {
         }
 
         scene.instance_transforms_buffer.destroy();
-        scene.instance_transforms_buffer = Buffer::create(
-            std::format("Scene `{}`'s transforms buffer", scene_names[scene_ix]).c_str(),
-            scene.instance_transforms.size() * sizeof(glm::mat4), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+        scene.instance_transforms_buffer =
+            Buffer::create(std::format("Scene `{}`'s transforms buffer", scene_names[scene_ix]).c_str(),
+                           scene.instance_transforms.size() * sizeof(glm::mat4),
+                           VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
 
         scene.instance_transforms_buffer_ticket =
             transport2::upload(true, scene.instance_transforms.data(), std::nullopt,
@@ -268,5 +269,10 @@ namespace engine::scenes {
             {"instance_names", nlohmann::json::array()},
             {"scenes", nlohmann::json::array()},
         };
+    }
+
+    Iterator draw(size_t scene_ix, transport2::ticket& t, uint64_t& transforms_addr) {
+        transforms_addr = get_instance_transforms_buffer(scene_ix, t).address();
+        return Iterator{scene_ix};
     }
 }

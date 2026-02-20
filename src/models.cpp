@@ -452,6 +452,7 @@ namespace engine::models {
 
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
+            if (gid == models::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
 
             if (++ref_counts[gid.id()] != 1) return;
@@ -467,6 +468,7 @@ namespace engine::models {
 
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
+            if (gid == models::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 

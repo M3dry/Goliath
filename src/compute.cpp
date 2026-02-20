@@ -12,10 +12,10 @@ namespace engine {
     }
 
     ComputePipelineBuilder&& ComputePipelineBuilder::clear_descriptor_layout() {
-        _set_layout[0] = descriptor::empty_set;
-        _set_layout[1] = descriptor::empty_set;
-        _set_layout[2] = descriptor::empty_set;
-        _set_layout[3] = descriptor::empty_set;
+        _set_layout[0] = empty_set();
+        _set_layout[1] = empty_set();
+        _set_layout[2] = empty_set();
+        _set_layout[3] = empty_set();
         return std::move(*this);
     }
 
@@ -93,7 +93,7 @@ namespace engine::compute {
         layout_info.setLayoutCount = 4;
         layout_info.pSetLayouts = builder._set_layout;
 
-        VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &res._pipeline_layout));
+        VK_CHECK(vkCreatePipelineLayout(device(), &layout_info, nullptr, &res._pipeline_layout));
 
         VkComputePipelineCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -105,13 +105,13 @@ namespace engine::compute {
         };
         info.layout = res._pipeline_layout;
 
-        VK_CHECK(vkCreateComputePipelines(device, nullptr, 1, &info, nullptr, &res._pipeline));
+        VK_CHECK(vkCreateComputePipelines(device(), nullptr, 1, &info, nullptr, &res._pipeline));
 
         return res;
     }
 
     void destroy(ComputePipeline& pipeline) {
-        vkDestroyPipelineLayout(device, pipeline._pipeline_layout, nullptr);
-        vkDestroyPipeline(device, pipeline._pipeline, nullptr);
+        vkDestroyPipelineLayout(device(), pipeline._pipeline_layout, nullptr);
+        vkDestroyPipeline(device(), pipeline._pipeline, nullptr);
     }
 }

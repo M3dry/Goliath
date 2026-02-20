@@ -65,8 +65,8 @@ void update_depth(engine::GPUImage* images, VkImageView* image_views, uint32_t f
         images[i] = engine::gpu_image::upload(std::format("Depth texture #{}", i).c_str(),
                                               engine::GPUImageInfo{}
                                                   .format(VK_FORMAT_D16_UNORM)
-                                                  .width(engine::swapchain_extent.width)
-                                                  .height(engine::swapchain_extent.height)
+                                                  .width(engine::get_swapchain_extent().width)
+                                                  .height(engine::get_swapchain_extent().height)
                                                   .aspect_mask(VK_IMAGE_ASPECT_DEPTH_BIT)
                                                   .new_layout(VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
                                                   .usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
@@ -86,8 +86,8 @@ void update_target(engine::GPUImage* images, VkImageView* image_views, uint32_t 
             std::format("Target texture #{}", i).c_str(),
             engine::GPUImageInfo{}
                 .format(VK_FORMAT_R32G32B32A32_SFLOAT)
-                .width(engine::swapchain_extent.width)
-                .height(engine::swapchain_extent.height)
+                .width(engine::get_swapchain_extent().width)
+                .height(engine::get_swapchain_extent().height)
                 .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                 .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                 .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
@@ -120,7 +120,7 @@ void rebuild(engine::GPUImage* depth_images, VkImageView* depth_image_views, eng
     grid_pipeline.update_viewport_to_swapchain();
     grid_pipeline.update_scissor_to_viewport();
 
-    engine::visbuffer::resize(visbuffer, {engine::swapchain_extent.width, engine::swapchain_extent.height});
+    engine::visbuffer::resize(visbuffer, {engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 }
 
 using VisbufferRasterPC = engine::PushConstant<uint64_t, uint64_t, glm::mat4>;
@@ -179,9 +179,9 @@ int main(int argc, char** argv) {
         .textures_directory = project::textures_directory,
         .models_directory = project::models_directory,
     });
-    glfwSetWindowAttrib(engine::window, GLFW_DECORATED, GLFW_TRUE);
-    glfwSetWindowAttrib(engine::window, GLFW_RESIZABLE, GLFW_TRUE);
-    glfwSetWindowAttrib(engine::window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
+    glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
     GameView::init();
 
     std::optional<LoadedGame> game{};
@@ -256,7 +256,7 @@ int main(int argc, char** argv) {
         game->game.init(argc - 2, argv + 2);
     }
 
-    auto visbuffer = engine::visbuffer::create({engine::swapchain_extent.width, engine::swapchain_extent.height});
+    auto visbuffer = engine::visbuffer::create({engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 
     uint32_t visbuffer_raster_vertex_spv_size;
     auto visbuffer_raster_vertex_spv_data =
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
             VK_BUFFER_USAGE_2_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
     }
 
-    glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(engine::window(), GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
     engine::imgui::enable(lock_cam);
 
     ui::init();
@@ -392,7 +392,7 @@ int main(int argc, char** argv) {
     static constexpr double dt = (1000.0 / 60.0) / 1000.0;
 
     bool done = false;
-    while (!glfwWindowShouldClose(engine::window) && !done) {
+    while (!glfwWindowShouldClose(engine::window()) && !done) {
         double time = glfwGetTime();
         double frame_time = time - last_time;
         last_time = time;
@@ -425,7 +425,7 @@ int main(int argc, char** argv) {
                 lock_cam = !lock_cam;
                 exvar_reg.modified();
 
-                glfwSetInputMode(engine::window, GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+                glfwSetInputMode(engine::window(), GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                 engine::imgui::enable(lock_cam);
             }
 
@@ -456,7 +456,7 @@ int main(int argc, char** argv) {
                         args.filterCount = 1;
                         args.filterList = filters;
                         args.defaultPath = (const char*)current_path.c_str();
-                        NFD_GetNativeWindowFromGLFWWindow(engine::window, &args.parentWindow);
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window(), &args.parentWindow);
 
                         const nfdpathset_t* paths;
                         auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
@@ -628,16 +628,9 @@ int main(int argc, char** argv) {
             engine::visbuffer::clear_buffers(visbuffer, engine::get_current_frame());
 
             engine::culling::bind_flatten();
-            auto instance_transforms =
-                engine::scenes::get_instance_transforms_buffer(scene::selected_scene(), transform_buffer_ticket);
-            auto instance_models = engine::scenes::get_instance_models(scene::selected_scene());
-            for (auto i = 0; i < instance_models.size(); i++) {
-                auto mgid = instance_models[i];
-                if (auto state = engine::models::is_loaded(mgid); !state || *state != engine::models::LoadState::OnGPU)
-                    continue;
-
-                auto res = engine::culling::flatten(mgid, instance_transforms.address(), i * sizeof(glm::mat4));
-            }
+            transform_buffer_ticket = engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
+                    auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
+            });
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
@@ -709,7 +702,7 @@ int main(int argc, char** argv) {
                 for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                     uint8_t pbr_pc[PBRPC::size]{};
                     PBRPC::write(pbr_pc,
-                                 glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height},
+                                 glm::vec<2, uint32_t>{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height},
                                  visbuffer.stages.address() + shading.indirect_buffer_offset,
                                  visbuffer.stages.address() + shading.fragment_id_buffer_offset,
                                  draw_id_buffer.address(), mat_id, mats_buffer);
@@ -768,7 +761,7 @@ int main(int argc, char** argv) {
             uint8_t grid_pc[GridPC::size]{};
             auto vp = cam_info.cam.view_projection();
             GridPC::write(grid_pc, glm::inverse(vp), vp, cam_info.cam.position,
-                          glm::vec2{engine::swapchain_extent.width, engine::swapchain_extent.height});
+                          glm::vec2{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 
             grid_pipeline.bind();
             grid_pipeline.draw(engine::GraphicsPipeline::DrawParams{
@@ -799,7 +792,7 @@ int main(int argc, char** argv) {
             uint8_t postprocessing_push_constant[PostprocessingPC::size]{};
             PostprocessingPC::write(
                 postprocessing_push_constant,
-                glm::vec<2, uint32_t>{engine::swapchain_extent.width, engine::swapchain_extent.height});
+                glm::vec<2, uint32_t>{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 
             postprocessing_pipeline.bind();
             postprocessing_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
@@ -811,8 +804,8 @@ int main(int argc, char** argv) {
                         engine::descriptor::null_set,
                         engine::descriptor::null_set,
                     },
-                .group_count_x = (uint32_t)std::ceil(engine::swapchain_extent.width / 16.0f),
-                .group_count_y = (uint32_t)std::ceil(engine::swapchain_extent.height / 16.0f),
+                .group_count_x = (uint32_t)std::ceil(engine::get_swapchain_extent().width / 16.0f),
+                .group_count_y = (uint32_t)std::ceil(engine::get_swapchain_extent().height / 16.0f),
                 .group_count_z = 1,
             });
 
@@ -835,8 +828,8 @@ int main(int argc, char** argv) {
                 .z = 0,
             };
             blit_region.srcOffsets[1] = VkOffset3D{
-                .x = (int32_t)engine::swapchain_extent.width,
-                .y = (int32_t)engine::swapchain_extent.height,
+                .x = (int32_t)engine::get_swapchain_extent().width,
+                .y = (int32_t)engine::get_swapchain_extent().height,
                 .z = 1,
             };
             blit_region.srcSubresource = VkImageSubresourceLayers{
@@ -891,7 +884,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    vkDeviceWaitIdle(engine::device);
+    vkDeviceWaitIdle(engine::device());
 
     NFD_Quit();
 

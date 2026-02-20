@@ -1,13 +1,10 @@
 #include "goliath/event.hpp"
 #include "engine_.hpp"
-#include "goliath/engine.hpp"
 #include "imgui_impl_glfw.h"
 
 #include <GLFW/glfw3.h>
 
 namespace engine::event {
-    // std::bitset<GLFW_KEY_LAST> down;
-    // std::bitset<GLFW_KEY_LAST> up;
     glm::vec2 mouse_delta{0.0f};
     glm::vec2 mouse_absolute{0.0f};
 }
@@ -57,20 +54,20 @@ namespace engine::event {
     void register_glfw_callbacks() {
         ImGui_ImplGlfw_SetCallbacksChainForAllWindows(true);
 
-        glfwSetKeyCallback(window, key_callback);
-        glfwSetMouseButtonCallback(window, mouse_button_callback);
-        glfwSetCursorPosCallback(window, cursor_position_callback);
-        glfwSetScrollCallback(window, scroll_callback);
-        glfwSetCharCallback(window, char_callback);
-        glfwSetWindowCloseCallback(window, window_close_callback);
-        glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetKeyCallback(state->window, key_callback);
+        glfwSetMouseButtonCallback(state->window, mouse_button_callback);
+        glfwSetCursorPosCallback(state->window, cursor_position_callback);
+        glfwSetScrollCallback(state->window, scroll_callback);
+        glfwSetCharCallback(state->window, char_callback);
+        glfwSetWindowCloseCallback(state->window, window_close_callback);
+        glfwSetWindowSizeCallback(state->window, window_size_callback);
     }
 
     PollEvent poll() {
         glfwPollEvents();
-        if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE) return Minimized;
+        if (glfwGetWindowAttrib(state->window, GLFW_ICONIFIED) == GLFW_TRUE) return Minimized;
         int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
+        glfwGetFramebufferSize(state->window, &width, &height);
         if (width == 0 || height == 0) return Minimized;
 
         return Normal;

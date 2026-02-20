@@ -402,11 +402,12 @@ namespace engine {
         }
 
         GraphicsPipeline&& update_viewport_to_swapchain() {
+            auto extent = get_swapchain_extent();
             _viewport = VkViewport{
                 .x = 0,
                 .y = 0,
-                .width = (float)swapchain_extent.width,
-                .height = (float)swapchain_extent.height,
+                .width = (float)extent.width,
+                .height = (float)extent.height,
                 .minDepth = 0,
                 .maxDepth = 1,
             };

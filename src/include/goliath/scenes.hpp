@@ -36,4 +36,43 @@ namespace engine::scenes {
 
     nlohmann::json default_json();
 
+    template <typename F> inline transport2::ticket draw(size_t scene_ix, F&& f) {
+        transport2::ticket ticket;
+
+        auto transforms = get_instance_transforms_buffer(scene_ix, ticket);
+        auto instance_models = get_instance_models(scene_ix);
+        for (auto i = 0; i < instance_models.size(); i++) {
+            auto mgid = instance_models[i];
+            if (auto state = engine::models::is_loaded(mgid); !state || *state != engine::models::LoadState::OnGPU)
+                continue;
+
+            f(mgid, transforms.address(), i);
+        }
+
+        return ticket;
+    }
+
+    struct Draw {
+        size_t transform_ix;
+        models::gid gid;
+    };
+
+    class Iterator {
+      private:
+        size_t i = 0;
+        std::span<const models::gid> models;
+
+        friend Iterator draw(size_t scene_ix, transport2::ticket& t, uint64_t& transforms_addr);
+
+        Iterator(size_t scene_ix) {
+            models = get_instance_models(scene_ix);
+        }
+      public:
+        Draw next() {
+            if (models.size() <= i) return {(uint64_t)-1, models::gid{}};
+            return Draw{i, models[i++]};
+        }
+    };
+
+    Iterator draw(size_t scene_ix, transport2::ticket& t, uint64_t& transforms_addr);
 }

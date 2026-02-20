@@ -15,21 +15,21 @@ engine::RenderPass::RenderPass() {
     _info.pStencilAttachment = nullptr;
     _info.renderArea = VkRect2D{
         .offset = VkOffset2D{.x = 0, .y = 0},
-        .extent = swapchain_extent,
+        .extent = get_swapchain_extent(),
     };
     _info.flags = 0;
     _info.viewMask = 0;
 }
 
 engine::GraphicsPipelineBuilder::GraphicsPipelineBuilder() {
-    _set_layout[0] = descriptor::empty_set;
-    _set_layout[1] = descriptor::empty_set;
-    _set_layout[2] = descriptor::empty_set;
-    _set_layout[3] = descriptor::empty_set;
+    _set_layout[0] = empty_set();
+    _set_layout[1] = empty_set();
+    _set_layout[2] = empty_set();
+    _set_layout[3] = empty_set();
 }
 
 engine::GraphicsPipelineBuilder&& engine::GraphicsPipelineBuilder::clear_descriptor(uint32_t index) {
-    _set_layout[index] = descriptor::empty_set;
+    _set_layout[index] = empty_set();
     return std::move(*this);
 }
 
@@ -227,7 +227,7 @@ namespace engine::rendering {
         layout_info.pSetLayouts = builder._set_layout;
         layout_info.pushConstantRangeCount = builder._push_constant_size == 0 ? 0 : 1;
         layout_info.pPushConstantRanges = &push_constant_range;
-        VK_CHECK(vkCreatePipelineLayout(device, &layout_info, nullptr, &res._pipeline_layout));
+        VK_CHECK(vkCreatePipelineLayout(device(), &layout_info, nullptr, &res._pipeline_layout));
 
         VkPipelineRenderingCreateInfo rendering{};
         rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -252,7 +252,7 @@ namespace engine::rendering {
         info.pDynamicState = &dynamic_state;
         info.layout = res._pipeline_layout;
 
-        VK_CHECK(vkCreateGraphicsPipelines(device, nullptr, 1, &info, nullptr, &res._pipeline));
+        VK_CHECK(vkCreateGraphicsPipelines(device(), nullptr, 1, &info, nullptr, &res._pipeline));
 
         res.update_viewport_to_swapchain();
         res.update_scissor_to_viewport();
@@ -261,8 +261,8 @@ namespace engine::rendering {
     }
 
     void destroy_pipeline(const GraphicsPipeline& pipeline) {
-        vkDestroyPipeline(device, pipeline._pipeline, nullptr);
-        vkDestroyPipelineLayout(device, pipeline._pipeline_layout, nullptr);
+        vkDestroyPipeline(device(), pipeline._pipeline, nullptr);
+        vkDestroyPipelineLayout(device(), pipeline._pipeline_layout, nullptr);
     }
 }
 
@@ -274,11 +274,11 @@ namespace engine::shader {
         info.pCode = (uint32_t*)code.data();
 
         VkShaderModule out;
-        vkCreateShaderModule(device, &info, nullptr, &out);
+        vkCreateShaderModule(device(), &info, nullptr, &out);
         return out;
     }
 
     void destroy(VkShaderModule shader) {
-        vkDestroyShaderModule(device, shader, nullptr);
+        vkDestroyShaderModule(device(), shader, nullptr);
     }
 }

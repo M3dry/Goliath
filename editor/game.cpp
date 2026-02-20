@@ -58,7 +58,7 @@ Game Game::make(engine::game_interface::GameConfig config) {
     game.waits.resize(game.config.max_wait_count + 1);
 
     auto required_dims = game.config.target_dimensions == glm::uvec2{0, 0}
-                             ? glm::uvec2{engine::swapchain_extent.width, engine::swapchain_extent.height}
+                             ? glm::uvec2{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height}
                              : game.config.target_dimensions;
     if (required_dims != game.target_dimensions || game.target_format != game.config.target_format) {
         game.target_dimensions = required_dims;
@@ -341,7 +341,7 @@ bool GameView::draw_pane() {
                                               .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
                                               .width(avail.x)
                                               .height(avail.y)
-                                              .format(engine::swapchain_format)
+                                              .format(engine::get_swapchain_format())
                                               .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),
                                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 

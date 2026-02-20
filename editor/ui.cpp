@@ -1,6 +1,7 @@
 #include "ui.hpp"
 
 #include "ImGuizmo/ImGuizmo.h"
+#include "goliath/assets.hpp"
 #include "goliath/materials.hpp"
 #include "goliath/scenes.hpp"
 #include "goliath/textures.hpp"
@@ -870,5 +871,76 @@ namespace ui {
         }
 
         if (changed) scene::modified();
+    }
+
+    void assets_inputs_pane(engine::Assets& assets) {
+        auto scene_names = assets.get_scene_names();
+        auto model_names = assets.get_model_names();
+        auto texture_names = assets.get_texture_names();
+
+        auto scene_gids = assets.get_scene_gids();
+        auto model_gids = assets.get_model_gids();
+        auto texture_gids = assets.get_texture_gids();
+
+        if (ImGui::CollapsingHeader("Scenes")) {
+            for (size_t i = 0; i < scene_names.size(); i++) {
+                auto gid = scene_gids[i];
+                if (gid == -1) continue;
+
+                ImGui::InputText(scene_names[i].c_str(), &engine::scenes::get_name(gid), ImGuiInputTextFlags_ReadOnly);
+                if (ImGui::BeginDragDropTarget()) {
+                    if (auto payload = ImGui::AcceptDragDropPayload("scene");
+                        payload != nullptr && payload->IsDelivery()) {
+                        assets.set(i, *(size_t*)payload->Data);
+                    }
+
+                    ImGui::EndDragDropTarget();
+                }
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Models")) {
+            for (size_t i = 0; i < model_names.size(); i++) {
+                auto gid = model_gids[i];
+                if (gid == engine::models::gid{}) continue;
+
+                auto name = engine::models::get_name(gid);
+                if (!name.has_value()) {
+                    assets.set(i, engine::models::gid{});
+                }
+
+                ImGui::InputText(model_names[i].c_str(), *name, ImGuiInputTextFlags_ReadOnly);
+                if (ImGui::BeginDragDropTarget()) {
+                    if (auto payload = ImGui::AcceptDragDropPayload("model");
+                        payload != nullptr && payload->IsDelivery()) {
+                        assets.set(i, *(engine::models::gid*)payload->Data);
+                    }
+
+                    ImGui::EndDragDropTarget();
+                }
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Textures")) {
+            for (size_t i = 0; i < texture_names.size(); i++) {
+                auto gid = texture_gids[i];
+                if (gid == engine::textures::gid{}) continue;
+
+                auto name = engine::textures::get_name(gid);
+                if (!name.has_value()) {
+                    assets.set(i, engine::textures::gid{});
+                }
+
+                ImGui::InputText(texture_names[i].c_str(), *name, ImGuiInputTextFlags_ReadOnly);
+                if (ImGui::BeginDragDropTarget()) {
+                    if (auto payload = ImGui::AcceptDragDropPayload("texture");
+                        payload != nullptr && payload->IsDelivery()) {
+                        assets.set(i, *(engine::textures::gid*)payload->Data);
+                    }
+
+                    ImGui::EndDragDropTarget();
+                }
+            }
+        }
     }
 }

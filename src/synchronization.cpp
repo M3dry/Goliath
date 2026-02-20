@@ -1,4 +1,5 @@
 #include "goliath/synchronization.hpp"
+#include "engine_.hpp"
 #include "goliath/engine.hpp"
 #include <vulkan/vulkan_core.h>
 
@@ -49,16 +50,16 @@ namespace engine::synchronization {
     void submit_from_another_thread(std::span<VkBufferMemoryBarrier2> bufs, std::span<VkImageMemoryBarrier2> images,
                                     std::span<VkMemoryBarrier2> general, std::optional<VkSemaphoreSubmitInfo> wait_info,
                                     std::optional<VkSemaphoreSubmitInfo> signal_info) {
-        std::lock_guard lock{graphics_queue_lock};
+        std::lock_guard lock{state->graphics_queue_lock};
 
-        VK_CHECK(vkWaitForFences(device, 1, &barriers_cmd_buf_fence, true, UINT64_MAX));
-        VK_CHECK(vkResetFences(device, 1, &barriers_cmd_buf_fence));
-        VK_CHECK(vkResetCommandBuffer(barriers_cmd_buf, 0));
+        VK_CHECK(vkWaitForFences(device(), 1, &state->barriers_cmd_buf_fence, true, UINT64_MAX));
+        VK_CHECK(vkResetFences(device(), 1, &state->barriers_cmd_buf_fence));
+        VK_CHECK(vkResetCommandBuffer(state->barriers_cmd_buf, 0));
 
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_CHECK(vkBeginCommandBuffer(barriers_cmd_buf, &begin_info));
+        VK_CHECK(vkBeginCommandBuffer(state->barriers_cmd_buf, &begin_info));
 
         VkDependencyInfo dep_info{};
         dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -68,13 +69,13 @@ namespace engine::synchronization {
         dep_info.pImageMemoryBarriers = images.data();
         dep_info.memoryBarrierCount = general.size();
         dep_info.pMemoryBarriers = general.data();
-        vkCmdPipelineBarrier2(barriers_cmd_buf, &dep_info);
+        vkCmdPipelineBarrier2(state->barriers_cmd_buf, &dep_info);
 
-        VK_CHECK(vkEndCommandBuffer(barriers_cmd_buf));
+        VK_CHECK(vkEndCommandBuffer(state->barriers_cmd_buf));
 
         VkCommandBufferSubmitInfo cmd_info{};
         cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-        cmd_info.commandBuffer = barriers_cmd_buf;
+        cmd_info.commandBuffer = state->barriers_cmd_buf;
 
         VkSubmitInfo2 submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
@@ -84,6 +85,6 @@ namespace engine::synchronization {
         submit_info.pCommandBufferInfos = &cmd_info;
         submit_info.signalSemaphoreInfoCount = signal_info ? 1 : 0;
         submit_info.pSignalSemaphoreInfos = signal_info ? &*signal_info : nullptr;
-        VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &submit_info, barriers_cmd_buf_fence));
+        VK_CHECK(vkQueueSubmit2(state->graphics_queue, 1, &submit_info, state->barriers_cmd_buf_fence));
     }
 }

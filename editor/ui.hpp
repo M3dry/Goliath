@@ -1,6 +1,6 @@
 #pragma once
 
-#include "goliath/camera.hpp"
+#include "goliath/assets.hpp"
 #include "goliath/material.hpp"
 #include "goliath/texture.hpp"
 #include "imgui.h"
@@ -32,8 +32,6 @@ namespace ui {
 
     void transform_pane();
 
-    // void scene_pane();
-
     void selected_model_materials_pane();
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);
 
@@ -41,4 +39,6 @@ namespace ui {
 
     void scenes_settings_pane();
     void scene_settings_pane(size_t scene_ix);
+
+    void assets_inputs_pane(engine::Assets& assets);
 }

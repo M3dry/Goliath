@@ -1,4 +1,5 @@
 #include "goliath/visbuffer.hpp"
+#include "engine_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/compute.hpp"
 #include "goliath/descriptor_pool.hpp"
@@ -102,7 +103,7 @@ namespace engine::visbuffer {
         }
 
         if (visbuffer.material_count_changed || dims_changed) {
-            auto alignment = physical_device_properties.limits.minStorageBufferOffsetAlignment;
+            auto alignment = state->physical_device_properties.limits.minStorageBufferOffsetAlignment;
             visbuffer.material_count_buffer_size =
                 util::align_up(alignment, sizeof(uint32_t) * (visbuffer.max_material_id + 1));
             visbuffer.offsets_buffer_size =

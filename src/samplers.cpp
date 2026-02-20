@@ -50,7 +50,7 @@ namespace engine {
 namespace engine::sampler {
     VkSampler create(const Sampler& prototype) {
         VkSampler sampler;
-        vkCreateSampler(device, &prototype._info, nullptr, &sampler);
+        vkCreateSampler(device(), &prototype._info, nullptr, &sampler);
         return sampler;
     }
 

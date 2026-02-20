@@ -20,7 +20,7 @@ namespace engine::textures {
         static constexpr uint32_t gen_mask = 0xFF00'0000u;
         static constexpr uint32_t gen_shift = 24;
 
-        gid() : value(0) {}
+        gid() : value(-1) {}
         gid(uint32_t generation, uint32_t id) : value((id & id_mask) | ((generation & 0xFFu) << gen_shift)) {}
 
         uint32_t id() const {

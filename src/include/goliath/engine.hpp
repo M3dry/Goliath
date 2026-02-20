@@ -2,15 +2,13 @@
 
 #include <filesystem>
 
-#include <mutex>
 #include <volk.h>
 #include <vulkan/vk_enum_string_helper.h>
 #include <vk_mem_alloc.h>
+#include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-
-#include <vector>
 
 #include <cassert>
 
@@ -25,31 +23,7 @@
 
 namespace engine {
     static constexpr std::size_t frames_in_flight = 2;
-
-    extern GLFWwindow* window;
-
-    extern VkInstance instance;
-    extern VkPhysicalDevice physical_device;
-    extern VkPhysicalDeviceProperties physical_device_properties;
-    extern VkDevice device;
-    extern VmaAllocator allocator;
-    extern VkSurfaceKHR surface;
-
-    constexpr VkFormat swapchain_format = VK_FORMAT_B8G8R8A8_UNORM;
-    extern VkExtent2D swapchain_extent;
-    extern VkSwapchainKHR swapchain;
-    extern std::vector<VkImage> swapchain_images;
-    extern std::vector<VkImageView> swapchain_image_views;
-
-    extern VkCommandPool barriers_cmd_pool;
-    extern VkFence barriers_cmd_buf_fence;
-    extern VkCommandBuffer barriers_cmd_buf;
-
-    extern std::mutex graphics_queue_lock;
-    extern VkQueue graphics_queue;
-    extern uint32_t graphics_queue_family;
-    extern VkQueue transport_queue;
-    extern uint32_t transport_queue_family;
+    static constexpr VkFormat swapchain_format = VK_FORMAT_B8G8R8A8_UNORM;
 
     struct Init {
         const char* window_name;
@@ -63,9 +37,21 @@ namespace engine {
     void init(Init opts);
     void destroy();
 
+    bool shared();
+
+    VkDevice device();
+    VmaAllocator allocator();
+    GLFWwindow* window();
+    VkDescriptorSetLayout empty_set();
+
     VkCommandBuffer get_cmd_buf();
+
+    VkFormat get_swapchain_format();
+    size_t get_swapchain_count();
     VkImage get_swapchain();
     VkImageView get_swapchain_view();
+    VkExtent2D get_swapchain_extent();
+
     bool prepare_frame();
     void prepare_draw();
     bool next_frame(std::span<VkSemaphoreSubmitInfo> extra_waits);

@@ -97,6 +97,7 @@ SET(ENGINE_SOURCES
     game_interface.cpp
     game_interface2.cpp
     scenes.cpp
+    assets.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

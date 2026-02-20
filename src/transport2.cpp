@@ -1,4 +1,5 @@
 #include "goliath/transport2.hpp"
+#include "engine_.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/synchronization.hpp"
@@ -299,8 +300,8 @@ namespace engine::transport2 {
                             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
                             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
                             .dstAccessMask = VK_ACCESS_2_NONE,
-                            .srcQueueFamilyIndex = transport_queue_family,
-                            .dstQueueFamilyIndex = graphics_queue_family,
+                            .srcQueueFamilyIndex = state->transport_queue_family,
+                            .dstQueueFamilyIndex = state->graphics_queue_family,
                             .buffer = dst.buffer,
                             .offset = dst.initial_offset,
                             .size = src_offset + dst.src_size,
@@ -313,8 +314,8 @@ namespace engine::transport2 {
                             .srcAccessMask = VK_ACCESS_2_NONE,
                             .dstStageMask = dst_stage,
                             .dstAccessMask = dst_access,
-                            .srcQueueFamilyIndex = transport_queue_family,
-                            .dstQueueFamilyIndex = graphics_queue_family,
+                            .srcQueueFamilyIndex = state->transport_queue_family,
+                            .dstQueueFamilyIndex = state->graphics_queue_family,
                             .buffer = dst.buffer,
                             .offset = dst.initial_offset,
                             .size = src_offset + dst.src_size,
@@ -342,8 +343,8 @@ namespace engine::transport2 {
                             .dstAccessMask = VK_ACCESS_2_NONE,
                             .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             .newLayout = dst.new_layout,
-                            .srcQueueFamilyIndex = transport_queue_family,
-                            .dstQueueFamilyIndex = graphics_queue_family,
+                            .srcQueueFamilyIndex = state->transport_queue_family,
+                            .dstQueueFamilyIndex = state->graphics_queue_family,
                             .image = dst.image,
                             .subresourceRange =
                                 VkImageSubresourceRange{
@@ -364,8 +365,8 @@ namespace engine::transport2 {
                             .dstAccessMask = dst_access,
                             .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                             .newLayout = dst.new_layout,
-                            .srcQueueFamilyIndex = transport_queue_family,
-                            .dstQueueFamilyIndex = graphics_queue_family,
+                            .srcQueueFamilyIndex = state->transport_queue_family,
+                            .dstQueueFamilyIndex = state->graphics_queue_family,
                             .image = dst.image,
                             .subresourceRange =
                                 VkImageSubresourceRange{
@@ -412,7 +413,7 @@ namespace engine::transport2 {
         info.pSemaphores = &timeline_semaphore;
         info.pValues = &timeline;
 
-        auto res = vkWaitSemaphores(device, &info, 0);
+        auto res = vkWaitSemaphores(device(), &info, 0);
         if (res == VK_SUCCESS) {
             finished_timeline = std::max(timeline, finished_timeline);
             return true;
@@ -442,8 +443,8 @@ namespace engine::transport2 {
             auto& staging_buffer_ptr = staging_buffer_ptrs[current_cmd_buf];
             current_cmd_buf = (current_cmd_buf + 1) % cmd_bufs.size();
 
-            VK_CHECK(vkWaitForFences(device, 1, &cmd_buf_fence, true, UINT64_MAX));
-            VK_CHECK(vkResetFences(device, 1, &cmd_buf_fence));
+            VK_CHECK(vkWaitForFences(device(), 1, &cmd_buf_fence, true, UINT64_MAX));
+            VK_CHECK(vkResetFences(device(), 1, &cmd_buf_fence));
             VK_CHECK(vkResetCommandBuffer(cmd_buf, 0));
 
             VkCommandBufferBeginInfo begin_info{};
@@ -536,7 +537,7 @@ namespace engine::transport2 {
             submit_info.signalSemaphoreInfoCount = 1;
             submit_info.pSignalSemaphoreInfos = &signal_info;
 
-            VK_CHECK(vkQueueSubmit2(transport_queue, 1, &submit_info, cmd_buf_fence));
+            VK_CHECK(vkQueueSubmit2(state->transport_queue, 1, &submit_info, cmd_buf_fence));
 
             synchronization::submit_from_another_thread(graphics_queue_buffer_barriers, graphics_queue_image_barriers,
                                                         {},
@@ -574,8 +575,8 @@ namespace engine::transport2 {
         VkCommandPoolCreateInfo pool_info{};
         pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pool_info.queueFamilyIndex = transport_queue_family;
-        VK_CHECK(vkCreateCommandPool(device, &pool_info, nullptr, &cmd_pool));
+        pool_info.queueFamilyIndex = state->transport_queue_family;
+        VK_CHECK(vkCreateCommandPool(device(), &pool_info, nullptr, &cmd_pool));
 
         VkCommandBufferAllocateInfo cmd_buf_alloc_info{};
         cmd_buf_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -583,7 +584,7 @@ namespace engine::transport2 {
         cmd_buf_alloc_info.commandPool = cmd_pool;
         cmd_buf_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         for (auto& cmd_buf : cmd_bufs) {
-            VK_CHECK(vkAllocateCommandBuffers(device, &cmd_buf_alloc_info, &cmd_buf));
+            VK_CHECK(vkAllocateCommandBuffers(device(), &cmd_buf_alloc_info, &cmd_buf));
         }
 
         VkFenceCreateInfo fence_info{};
@@ -592,7 +593,7 @@ namespace engine::transport2 {
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (auto& fence : cmd_buf_fences) {
-            VK_CHECK(vkCreateFence(device, &fence_info, nullptr, &fence));
+            VK_CHECK(vkCreateFence(device(), &fence_info, nullptr, &fence));
         }
 
         VkSemaphoreTypeCreateInfo semaphore_type{};
@@ -604,11 +605,11 @@ namespace engine::transport2 {
         semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         semaphore_info.pNext = &semaphore_type;
 
-        vkCreateSemaphore(device, &semaphore_info, nullptr, &timeline_semaphore);
+        vkCreateSemaphore(device(), &semaphore_info, nullptr, &timeline_semaphore);
 
         semaphore_info.pNext = nullptr;
         for (auto& semaphore : transport_graphics_semaphores) {
-            vkCreateSemaphore(device, &semaphore_info, nullptr, &semaphore);
+            vkCreateSemaphore(device(), &semaphore_info, nullptr, &semaphore);
         }
 
         worker = std::thread{thread};
@@ -621,15 +622,15 @@ namespace engine::transport2 {
         for (auto buf : staging_buffers) {
             buf.destroy();
         }
-        vkDestroyCommandPool(device, cmd_pool, nullptr);
+        vkDestroyCommandPool(device(), cmd_pool, nullptr);
 
         for (auto& fence : cmd_buf_fences) {
-            vkDestroyFence(device, fence, nullptr);
+            vkDestroyFence(device(), fence, nullptr);
         }
 
-        vkDestroySemaphore(device, timeline_semaphore, nullptr);
+        vkDestroySemaphore(device(), timeline_semaphore, nullptr);
         for (auto semaphore : transport_graphics_semaphores) {
-            vkDestroySemaphore(device, semaphore, nullptr);
+            vkDestroySemaphore(device(), semaphore, nullptr);
         }
     }
 
@@ -826,7 +827,7 @@ namespace engine::transport2 {
 
     uint64_t get_timeline() {
         uint64_t v;
-        vkGetSemaphoreCounterValue(device, timeline_semaphore, &v);
+        vkGetSemaphoreCounterValue(device(), timeline_semaphore, &v);
         return v;
     }
 

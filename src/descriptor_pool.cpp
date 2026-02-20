@@ -26,7 +26,7 @@ namespace engine {
         pool_info.maxSets = MaxSets;
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
-        VK_CHECK(vkCreateDescriptorPool(device, &pool_info, nullptr, &pool));
+        VK_CHECK(vkCreateDescriptorPool(device(), &pool_info, nullptr, &pool));
 
         VkBufferCreateInfo buf_info{};
         buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -38,19 +38,19 @@ namespace engine {
         alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo out_alloc_info;
-        VK_CHECK(vmaCreateBuffer(allocator, &buf_info, &alloc_info, &ubo_buffer, &ubo_alloc, &out_alloc_info));
-        vmaSetAllocationName(allocator, ubo_alloc, "Descriptor Pool: UBO allocation");
+        VK_CHECK(vmaCreateBuffer(allocator(), &buf_info, &alloc_info, &ubo_buffer, &ubo_alloc, &out_alloc_info));
+        vmaSetAllocationName(allocator(), ubo_alloc, "Descriptor Pool: UBO allocation");
 
         VkMemoryPropertyFlags alloc_props;
-        vmaGetMemoryTypeProperties(allocator, out_alloc_info.memoryType, &alloc_props);
+        vmaGetMemoryTypeProperties(allocator(), out_alloc_info.memoryType, &alloc_props);
 
         ubo_data = (uint8_t*)out_alloc_info.pMappedData;
         ubo_coherent = alloc_props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     }
 
     DescriptorPool::~DescriptorPool() {
-        vkDestroyDescriptorPool(device, pool, nullptr);
-        vmaDestroyBuffer(allocator, ubo_buffer, ubo_alloc);
+        vkDestroyDescriptorPool(device(), pool, nullptr);
+        vmaDestroyBuffer(allocator(), ubo_buffer, ubo_alloc);
     }
 
     uint64_t DescriptorPool::new_set(VkDescriptorSetLayout layout) {
@@ -62,7 +62,7 @@ namespace engine {
         info.descriptorSetCount = 1;
         info.pSetLayouts = &layout;
 
-        VK_CHECK(vkAllocateDescriptorSets(device, &info, &sets[set_count]));
+        VK_CHECK(vkAllocateDescriptorSets(device(), &info, &sets[set_count]));
 
         return set_count++;
     }
@@ -79,7 +79,7 @@ namespace engine {
             write.dstSet = sets[id];
         }
 
-        vkUpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
     }
 
     void DescriptorPool::begin_update(uint64_t id) {
@@ -114,7 +114,7 @@ namespace engine {
 
         std::memcpy(ubo_data + ubo_offset, ubo.data(), ubo.size());
         if (!ubo_coherent) {
-            vmaFlushAllocation(allocator, ubo_alloc, ubo_offset, ubo.size());
+            vmaFlushAllocation(allocator(), ubo_alloc, ubo_offset, ubo.size());
         }
 
         VkDescriptorBufferInfo buf_info{};
@@ -180,7 +180,7 @@ namespace engine {
     }
 
     void DescriptorPool::clear() {
-        VK_CHECK(vkResetDescriptorPool(device, pool, 0));
+        VK_CHECK(vkResetDescriptorPool(device(), pool, 0));
 
         set_count = 0;
         std::memset(sets.data(), 0, MaxSets * sizeof(VkDescriptorSet));
@@ -190,17 +190,15 @@ namespace engine {
 }
 
 namespace engine::descriptor {
-    VkDescriptorSetLayout empty_set;
-
     void create_empty_set() {
         VkDescriptorSetLayoutCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &info, nullptr, &empty_set));
+        VK_CHECK(vkCreateDescriptorSetLayout(device(), &info, nullptr, &state->empty_set));
     }
 
     void destroy_empty_set() {
-        vkDestroyDescriptorSetLayout(device, empty_set, nullptr);
+        vkDestroyDescriptorSetLayout(device(), empty_set(), nullptr);
     }
 
     uint64_t new_set(VkDescriptorSetLayout layout) {
@@ -237,11 +235,11 @@ namespace engine::descriptor {
 
     VkDescriptorSetLayout create_layout(const VkDescriptorSetLayoutCreateInfo& info) {
         VkDescriptorSetLayout layout;
-        vkCreateDescriptorSetLayout(device, &info, nullptr, &layout);
+        vkCreateDescriptorSetLayout(device(), &info, nullptr, &layout);
         return layout;
     }
 
     void destroy_layout(VkDescriptorSetLayout set_layout) {
-        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
+        vkDestroyDescriptorSetLayout(device(), set_layout, nullptr);
     }
 }

@@ -19,7 +19,7 @@ namespace engine {
         pool_info.maxSets = 1;
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
-        vkCreateDescriptorPool(device, &pool_info, nullptr, &pool);
+        vkCreateDescriptorPool(device(), &pool_info, nullptr, &pool);
 
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
@@ -42,7 +42,7 @@ namespace engine {
         layout_info.bindingCount = 1;
         layout_info.pBindings = &binding;
         layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
-        vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &set_layout);
+        vkCreateDescriptorSetLayout(device(), &layout_info, nullptr, &set_layout);
 
         VkDescriptorSetVariableDescriptorCountAllocateInfo count_info{};
         count_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
@@ -55,12 +55,12 @@ namespace engine {
         set_info.descriptorPool = pool;
         set_info.descriptorSetCount = 1;
         set_info.pSetLayouts = &set_layout;
-        vkAllocateDescriptorSets(device, &set_info, &set);
+        vkAllocateDescriptorSets(device(), &set_info, &set);
     }
 
     void TexturePool::destroy() {
-        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
-        vkDestroyDescriptorPool(device, pool, nullptr);
+        vkDestroyDescriptorSetLayout(device(), set_layout, nullptr);
+        vkDestroyDescriptorPool(device(), pool, nullptr);
     }
 
     void TexturePool::update(uint32_t ix, VkImageView view, VkImageLayout layout, VkSampler sampler) {
@@ -77,7 +77,7 @@ namespace engine {
         write.dstBinding = 0;
         write.dstArrayElement = ix;
         write.dstSet = set;
-        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(device(), 1, &write, 0, nullptr);
     }
 
     void TexturePool::bind(VkPipelineBindPoint bind_point, VkPipelineLayout layout) const {

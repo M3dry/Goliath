@@ -527,7 +527,7 @@ namespace engine::textures {
 
         for (size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-
+            if (gid == textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (++ref_counts[gid.id()] != 1) continue;
 
@@ -544,7 +544,7 @@ namespace engine::textures {
 
         for (std::size_t i = 0; i < count; i++) {
             auto gid = gids[i];
-
+            if (gid == textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
