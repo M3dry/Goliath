@@ -1,12 +1,16 @@
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
-#include "goliath/game_interface.hpp"
+#include "goliath/game_interface2.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/samplers.hpp"
+#include "goliath/texture.hpp"
+#include "goliath/transport2.hpp"
+#include "imgui.h"
 #include <fstream>
 #include <vulkan/vulkan_core.h>
 
-using namespace engine::game_interface;
+using namespace engine::game_interface2;
 
 struct Metadata {
     uint32_t width;
@@ -55,67 +59,68 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
         .fullscreen = false,
         .target_format = engine::swapchain_format,
         .target_start_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .target_end_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .target_finish_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .target_finish_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        .target_start_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .target_start_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         .target_dimensions = {0, 0},
         .clear_color = {0, 0, 0, 255},
-
-        .funcs = GameFunctions{
+        .funcs = GameFunctions::make({
             .init = [](const EngineService* es, auto argc, auto** argv) -> void* {
                 auto* state = (State*)malloc(sizeof(State));
+                *state = {};
 
-                auto engine_state = es->get_engine_state();
-                glfwSetWindowAttrib(*engine_state.window, GLFW_DECORATED, GLFW_TRUE);
-                glfwSetWindowAttrib(*engine_state.window, GLFW_RESIZABLE, GLFW_TRUE);
-                glfwSetWindowAttrib(*engine_state.window, GLFW_AUTO_ICONIFY, GLFW_TRUE);
+                glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
+                glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
+                glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
 
+                if (argc == 0) {
+                    es->fatal("No image for viewing supplied");
+                };
                 auto [image_data, metadata] = read_goi(argv[0]);
                 state->metadata = metadata;
 
-                state->image =
-                    es->texture.upload("Viewed image",
-                                       engine::GPUImageInfo{}
-                                           .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                                           .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                           .data(image_data.data(), free, state->image_ticket, true)
-                                           .size(image_data.size())
-                                           .width(metadata.width)
-                                           .height(metadata.height)
-                                           .format(metadata.format),
-                                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                state->image_view =
-                    es->texture.create_view(engine::GPUImageView{state->image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+                state->image = engine::gpu_image::upload("Viewed image",
+                                                         engine::GPUImageInfo{}
+                                                             .new_layout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                                             .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
+                                                             .data(image_data.data(), free, state->image_ticket, true)
+                                                             .size(image_data.size())
+                                                             .width(metadata.width)
+                                                             .height(metadata.height)
+                                                             .format(metadata.format),
+                                                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                state->image_view = engine::gpu_image_view::create(
+                    engine::GPUImageView{state->image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
 
-                state->sampler = es->sampler.create(engine::Sampler{});
+                state->sampler = engine::sampler::create(engine::Sampler{});
 
                 uint32_t image_vertex_spv_size;
                 auto image_vertex_spv_data = engine::util::read_file("goiview_vertex.spv", &image_vertex_spv_size);
-                auto image_vertex_module = es->shader.create({image_vertex_spv_data, image_vertex_spv_size});
+                auto image_vertex_module = engine::shader::create({image_vertex_spv_data, image_vertex_spv_size});
                 free(image_vertex_spv_data);
 
                 uint32_t image_fragment_spv_size;
                 auto image_fragment_spv_data =
                     engine::util::read_file("goiview_fragment.spv", &image_fragment_spv_size);
-                auto image_fragment_module = es->shader.create({image_fragment_spv_data, image_fragment_spv_size});
+                auto image_fragment_module = engine::shader::create({image_fragment_spv_data, image_fragment_spv_size});
                 free(image_fragment_spv_data);
 
-                state->set_layout = es->descriptor.create_layout(engine::DescriptorSet<engine::descriptor::Binding{
-                                                                     .count = 1,
-                                                                     .type = engine::descriptor::Binding::SampledImage,
-                                                                     .stages = VK_SHADER_STAGE_FRAGMENT_BIT,
-                                                                 }>{});
+                state->set_layout =
+                    engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
+                                                          .count = 1,
+                                                          .type = engine::descriptor::Binding::SampledImage,
+                                                          .stages = VK_SHADER_STAGE_FRAGMENT_BIT,
+                                                      }>{});
 
-                state->pipeline = es->rendering
-                                      .create_pipeline(es->make_graphics_builder()
-                                                           .vertex(image_vertex_module)
-                                                           .fragment(image_fragment_module)
-                                                           .push_constant_size(ImagePC::size)
-                                                           .add_color_attachment(engine::swapchain_format)
-                                                           .descriptor_layout(0, state->set_layout))
+                state->pipeline = engine::rendering::create_pipeline(engine::GraphicsPipelineBuilder{}
+                                                                         .vertex(image_vertex_module)
+                                                                         .fragment(image_fragment_module)
+                                                                         .push_constant_size(ImagePC::size)
+                                                                         .add_color_attachment(engine::swapchain_format)
+                                                                         .descriptor_layout(0, state->set_layout))
                                       .cull_mode(engine::CullMode::NoCull);
-                es->shader.destroy(image_vertex_module);
-                es->shader.destroy(image_fragment_module);
+                engine::shader::destroy(image_vertex_module);
+                engine::shader::destroy(image_fragment_module);
 
                 return state;
             },
@@ -123,54 +128,59 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                 [](void* _state, const EngineService* es) {
                     State* state = (State*)_state;
 
-                    es->texture.destroy(state->image);
-                    es->texture.destroy(state->image_view);
-                    es->sampler.destroy(state->sampler);
+                    engine::gpu_image::destroy(state->image);
+                    engine::gpu_image_view::destroy(state->image_view);
+                    engine::sampler::destroy(state->sampler);
+                    engine::descriptor::destroy_layout(state->set_layout);
+                    engine::rendering::destroy_pipeline(state->pipeline);
 
-                    es->descriptor.destroy_layout(state->set_layout);
-                    es->rendering.destroy_pipeline(state->pipeline);
+                    free(state);
                 },
             .tick = [](void*, const auto* ts, const auto* es) {},
-            .draw_imgui = [](void*, const auto* es) {},
-            .render = [](void* _state, VkCommandBuffer cmd_buf, const FrameService* fs, const EngineService* es,
+            .draw_imgui = [](void*, const auto* es) {
+                ImGui::ShowDemoWindow();
+            },
+            .render = [](void* _state, const FrameService* fs, const EngineService* es,
                          VkSemaphoreSubmitInfo* waits) -> uint32_t {
                 auto* state = (State*)_state;
-                if (es->transport.is_uploaded(state->image_ticket)) {
-                    fs->rendering.begin(fs->make_renderpass().add_color_attachment(
+                if (engine::transport2::is_ready(state->image_ticket)) {
+                    engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
                         engine::RenderingAttachement{}
-                            .set_image(fs->target_view, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                            .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                             .set_load_op(engine::LoadOp::Clear)
                             .set_store_op(engine::StoreOp::Store)));
 
-                    auto image_descriptor = fs->descriptor.new_set(state->set_layout);
-                    fs->descriptor.begin_update(image_descriptor);
-                    fs->descriptor.update_sampled_image(0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, state->image_view,
-                                                        state->sampler);
-                    fs->descriptor.end_update();
+                    auto image_descriptor = engine::descriptor::new_set(state->set_layout);
+                    engine::descriptor::begin_update(image_descriptor);
+                    engine::descriptor::update_sampled_image(0, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                             state->image_view, state->sampler);
+                    engine::descriptor::end_update();
 
                     uint8_t image_pc[ImagePC::size]{};
-                    ImagePC::write(image_pc, fs->target_dimensions,
-                                   glm::uvec2{state->metadata.width, state->metadata.height});
+                    ImagePC::write(
+                        image_pc,
+                        glm::uvec2{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height},
+                        glm::uvec2{state->metadata.width, state->metadata.height});
 
-                    fs->rendering.bind(state->pipeline);
-                    fs->rendering.draw(state->pipeline, engine::GraphicsPipeline::DrawParams{
-                                                            .push_constant = image_pc,
-                                                            .descriptor_indexes =
-                                                                {
-                                                                    image_descriptor,
-                                                                    engine::descriptor::null_set,
-                                                                    engine::descriptor::null_set,
-                                                                    engine::descriptor::null_set,
-                                                                },
-                                                            .vertex_count = 3,
-                                                        });
+                    state->pipeline.bind();
+                    state->pipeline.draw(engine::GraphicsPipeline::DrawParams{
+                        .push_constant = image_pc,
+                        .descriptor_indexes =
+                            {
+                                image_descriptor,
+                                engine::descriptor::null_set,
+                                engine::descriptor::null_set,
+                                engine::descriptor::null_set,
+                            },
+                        .vertex_count = 3,
+                    });
 
-                    fs->rendering.end();
+                    engine::rendering::end();
                 }
 
                 return 0;
             },
-        },
+        }),
     };
 }
 

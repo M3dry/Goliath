@@ -1,7 +1,8 @@
 #pragma once
 
-#include "goliath/engine.hpp"
 #include <volk.h>
+
+#include <vk_mem_alloc.h>
 
 #include <array>
 #include <cstdint>

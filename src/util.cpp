@@ -1,7 +1,47 @@
 #include "goliath/util.hpp"
+#include "goliath/engine.hpp"
 #include <cassert>
 #include <expected>
 #include <fstream>
+
+namespace engine::rendering {
+    bool in_block = false;
+    bool close = false;
+
+    void begin_mark_block() {
+        assert(!in_block);
+        in_block = true;
+        close = false;
+    }
+
+    void end_mark_block() {
+        assert(in_block);
+        if (close) {
+            vkCmdEndDebugUtilsLabelEXT(get_cmd_buf());
+            close = false;
+        }
+        in_block = false;
+    }
+
+    void mark(const char* name) {
+        assert(in_block);
+
+        if (close) {
+            vkCmdEndDebugUtilsLabelEXT(get_cmd_buf());
+            close = false;
+        }
+        VkDebugUtilsLabelEXT label{};
+        label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        label.pLabelName = name;
+        label.color[0] = 1.0f;
+        label.color[1] = 1.0f;
+        label.color[2] = 1.0f;
+        label.color[3] = 1.0f;
+
+        vkCmdBeginDebugUtilsLabelEXT(get_cmd_buf(), &label);
+        close = true;
+    }
+}
 
 uint8_t* engine::util::read_file(const std::filesystem::path& path, uint32_t* size) {
     std::ifstream file{path, std::ios::binary | std::ios::ate};

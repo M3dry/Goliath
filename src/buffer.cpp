@@ -1,11 +1,12 @@
 #include "goliath/buffer.hpp"
 #include "engine_.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/vma_ptrs.hpp"
 #include <vulkan/vulkan_core.h>
 
 namespace engine {
     void Buffer::flush_mapped(uint32_t start, uint32_t size) {
-        vmaFlushAllocation(allocator(), _allocation, start, size);
+        vma_ptrs::flush_alloc(_allocation, start, size);
     }
 
     Buffer Buffer::create(const char* name, uint32_t size, VkBufferUsageFlags usage, std::optional<std::pair<void**, bool*>> host, VmaAllocationCreateFlags alloc_flags) {
@@ -25,12 +26,12 @@ namespace engine {
         alloc_info.flags = alloc_flags | (host ? VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT : 0);
 
         VmaAllocationInfo out_alloc_info;
-        VK_CHECK(vmaCreateBuffer(allocator(), &buffer_info, &alloc_info, &buf._buf, &buf._allocation, &out_alloc_info));
+        vma_ptrs::create_buffer(&buffer_info, &alloc_info, &buf._buf, &buf._allocation, &out_alloc_info);
 
         if (host) {
             *host->first = out_alloc_info.pMappedData;
             VkMemoryPropertyFlags props;
-            vmaGetMemoryTypeProperties(allocator(), out_alloc_info.memoryType, &props);
+            vma_ptrs::get_memory_type_properties(out_alloc_info.memoryType, &props);
             *host->second = props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         }
 
@@ -40,7 +41,7 @@ namespace engine {
         buf._address = vkGetBufferDeviceAddress(device(), &address_info);
         buf._size = size;
 
-        vmaSetAllocationName(allocator(), buf._allocation, name);
+        vma_ptrs::set_name(buf._allocation, name);
 
         VkDebugUtilsObjectNameInfoEXT name_info{};
         name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;

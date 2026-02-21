@@ -49,15 +49,22 @@ namespace engine {
             TextureAssetEntry* textures;
             size_t textures_size;
 
-            Inputs(std::vector<SceneAssetEntry> scenes,  std::vector<ModelAssetEntry> models, std::vector<TextureAssetEntry> textures) : scenes_size(scenes.size()), models_size(models.size()), textures_size(textures.size()) {
-                this->scenes = (SceneAssetEntry*)malloc(sizeof(SceneAssetEntry)*scenes_size);
-                std::memcpy(this->scenes, scenes.data(), scenes_size);
+            static Inputs make_inputs(std::vector<SceneAssetEntry> scenes,  std::vector<ModelAssetEntry> models, std::vector<TextureAssetEntry> textures) {
+                Inputs i;
+                i.scenes_size = scenes.size();
+                i.models_size = models.size();
+                i.textures_size = textures.size();
 
-                this->models = (ModelAssetEntry*)malloc(sizeof(ModelAssetEntry)*models_size);
-                std::memcpy(this->models, models.data(), models_size);
+                i.scenes = (SceneAssetEntry*)malloc(sizeof(SceneAssetEntry)*i.scenes_size);
+                std::memcpy(i.scenes, scenes.data(), i.scenes_size);
 
-                this->textures = (TextureAssetEntry*)malloc(sizeof(TextureAssetEntry)*textures_size);
-                std::memcpy(this->textures, textures.data(), textures_size);
+                i.models = (ModelAssetEntry*)malloc(sizeof(ModelAssetEntry)*i.models_size);
+                std::memcpy(i.models, models.data(), i.models_size);
+
+                i.textures = (TextureAssetEntry*)malloc(sizeof(TextureAssetEntry)*i.textures_size);
+                std::memcpy(i.textures, textures.data(), i.textures_size);
+
+                return i;
             }
 
             void destroy() {

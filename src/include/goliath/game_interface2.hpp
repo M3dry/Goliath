@@ -1,19 +1,32 @@
 #pragma once
 
 #include "goliath/assets.hpp"
-#include "goliath/material.hpp"
+#include "goliath/engine.hpp"
 #include "imgui.h"
+#include "imgui_internal.h"
+#include <exception>
 
 namespace engine::game_interface2 {
+    struct GameFatalException : public std::exception {
+      public:
+          explicit GameFatalException(std::string message) : _message(message) {};
+          const char* what() const noexcept override {
+              return _message.c_str();
+          }
+      private:
+          std::string _message;
+    };
+
     struct EngineService {
         struct AssetsServicePtrs {
-            void (*acquire_scene)(Assets::SceneHandle handle);
-            void (*acquire_model)(Assets::ModelHandle handle);
-            void (*acquire_texture)(Assets::TextureHandle handle);
+            Assets* assets;
+            void (*acquire_scene)(Assets* assets, Assets::SceneHandle handle);
+            void (*acquire_model)(Assets* assets, Assets::ModelHandle handle);
+            void (*acquire_texture)(Assets* assets, Assets::TextureHandle handle);
 
-            void (*release_scene)(Assets::SceneHandle handle);
-            void (*release_model)(Assets::ModelHandle handle);
-            void (*release_texture)(Assets::TextureHandle handle);
+            void (*release_scene)(Assets* assets, Assets::SceneHandle handle);
+            void (*release_model)(Assets* assets, Assets::ModelHandle handle);
+            void (*release_texture)(Assets* assets, Assets::TextureHandle handle);
         };
 
         class AssetsService {
@@ -22,39 +35,40 @@ namespace engine::game_interface2 {
 
           public:
             AssetsService(AssetsServicePtrs ptrs) : ptrs(ptrs) {}
+            AssetsService() {}
             operator AssetsServicePtrs() const {
                 return ptrs;
             }
 
             void acquire(Assets::SceneHandle handle) const {
-                return ptrs.acquire_scene(handle);
+                return ptrs.acquire_scene(ptrs.assets, handle);
             }
 
             void acquire(Assets::ModelHandle handle) const {
-                return ptrs.acquire_model(handle);
+                return ptrs.acquire_model(ptrs.assets, handle);
             }
 
             void acquire(Assets::TextureHandle handle) const {
-                return ptrs.acquire_texture(handle);
+                return ptrs.acquire_texture(ptrs.assets, handle);
             }
 
             void release(Assets::SceneHandle handle) const {
-                return ptrs.release_scene(handle);
+                return ptrs.release_scene(ptrs.assets, handle);
             }
 
             void release(Assets::ModelHandle handle) const {
-                return ptrs.release_model(handle);
+                return ptrs.release_model(ptrs.assets, handle);
             }
 
             void release(Assets::TextureHandle handle) const {
-                return ptrs.release_texture(handle);
+                return ptrs.release_texture(ptrs.assets, handle);
             }
         };
 
         struct TexturesServicePtrs {
             std::string* (*name)(textures::gid gid, textures::Err* err, bool* erred);
-            GPUImage (*image)(textures::gid gi, textures::Err* err, bool* erred);
-            VkImageView (*image_view)(textures::gid gi, textures::Err* err, bool* erred);
+            GPUImage (*image)(textures::gid gid, textures::Err* err, bool* erred);
+            VkImageView (*image_view)(textures::gid gid, textures::Err* err, bool* erred);
 
             const TexturePool* (*texture_pool)();
         };
@@ -141,7 +155,7 @@ namespace engine::game_interface2 {
 
         struct ModelsServicePtrs {
             std::string* (*name)(models::gid gid, models::Err* err, bool* erred);
-            engine::Model* (*cpu_model)(models::gid gid, models::Err* err, bool* erred);
+            Model* (*cpu_model)(models::gid gid, models::Err* err, bool* erred);
             transport2::ticket (*ticket)(models::gid gid, models::Err* err, bool* erred);
             engine::Buffer (*draw_buffer)(models::gid gid, models::Err* err, bool* erred);
             engine::GPUModel (*gpu_model)(models::gid gid, models::Err* err, bool* erred);
@@ -245,20 +259,24 @@ namespace engine::game_interface2 {
         TexturesService textures;
         MaterialsService materials;
         ModelsService models;
+        ScenesService scenes;
+
+        void (*fatal)(const char* message);
     };
 
     struct FrameService {
         struct AssetsServicePtrs {
-            Assets::ModelDraw (*draw_model)(Assets::ModelHandle handle);
-            void (*end_draw_model)(Assets::ModelHandle handle);
+            Assets* assets;
+            Assets::ModelDraw (*draw_model)(Assets* assets, Assets::ModelHandle handle);
+            void (*end_model_draw)(Assets* assets, Assets::ModelHandle handle);
 
-            Assets::TextureDraw (*draw_texture)(Assets::TextureHandle handle);
-            void (*end_draw_texture)(Assets::TextureHandle handle);
+            Assets::TextureDraw (*draw_texture)(Assets* assets, Assets::TextureHandle handle);
+            void (*end_texture_draw)(Assets* assets, Assets::TextureHandle handle);
 
-            assets::SceneIterator* (*draw_scene)(Assets::SceneHandle handle, transport2::ticket* t,
+            assets::SceneIterator* (*draw_scene)(Assets* assets, Assets::SceneHandle handle, transport2::ticket* t,
                                                  uint64_t* transforms_addr);
-            scenes::Draw (*scene_next_model)(assets::SceneIterator* it);
-            void (*end_scene_draw)(assets::SceneIterator* it);
+            scenes::Draw (*scene_next_model)(Assets* assets, assets::SceneIterator* it);
+            void (*end_scene_draw)(Assets* assets, assets::SceneIterator* it);
         };
 
         class AssetsService {
@@ -267,37 +285,38 @@ namespace engine::game_interface2 {
 
           public:
             AssetsService(AssetsServicePtrs ptrs) : ptrs(ptrs) {}
+            AssetsService() {}
             operator AssetsServicePtrs() const {
                 return ptrs;
             }
 
             Assets::ModelDraw draw_model(Assets::ModelHandle handle) const {
-                return ptrs.draw_model(handle);
+                return ptrs.draw_model(ptrs.assets, handle);
             }
 
             void end_draw_model(Assets::ModelHandle handle) const {
-                ptrs.end_draw_model(handle);
+                ptrs.end_model_draw(ptrs.assets, handle);
             }
 
             Assets::TextureDraw draw_texture(Assets::TextureHandle handle) const {
-                return ptrs.draw_texture(handle);
+                return ptrs.draw_texture(ptrs.assets, handle);
             }
 
             void end_draw_texture(Assets::TextureHandle handle) {
-                ptrs.end_draw_texture(handle);
+                ptrs.end_texture_draw(ptrs.assets, handle);
             }
 
             assets::SceneIterator* draw_scene(Assets::SceneHandle handle, transport2::ticket& t,
                                               uint64_t& transforms_addr) const {
-                return ptrs.draw_scene(handle, &t, &transforms_addr);
+                return ptrs.draw_scene(ptrs.assets, handle, &t, &transforms_addr);
             }
 
             scenes::Draw scene_next_model(assets::SceneIterator* it) const {
-                return ptrs.scene_next_model(it);
+                return ptrs.scene_next_model(ptrs.assets, it);
             }
 
             void end_scene_draw(assets::SceneIterator* it) const {
-                ptrs.end_scene_draw(it);
+                ptrs.end_scene_draw(ptrs.assets, it);
             }
         };
 
@@ -340,11 +359,9 @@ namespace engine::game_interface2 {
         }
     };
 
-    void make_engine_service(EngineService&);
-    void make_frame_service(FrameService&);
-    void make_tick_service(TickService&);
-
-    void update_frame_service(FrameService&, uint32_t current_frame);
+    EngineService make_engine_service(Assets* assets);
+    FrameService make_frame_service(Assets* assets);
+    TickService make_tick_service();
 
     struct AssetPaths {
         const char* asset_inputs;
@@ -364,13 +381,9 @@ namespace engine::game_interface2 {
     using TickFn = void(void*, const TickService*, const EngineService*);
     using DrawImGuiFn = void(void*, const EngineService*);
     using RenderFn =
-        uint32_t(void*, VkCommandBuffer, const FrameService*, const EngineService*, VkSemaphoreSubmitInfo*);
+        uint32_t(void*, const FrameService*, const EngineService*, VkSemaphoreSubmitInfo*);
 
-    namespace __ {
-        void* engine_init_fn();
-    }
-
-    struct GameFunctions {
+    struct GameFunctionsPtrs {
         InitFn* init;
         DestroyFn* destroy;
         ResizeFn* resize;
@@ -378,8 +391,31 @@ namespace engine::game_interface2 {
         TickFn* tick;
         DrawImGuiFn* draw_imgui;
         RenderFn* render;
+    };
 
-        void* __engine_init = __::engine_init_fn();
+    struct GameFunctions {
+        GameFunctionsPtrs game;
+        void(*__engine_set_state)(void*);
+        void(*__engine_set_swapchain)(ForeignSwapchainState*);
+        void(*__engine_set_imgui_context)(ImGuiContext*);
+        void(*__engine_set_vk_funcs)();
+        void(*__engine_set_transport_state)(void*);
+        void(*__engine_set_visbuffer_state)(void*);
+        void(*__engine_set_vma_ptrs)(void*);
+
+        static GameFunctions make(GameFunctionsPtrs ptrs);
+
+        void set_state(void* state) {
+            __engine_set_state(state);
+        }
+
+        void set_swapchain(ForeignSwapchainState* state) {
+            __engine_set_swapchain(state);
+        }
+
+        void set_imgui_context(ImGuiContext* ctx) {
+            __engine_set_imgui_context(ctx);
+        }
     };
 
     struct GameConfig {
@@ -393,7 +429,9 @@ namespace engine::game_interface2 {
         bool fullscreen;
         VkImageUsageFlags target_usage;
         VkFormat target_format;
-        VkImageLayout target_create_layout;
+        VkImageLayout target_start_layout;
+        VkPipelineStageFlags2 target_start_stage;
+        VkAccessFlags2 target_start_access;
         // // if == {0, 0}, then it's the same as the window/viewport size, and ResizeFn has to be defined
         glm::uvec2 target_dimensions;
         BlitStrategy target_blit_strategy;
@@ -405,5 +443,10 @@ namespace engine::game_interface2 {
         GameFunctions funcs;
     };
 
-    void start(const GameConfig& config, const AssetPaths& asset_paths, uint32_t argc, char** argv);
+    using MainFn = GameConfig();
+
+    void start(GameConfig config, const AssetPaths& asset_paths, uint32_t argc, char** argv);
 }
+
+#define GAME_INTERFACE_MAIN _goliath_main_
+#define GAME_INTERFACE_MAIN_SYM XSTR(GAME_INTERFACE_MAIN)

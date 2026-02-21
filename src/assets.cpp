@@ -139,7 +139,7 @@ namespace engine {
         };
     }
 
-    nlohmann::json default_json() {
+    nlohmann::json Assets::default_json() {
         return {
             {"scenes", nlohmann::json::array()},
             {"models", nlohmann::json::array()},

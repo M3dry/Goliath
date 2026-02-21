@@ -44,4 +44,7 @@ namespace engine::transport2 {
 
     uint64_t get_timeline();
     uint64_t get_timeline(ticket t);
+
+    void* get_internal_state();
+    void set_internal_state(void* s);
 }

@@ -15,26 +15,35 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::visbuffer {
-    VkDescriptorSetLayout storage_image_layout;
-    VkDescriptorSetLayout shading_layout;
+    struct State {
+        VkDescriptorSetLayout storage_image_layout;
+        VkDescriptorSetLayout shading_layout;
+
+        ComputePipeline material_count_pipeline;
+        ComputePipeline offsets_pipeline;
+        ComputePipeline fragment_id_pipeline;
+    };
+
+    State* state;
 
     using MaterialCount = PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t>;
-    ComputePipeline material_count_pipeline;
-
     using Offsets = PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t, uint32_t>;
-    ComputePipeline offsets_pipeline;
-
     using FragmentID = PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, uint64_t, uint32_t>;
-    ComputePipeline fragment_id_pipeline;
+
+    VkDescriptorSetLayout shading_layout() {
+        return state->shading_layout;
+    }
 
     void init() {
-        storage_image_layout = descriptor::create_layout(DescriptorSet<descriptor::Binding{
+        state = new State{};
+
+        state->storage_image_layout = descriptor::create_layout(DescriptorSet<descriptor::Binding{
                                                              .count = 1,
                                                              .type = descriptor::Binding::StorageImage,
                                                              .stages = VK_SHADER_STAGE_COMPUTE_BIT,
                                                          }>{});
 
-        shading_layout = descriptor::create_layout(DescriptorSet<descriptor::Binding{
+        state->shading_layout = descriptor::create_layout(DescriptorSet<descriptor::Binding{
                                                                      .count = 1,
                                                                      .type = descriptor::Binding::StorageImage,
                                                                      .stages = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -48,9 +57,9 @@ namespace engine::visbuffer {
         uint32_t material_count_size;
         auto* material_count_spv = util::read_file("./material_count.spv", &material_count_size);
         auto material_count_module = shader::create({material_count_spv, material_count_size});
-        material_count_pipeline = compute::create(ComputePipelineBuilder{}
+        state->material_count_pipeline = compute::create(ComputePipelineBuilder{}
                                                       .shader(material_count_module)
-                                                      .descriptor_layout(0, storage_image_layout)
+                                                      .descriptor_layout(0, state->storage_image_layout)
                                                       .push_constant(MaterialCount::size));
         shader::destroy(material_count_module);
         free(material_count_spv);
@@ -58,7 +67,7 @@ namespace engine::visbuffer {
         uint32_t offsets_size;
         auto* offsets_spv = util::read_file("./offsets.spv", &offsets_size);
         auto offsets_module = shader::create({offsets_spv, offsets_size});
-        offsets_pipeline =
+        state->offsets_pipeline =
             compute::create(ComputePipelineBuilder{}.shader(offsets_module).push_constant(Offsets::size));
         shader::destroy(offsets_module);
         free(offsets_spv);
@@ -66,21 +75,23 @@ namespace engine::visbuffer {
         uint32_t fragment_id_size;
         auto* fragment_id_spv = util::read_file("./fragment_id.spv", &fragment_id_size);
         auto fragment_id_module = shader::create({fragment_id_spv, fragment_id_size});
-        fragment_id_pipeline = compute::create(ComputePipelineBuilder{}
+        state->fragment_id_pipeline = compute::create(ComputePipelineBuilder{}
                                                    .shader(fragment_id_module)
-                                                   .descriptor_layout(0, storage_image_layout)
+                                                   .descriptor_layout(0, state->storage_image_layout)
                                                    .push_constant(FragmentID::size));
         shader::destroy(fragment_id_module);
         free(fragment_id_spv);
     }
 
     void destroy() {
-        descriptor::destroy_layout(storage_image_layout);
-        descriptor::destroy_layout(shading_layout);
+        descriptor::destroy_layout(state->storage_image_layout);
+        descriptor::destroy_layout(shading_layout());
 
-        compute::destroy(material_count_pipeline);
-        compute::destroy(offsets_pipeline);
-        compute::destroy(fragment_id_pipeline);
+        compute::destroy(state->material_count_pipeline);
+        compute::destroy(state->offsets_pipeline);
+        compute::destroy(state->fragment_id_pipeline);
+
+        delete state;
     }
 
     void _resize(VisBuffer& visbuffer, bool dims_changed) {
@@ -103,7 +114,7 @@ namespace engine::visbuffer {
         }
 
         if (visbuffer.material_count_changed || dims_changed) {
-            auto alignment = state->physical_device_properties.limits.minStorageBufferOffsetAlignment;
+            auto alignment = engine::state->physical_device_properties.limits.minStorageBufferOffsetAlignment;
             visbuffer.material_count_buffer_size =
                 util::align_up(alignment, sizeof(uint32_t) * (visbuffer.max_material_id + 1));
             visbuffer.offsets_buffer_size =
@@ -274,7 +285,7 @@ namespace engine::visbuffer {
         synchronization::apply_barrier(material_count_barrier);
         synchronization::end_barriers();
 
-        auto material_count_set = descriptor::new_set(storage_image_layout);
+        auto material_count_set = descriptor::new_set(state->storage_image_layout);
         descriptor::begin_update(material_count_set);
         descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, visbuffer.image_views[current_frame]);
         descriptor::end_update();
@@ -283,8 +294,8 @@ namespace engine::visbuffer {
         MaterialCount::write(mat_count_pc, visbuffer.dimensions, visbuffer.stages.address() + current_material_count_offset,
                              draw_id_addr);
 
-        material_count_pipeline.bind();
-        material_count_pipeline.dispatch(ComputePipeline::DispatchParams{
+        state->material_count_pipeline.bind();
+        state->material_count_pipeline.dispatch(ComputePipeline::DispatchParams{
             .push_constant = mat_count_pc,
             .descriptor_indexes =
                 {
@@ -354,8 +365,8 @@ namespace engine::visbuffer {
                        stages_addr + current_offsets_offset, stages_addr + current_shading_dispatch_offset,
                        visbuffer.max_material_id + 1, 1 + visbuffer.max_material_id / 256);
 
-        offsets_pipeline.bind();
-        offsets_pipeline.dispatch(ComputePipeline::DispatchParams{
+        state->offsets_pipeline.bind();
+        state->offsets_pipeline.dispatch(ComputePipeline::DispatchParams{
             .push_constant = offsets_pc,
             .group_count_x = (uint32_t)std::ceil((visbuffer.max_material_id + 1) / 256.0f),
             .group_count_y = 1,
@@ -402,13 +413,13 @@ namespace engine::visbuffer {
         FragmentID::write(fragment_id_pc, visbuffer.dimensions, stages_addr + current_offsets_offset,
                           stages_addr + current_fragment_id_offset, draw_id_addr, visbuffer.max_material_id);
 
-        auto frag_id_set = descriptor::new_set(storage_image_layout);
+        auto frag_id_set = descriptor::new_set(state->storage_image_layout);
         descriptor::begin_update(frag_id_set);
         descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, visbuffer.image_views[current_frame]);
         descriptor::end_update();
 
-        fragment_id_pipeline.bind();
-        fragment_id_pipeline.dispatch(ComputePipeline::DispatchParams{
+        state->fragment_id_pipeline.bind();
+        state->fragment_id_pipeline.dispatch(ComputePipeline::DispatchParams{
             .push_constant = fragment_id_pc,
             .descriptor_indexes =
                 {
@@ -459,7 +470,7 @@ namespace engine::visbuffer {
         synchronization::apply_barrier(shading_dispatch_barrier);
         synchronization::end_barriers();
 
-        auto shading_set = descriptor::new_set(shading_layout);
+        auto shading_set = descriptor::new_set(shading_layout());
         descriptor::begin_update(shading_set);
         descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL, target);
         descriptor::update_storage_image(1, VK_IMAGE_LAYOUT_GENERAL, visbuffer.image_views[current_frame]);
@@ -471,5 +482,13 @@ namespace engine::visbuffer {
             .vis_and_target_set = shading_set,
             .material_id_count = (uint16_t)(visbuffer.max_material_id + 1),
         };
+    }
+
+    void* get_internal_state() {
+        return state;
+    }
+
+    void set_internal_state(void* s) {
+        state = (State*)s;
     }
 }

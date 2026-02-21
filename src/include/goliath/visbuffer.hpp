@@ -39,7 +39,7 @@ namespace engine {
 
 namespace engine::visbuffer {
     static constexpr VkFormat format = VK_FORMAT_R32_UINT;
-    extern VkDescriptorSetLayout shading_layout;
+    VkDescriptorSetLayout shading_layout();
 
     void init();
     void destroy();
@@ -67,4 +67,7 @@ namespace engine::visbuffer {
 
     // `target` is expected to be already synced and it's layout to be GENERAL
     Shading shade(VisBuffer& visbuffer, VkImageView target, uint32_t current_frame);
+
+    void* get_internal_state();
+    void set_internal_state(void* s);
 }

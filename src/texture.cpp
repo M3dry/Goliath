@@ -3,6 +3,7 @@
 #include "goliath/engine.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/transport2.hpp"
+#include "goliath/vma_ptrs.hpp"
 #include <vulkan/vulkan_core.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -182,9 +183,8 @@ namespace engine::gpu_image {
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-        VK_CHECK(vmaCreateImage(allocator(), &info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
-
-        vmaSetAllocationName(allocator(), gpu_img.allocation, name);
+        vma_ptrs::create_image(&info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr);
+        vma_ptrs::set_name(gpu_img.allocation, name);
 
         VkDebugUtilsObjectNameInfoEXT name_info{};
         name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
@@ -224,10 +224,8 @@ namespace engine::gpu_image {
         VmaAllocationCreateInfo alloc_info{};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-        VK_CHECK(
-            vmaCreateImage(allocator(), &builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr));
-
-        vmaSetAllocationName(allocator(), gpu_img.allocation, name);
+        vma_ptrs::create_image(&builder._image_info, &alloc_info, &gpu_img.image, &gpu_img.allocation, nullptr);
+        vma_ptrs::set_name(gpu_img.allocation, name);
 
         if (builder._img_data != nullptr) {
             *builder._ticket = transport2::upload(builder._priority, builder._image_info.format,
@@ -288,7 +286,7 @@ namespace engine::gpu_image {
 
 namespace engine::gpu_image_view {
     VkImageView create(const GPUImageView& gpu_image_view) {
-        VkImageView view;
+        VkImageView view{};
         vkCreateImageView(device(), &gpu_image_view._info, nullptr, &view);
         return view;
     }

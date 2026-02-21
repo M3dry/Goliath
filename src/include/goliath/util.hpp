@@ -30,7 +30,12 @@ namespace engine {
         GreaterOrEqual = VK_COMPARE_OP_GREATER_OR_EQUAL,
         LessOrEqual = VK_COMPARE_OP_LESS_OR_EQUAL,
     };
+}
 
+namespace engine::rendering {
+    void begin_mark_block();
+    void end_mark_block();
+    void mark(const char* name);
 }
 
 namespace engine::util {

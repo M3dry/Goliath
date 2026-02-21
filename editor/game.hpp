@@ -2,7 +2,7 @@
 
 #include "goliath/dyn_module.hpp"
 #include "goliath/engine.hpp"
-#include "goliath/game_interface.hpp"
+#include "goliath/game_interface2.hpp"
 #include "goliath/texture.hpp"
 #include <array>
 #include <cstdint>
@@ -15,28 +15,30 @@ class Game {
         SymbolLookup
     };
 
-    engine::game_interface::EngineService es;
-    engine::game_interface::FrameService fs;
-    engine::game_interface::TickService ts;
+    engine::game_interface2::EngineService es;
+    engine::game_interface2::FrameService fs;
+    engine::game_interface2::TickService ts;
 
-    std::array<engine::GPUImage, engine::frames_in_flight> targets{};
-    std::array<VkImageView, engine::frames_in_flight> target_views{};
+    engine::GPUImage* targets{};
+    VkImageView* target_views{};
     glm::uvec2 target_dimensions{-1, -1};
     VkFormat target_format{};
 
-    engine::game_interface::GameConfig config;
+    engine::Assets assets;
+    engine::game_interface2::GameConfig config;
     void* user_state = nullptr;
     std::vector<VkSemaphoreSubmitInfo> waits{};
 
     std::optional<engine::dyn_module::DynModule> mod;
 
+    engine::ForeignSwapchainState* sstate;
+
     static std::expected<Game, Err> load(const char* plugin_file);
-    static Game make(engine::game_interface::GameConfig config);
+    static Game make(engine::game_interface2::GameConfig config);
     void unload();
 
     void init(uint32_t argc, char** argv);
     void destroy();
-    void resize();
     void tick(bool focused);
     void draw_game_imgui();
     uint32_t render(glm::uvec2 game_window_dims);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "goliath/texture.hpp"
 #include <filesystem>
 
 #include <volk.h>
@@ -65,4 +66,13 @@ namespace engine {
     bool scenes_to_save();
 
     bool drawing_prepared();
+
+    struct ForeignSwapchainState {
+        VkFormat format;
+        VkExtent2D extent;
+        GPUImage* images;
+        VkImageView* views;
+    };
+
+    void* get_internal_state();
 }

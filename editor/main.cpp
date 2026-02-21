@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
     auto pbr_pipeline =
         engine::compute::create(engine::ComputePipelineBuilder{}
                                     .shader(pbr_module)
-                                    .descriptor_layout(0, engine::visbuffer::shading_layout)
+                                    .descriptor_layout(0, engine::visbuffer::shading_layout())
                                     .descriptor_layout(1, pbr_shading_set_layout)
                                     .descriptor_layout(2, engine::textures::get_texture_pool().set_layout)
                                     .push_constant(PBRPC::size));
@@ -597,14 +597,14 @@ int main(int argc, char** argv) {
         if (engine::prepare_frame()) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
-
-            if (game) game->game.resize();
         }
 
         engine::transport2::ticket transform_buffer_ticket{};
         {
             engine::prepare_draw();
+            engine::rendering::begin_mark_block();
 
+            engine::rendering::mark("Embedded game");
             if (game && !game_viewport.skipped_window) {
                 game->game.render(game_viewport.dimensions[engine::get_current_frame()]);
             }
@@ -622,11 +622,13 @@ int main(int argc, char** argv) {
             clear_range.baseArrayLayer = 0;
             clear_range.levelCount = 1;
 
+            engine::rendering::mark("Editor: target clear");
             vkCmdClearColorImage(engine::get_cmd_buf(), target_images[engine::get_current_frame()].image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &target_clear_color, 1, &clear_range);
 
             engine::visbuffer::clear_buffers(visbuffer, engine::get_current_frame());
 
+            engine::rendering::mark("Editor: scene flatten");
             engine::culling::bind_flatten();
             transform_buffer_ticket = engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
                     auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
@@ -635,6 +637,7 @@ int main(int argc, char** argv) {
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
 
+            engine::rendering::mark("Editor: scene culling");
             engine::culling::cull(max_draw_size, draw_id_buffer.address(), indirect_draw_buffer.address());
 
             engine::synchronization::begin_barriers();
@@ -643,6 +646,7 @@ int main(int argc, char** argv) {
 
             engine::visbuffer::prepare_for_draw(visbuffer, engine::get_current_frame());
 
+            engine::rendering::mark("Editor: scene visbuffer raster");
             engine::rendering::begin(
                 engine::RenderPass{}
                     .add_color_attachment(visbuffer.attach(engine::get_current_frame()))
@@ -667,6 +671,7 @@ int main(int argc, char** argv) {
             });
             engine::rendering::end();
 
+            engine::rendering::mark("Editor: visbuffer material post processing");
             engine::visbuffer::count_materials(visbuffer, draw_id_buffer.address(), engine::get_current_frame());
             engine::visbuffer::get_offsets(visbuffer, engine::get_current_frame());
             engine::visbuffer::write_fragment_ids(visbuffer, draw_id_buffer.address(), engine::get_current_frame());
@@ -695,6 +700,7 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
+            engine::rendering::mark("Editor: visbuffer shading");
             auto shading = engine::visbuffer::shade(visbuffer, target_image_views[engine::get_current_frame()],
                                                     engine::get_current_frame());
             auto mats_buffer = engine::materials::get_buffer().address();
@@ -746,6 +752,7 @@ int main(int argc, char** argv) {
             engine::synchronization::apply_barrier(target_barrier);
             engine::synchronization::end_barriers();
 
+            engine::rendering::mark("Editor: scene grid");
             engine::rendering::begin(
                 engine::RenderPass{}
                     .add_color_attachment(engine::RenderingAttachement{}
@@ -794,6 +801,7 @@ int main(int argc, char** argv) {
                 postprocessing_push_constant,
                 glm::vec<2, uint32_t>{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 
+            engine::rendering::mark("Editor: post processing");
             postprocessing_pipeline.bind();
             postprocessing_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
                 .push_constant = postprocessing_push_constant,
@@ -845,10 +853,12 @@ int main(int argc, char** argv) {
             blit_info.filter = VK_FILTER_NEAREST;
             blit_info.regionCount = 1;
             blit_info.pRegions = &blit_region;
+            engine::rendering::mark("Editor: scene blit");
             auto game_window_barrier = ui::blit_game_window(blit_info);
 
             if (game && !game_viewport.skipped_window) game_viewport.blit(game->game);
 
+            engine::rendering::mark("Editor: UI");
             engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
                 engine::RenderingAttachement{}
                     .set_image(engine::get_swapchain_view(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
@@ -864,12 +874,15 @@ int main(int argc, char** argv) {
             target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
             target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 
+            engine::rendering::mark("Editor: culling clear");
             engine::culling::clear_buffers(draw_id_buffer, indirect_draw_buffer);
 
             engine::synchronization::begin_barriers();
             engine::synchronization::apply_barrier(target_barrier);
             if (game_window_barrier) engine::synchronization::apply_barrier(*game_window_barrier);
             engine::synchronization::end_barriers();
+
+            engine::rendering::end_mark_block();
         }
 
         std::array<VkSemaphoreSubmitInfo, 2> waits{};
@@ -877,8 +890,6 @@ int main(int argc, char** argv) {
         if (engine::next_frame(waits)) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
-
-            if (game) game->game.resize();
 
             engine::increment_frame();
         }

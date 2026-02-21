@@ -2,6 +2,7 @@
 #include "descriptor_pool_.hpp"
 #include "engine_.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/vma_ptrs.hpp"
 
 #include <cassert>
 #include <cstring>
@@ -38,11 +39,11 @@ namespace engine {
         alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
         VmaAllocationInfo out_alloc_info;
-        VK_CHECK(vmaCreateBuffer(allocator(), &buf_info, &alloc_info, &ubo_buffer, &ubo_alloc, &out_alloc_info));
-        vmaSetAllocationName(allocator(), ubo_alloc, "Descriptor Pool: UBO allocation");
+        vma_ptrs::create_buffer(&buf_info, &alloc_info, &ubo_buffer, &ubo_alloc, &out_alloc_info);
+        vma_ptrs::set_name(ubo_alloc, "Descriptor Pool: UBO allocation");
 
         VkMemoryPropertyFlags alloc_props;
-        vmaGetMemoryTypeProperties(allocator(), out_alloc_info.memoryType, &alloc_props);
+        vma_ptrs::get_memory_type_properties(out_alloc_info.memoryType, &alloc_props);
 
         ubo_data = (uint8_t*)out_alloc_info.pMappedData;
         ubo_coherent = alloc_props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
@@ -50,7 +51,7 @@ namespace engine {
 
     DescriptorPool::~DescriptorPool() {
         vkDestroyDescriptorPool(device(), pool, nullptr);
-        vmaDestroyBuffer(allocator(), ubo_buffer, ubo_alloc);
+        vma_ptrs::destroy_buffer(ubo_buffer, ubo_alloc);
     }
 
     uint64_t DescriptorPool::new_set(VkDescriptorSetLayout layout) {
@@ -114,7 +115,7 @@ namespace engine {
 
         std::memcpy(ubo_data + ubo_offset, ubo.data(), ubo.size());
         if (!ubo_coherent) {
-            vmaFlushAllocation(allocator(), ubo_alloc, ubo_offset, ubo.size());
+            vma_ptrs::flush_alloc(ubo_alloc, ubo_offset, ubo.size());
         }
 
         VkDescriptorBufferInfo buf_info{};

@@ -6,7 +6,6 @@
 #include <mutex>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
-
 namespace engine {
     struct OldSwapchain {
         VkSwapchainKHR swapchain;
@@ -49,13 +48,6 @@ namespace engine {
         std::vector<VkSemaphore> swapchain_semaphores{};
     };
 
-    struct ForeignSwapchainState {
-        VkFormat format;
-        VkExtent2D extent;
-        GPUImage* images;
-        VkImageView* views;
-    };
-
     struct State {
         GLFWwindow* window;
 
@@ -96,8 +88,13 @@ namespace engine {
         VkDescriptorSetLayout empty_set;
     };
 
+    State* get_state();
+    void* get_swapchain_state();
+    void set_state(State* state);
+    void set_swapchain_state(SwapchainState* state);
+    void set_swapchain_state(ForeignSwapchainState* state);
+
     extern State* state;
-    void share_load(State* state_ptr, ForeignSwapchainState* swapchain_ptr);
 
     FrameData& get_current_frame_data();
     DescriptorPool& get_frame_descriptor_pool();

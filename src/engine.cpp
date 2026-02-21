@@ -3,9 +3,11 @@
 #include "event_.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/visbuffer.hpp"
+#include "goliath/vma_ptrs.hpp"
 #include "materials_.hpp"
 #include "models_.hpp"
 #include "textures_.hpp"
+#include "vma_ptrs_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
 #include <glm/ext/vector_uint2.hpp>
@@ -117,7 +119,7 @@ namespace engine {
     void FrameData::cleanup_resources() {
         assert(!shared_state);
         for (auto [buf, alloc] : buffers_to_free) {
-            vmaDestroyBuffer(allocator(), buf, alloc);
+            vma_ptrs::destroy_buffer(buf, alloc);
         }
 
         for (auto view : views_to_free) {
@@ -125,7 +127,7 @@ namespace engine {
         }
 
         for (auto [img, alloc] : images_to_free) {
-            vmaDestroyImage(allocator(), img, alloc);
+            vma_ptrs::destroy_image(img, alloc);
         }
 
         for (auto sampler : samplers_to_free) {
@@ -162,6 +164,7 @@ namespace engine {
         buffers_to_free.clear();
         images_to_free.clear();
         views_to_free.clear();
+        samplers_to_free.clear();
     }
 
     void FrameData::destroy_buffer(VkBuffer buf, VmaAllocation alloc) {
@@ -234,10 +237,30 @@ namespace engine {
         }
     }
 
-    void share_load(State* state_ptr, ForeignSwapchainState* swapchain_ptr) {
-        state = state_ptr;
+    State* get_state() {
+        return state;
+    }
+
+    void* get_internal_state() {
+        return state;
+    }
+
+    void* get_swapchain_state() {
+        return swapchain_state;
+    }
+
+    void set_state(State* s) {
+        state = s;
+    }
+
+    void set_swapchain_state(SwapchainState* state) {
+        shared_state = false;
+        swapchain_state = state;
+    }
+
+    void set_swapchain_state(ForeignSwapchainState* state) {
         shared_state = true;
-        swapchain_state = swapchain_ptr;
+        swapchain_state = state;
     }
 
     void init(Init opts) {
@@ -355,6 +378,7 @@ namespace engine {
         vma_allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         vma_allocator_info.pVulkanFunctions = &vma_vulkan_funcs;
         VK_CHECK(vmaCreateAllocator(&vma_allocator_info, &state->allocator));
+        vma_ptrs::init();
 
         state->frames = new FrameData[frames_in_flight]{};
         rebuild_swapchain((uint32_t)mode->width, (uint32_t)mode->height);
@@ -440,6 +464,7 @@ namespace engine {
         }
 
         vmaDestroyAllocator(allocator());
+        vma_ptrs::destroy();
 
         auto sstate = ((SwapchainState*)swapchain_state);
         vkDestroySwapchainKHR(device(), sstate->swapchain, nullptr);
@@ -605,9 +630,10 @@ namespace engine {
         if (extra_waits.size() == 0) {
             extra_waits = {&extra_wait_space, 1};
         }
+        extra_waits[0] = {};
         extra_waits[0].sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
         extra_waits[0].semaphore = frame.swapchain_semaphore;
-        extra_waits[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        extra_waits[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
         auto sstate = ((SwapchainState*)swapchain_state);
         VkSemaphoreSubmitInfo signal_info[2]{};
@@ -638,6 +664,7 @@ namespace engine {
             std::lock_guard lock{state->graphics_queue_lock};
             VK_CHECK(vkQueueSubmit2(state->graphics_queue, 1, &submit_info, frame.render_fence));
 
+            fflush(stdout);
             VkPresentInfoKHR present_info{};
             present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
             present_info.waitSemaphoreCount = 1;

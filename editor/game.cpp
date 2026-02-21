@@ -1,16 +1,21 @@
 #include "game.hpp"
 #include "goliath/dyn_module.hpp"
 #include "goliath/engine.hpp"
-#include "goliath/game_interface.hpp"
+#include "goliath/game_interface2.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/synchronization.hpp"
 #include "goliath/texture.hpp"
+#include "goliath/transport2.hpp"
+#include "goliath/visbuffer.hpp"
+#include "goliath/vma_ptrs.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include <vulkan/vulkan_core.h>
 
 void rebuild_target(engine::GPUImage* targets, VkImageView* target_views, glm::uvec2 target_dimensions,
-                    engine::game_interface::GameConfig config) {
+                    engine::game_interface2::GameConfig config) {
+    vkDeviceWaitIdle(engine::device());
+
     for (int i = 0; i < engine::frames_in_flight; i++) {
         engine::gpu_image::destroy(targets[i]);
         engine::gpu_image_view::destroy(target_views[i]);
@@ -25,7 +30,7 @@ void rebuild_target(engine::GPUImage* targets, VkImageView* target_views, glm::u
                                                    .usage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | config.target_usage),
-                                               config.target_finish_stage, config.target_finish_access);
+                                               config.target_start_stage, config.target_start_access);
 
         target_views[i] =
             engine::gpu_image_view::create(engine::GPUImageView{targets[i]}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
@@ -45,16 +50,35 @@ std::expected<Game, Game::Err> Game::load(const char* plugin_file) {
         return std::unexpected(Game::SymbolLookup);
     }
 
-    Game game = Game::make(((engine::game_interface::MainFn*)(*f))());
+    Game game = Game::make(((engine::game_interface2::MainFn*)(*f))());
     game.mod = *mod;
 
     return game;
 }
 
-Game Game::make(engine::game_interface::GameConfig config) {
+Game Game::make(engine::game_interface2::GameConfig config) {
     Game game{};
 
+    game.targets = new engine::GPUImage[engine::frames_in_flight]{};
+    game.target_views = new VkImageView[engine::frames_in_flight]{};
+    game.sstate = new engine::ForeignSwapchainState{
+        .format = config.target_format,
+        .images = game.targets,
+        .views = game.target_views,
+    };
+
     game.config = config;
+    game.config.funcs.set_swapchain(game.sstate);
+    game.config.funcs.set_state(engine::get_internal_state());
+    game.config.funcs.set_imgui_context(ImGui::GetCurrentContext());
+    game.config.funcs.__engine_set_vk_funcs();
+    game.config.funcs.__engine_set_transport_state(engine::transport2::get_internal_state());
+    game.config.funcs.__engine_set_visbuffer_state(engine::visbuffer::get_internal_state());
+    game.config.funcs.__engine_set_vma_ptrs(engine::vma_ptrs::get_internal_state());
+
+    game.assets = engine::Assets::init(game.config.asset_inputs);
+    // game.assets.load(); TODO:
+
     game.waits.resize(game.config.max_wait_count + 1);
 
     auto required_dims = game.config.target_dimensions == glm::uvec2{0, 0}
@@ -62,24 +86,29 @@ Game Game::make(engine::game_interface::GameConfig config) {
                              : game.config.target_dimensions;
     if (required_dims != game.target_dimensions || game.target_format != game.config.target_format) {
         game.target_dimensions = required_dims;
-        rebuild_target(game.targets.data(), game.target_views.data(), game.target_dimensions, game.config);
+        rebuild_target(game.targets, game.target_views, game.target_dimensions, game.config);
     }
 
-    engine::game_interface::make_engine_service(&game.es);
-    engine::game_interface::make_frame_service(&game.fs);
-    engine::game_interface::make_tick_service(&game.ts);
+    game.es = engine::game_interface2::make_engine_service(&game.assets);
+    game.fs = engine::game_interface2::make_frame_service(&game.assets);
+    game.ts = engine::game_interface2::make_tick_service();
     return game;
 }
 
 void Game::unload() {
     destroy();
+    config.asset_inputs.destroy();
+    assets.destroy();
 
     user_state = nullptr;
+    delete sstate;
 
     for (int i = 0; i < engine::frames_in_flight; i++) {
         engine::gpu_image::destroy(targets[i]);
         engine::gpu_image_view::destroy(target_views[i]);
     }
+    delete[] targets;
+    delete[] target_views;
     if (mod) engine::dyn_module::destroy(*mod);
 }
 
@@ -87,62 +116,77 @@ void Game::init(uint32_t argc, char** argv) {
     if (!destroyed_state) assert(false);
     destroyed_state = false;
 
-    user_state = config.funcs.init(&es, argc, argv);
+    sstate->extent = VkExtent2D{
+        .width = target_dimensions.x,
+        .height = target_dimensions.y,
+    };
+
+    try {
+        user_state = config.funcs.game.init(&es, argc, argv);
+    } catch (const engine::game_interface2::GameFatalException& e) {
+        printf("GAME EXCEPTION: %s\n", e.what());
+    }
 }
 
 void Game::destroy() {
     if (destroyed_state) return;
-    config.funcs.destroy(user_state, &es);
-}
 
-void Game::resize() {
-    auto resize = config.funcs.resize;
-    if (resize == nullptr) return;
-
-    resize(user_state, &es);
+    try {
+        config.funcs.game.destroy(user_state, &es);
+        destroyed_state = true;
+    } catch (const engine::game_interface2::GameFatalException& e) {
+        printf("GAME EXCEPTION: %s\n", e.what());
+    }
 }
 
 void Game::tick(bool focused) {
     if (focused) {
-        engine::game_interface::TickServicePtrs ptrs{
+        engine::game_interface2::TickServicePtrs ptrs{
             .is_held = [](auto x) { return false; },
             .was_released = [](auto x) { return false; },
 
-            .get_mouse_delta = []() {
-                return glm::vec2{};
-            },
-            .get_mouse_absolute = []() {
-                return glm::vec2{};
-            },
+            .get_mouse_delta = []() { return glm::vec2{}; },
+            .get_mouse_absolute = []() { return glm::vec2{}; },
         };
 
         ts = ptrs;
     } else {
-        engine::game_interface::make_tick_service(&ts);
+        ts = engine::game_interface2::make_tick_service();
     }
 
-    config.funcs.tick(user_state, &ts, &es);
+    try {
+        config.funcs.game.tick(user_state, &ts, &es);
+    } catch (const engine::game_interface2::GameFatalException& e) {
+        printf("GAME EXCEPTION: %s\n", e.what());
+    }
 }
 
 void Game::draw_game_imgui() {
-    config.funcs.draw_imgui(user_state, &es);
+    try {
+        config.funcs.game.draw_imgui(user_state, &es);
+    } catch (const engine::game_interface2::GameFatalException& e) {
+        printf("GAME EXCEPTION: %s\n", e.what());
+    }
 }
 
 uint32_t Game::render(glm::uvec2 game_window_dims) {
-    es.frame_ix = engine::get_current_frame();
-
-    auto current_frame = engine::get_current_frame();
-    fs.target = targets[current_frame].image;
-    fs.target_view = target_views[current_frame];
-    fs.target_dimensions = target_dimensions;
-    engine::game_interface::update_frame_service(&fs, current_frame);
-
     if (config.target_dimensions == glm::uvec2{0, 0} && game_window_dims != target_dimensions) {
         target_dimensions = game_window_dims;
-        rebuild_target(targets.data(), target_views.data(), target_dimensions, config);
+        rebuild_target(targets, target_views, target_dimensions, config);
+        if (auto resize = config.funcs.game.resize; resize != nullptr) resize(user_state, &es);
     }
 
-    return config.funcs.render(user_state, engine::get_cmd_buf(), &fs, &es, waits.data() + 1) + 1;
+    sstate->extent = VkExtent2D{
+        .width = target_dimensions.x,
+        .height = target_dimensions.y,
+    };
+
+    try {
+        return config.funcs.game.render(user_state, &fs, &es, waits.data() + 1) + 1;
+    } catch (const engine::game_interface2::GameFatalException& e) {
+        printf("GAME EXCEPTION: %s\n", e.what());
+        return 0;
+    }
 }
 
 void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
@@ -155,9 +199,11 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
     engine::synchronization::end_barriers();
 
-    VkClearColorValue clear{
-        .float32 = {0, 0, 0, 1},
-    };
+    VkClearColorValue clear{};
+    clear.float32[0] = config.clear_color.x / 255.0f;
+    clear.float32[1] = config.clear_color.y / 255.0f;
+    clear.float32[2] = config.clear_color.z / 255.0f;
+    clear.float32[3] = config.clear_color.w / 255.0f;
 
     VkImageSubresourceRange range{
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -175,12 +221,13 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
     engine::synchronization::begin_barriers();
     engine::synchronization::apply_barrier(out.transition(
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
-    engine::synchronization::apply_barrier(src.transition(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT));
+    engine::synchronization::apply_barrier(src.transition(
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT));
     engine::synchronization::end_barriers();
 
     VkImageBlit2 region{};
     if (config.target_dimensions == glm::uvec2{0, 0} ||
-        config.target_blit_strategy == engine::game_interface::GameConfig::Stretch) {
+        config.target_blit_strategy == engine::game_interface2::GameConfig::Stretch) {
         region = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
             .pNext = nullptr,
@@ -225,7 +272,7 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
                     },
                 },
         };
-    } else if (config.target_blit_strategy == engine::game_interface::GameConfig::LetterBox) {
+    } else if (config.target_blit_strategy == engine::game_interface2::GameConfig::LetterBox) {
         glm::vec2 src_dims = target_dimensions;
         glm::vec2 dst_dims = out_dims;
         float scale = std::min(dst_dims.x / src_dims.x, dst_dims.y / src_dims.y);
@@ -296,12 +343,9 @@ void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
     vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
 
     engine::synchronization::begin_barriers();
-    engine::synchronization::apply_barrier(out.transition(final_layout,
-                                                          final_stage,
-                                                          final_access));
-    engine::synchronization::apply_barrier(src.transition(config.target_start_layout,
-                                                          config.target_finish_stage,
-                                                          config.target_finish_access));
+    engine::synchronization::apply_barrier(out.transition(final_layout, final_stage, final_access));
+    engine::synchronization::apply_barrier(
+        src.transition(config.target_start_layout, config.target_start_stage, config.target_start_access));
     engine::synchronization::end_barriers();
 }
 
