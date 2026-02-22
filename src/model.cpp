@@ -18,7 +18,7 @@ namespace engine {
         if (indices != nullptr) total_size += index_count * sizeof(uint32_t);
         if (positions != nullptr) total_size += vertex_count * sizeof(glm::vec3);
         if (normals != nullptr) total_size += vertex_count * sizeof(glm::vec3);
-        if (tangents != nullptr) total_size += (indexed_tangents ? index_count : vertex_count) * sizeof(glm::vec4);
+        if (tangents != nullptr) total_size += (indexed_tangents ? vertex_count : index_count) * sizeof(glm::vec4);
         for (std::size_t i = 0; i < texcoords.size(); i++) {
             if (texcoords[i] != nullptr) total_size += vertex_count * sizeof(glm::vec2);
         }
@@ -86,7 +86,7 @@ namespace engine {
         }
 
         if (tangents != nullptr) {
-            auto size = (indexed_tangents ? index_count : vertex_count) * sizeof(glm::vec4);
+            auto size = (indexed_tangents ? vertex_count : index_count) * sizeof(glm::vec4);
             std::memcpy(data.data() + off, tangents, size);
             off += size;
             assert(off < data.size());
@@ -169,7 +169,7 @@ namespace engine {
         }
 
         if (has_tangents) {
-            auto size = (out.indexed_tangents ? out.index_count : out.vertex_count) * sizeof(glm::vec4);
+            auto size = (out.indexed_tangents ? out.vertex_count : out.index_count) * sizeof(glm::vec4);
             out.tangents = (glm::vec4*)malloc(size);
             std::memcpy(out.tangents, data.data() + off, size);
             off += size;

@@ -142,6 +142,7 @@ namespace engine::models {
 
             free(save_data);
         }
+        printf("finished adding model @%s\n", orig_path.c_str());
 
         if (generations[gid.id()] != gid.gen()) {
             std::filesystem::remove(models_directory /

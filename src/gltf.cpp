@@ -440,7 +440,7 @@ engine::gltf::Err parse_model(engine::Model* out, const tinygltf::Model& model) 
 
     if (out->mesh_indices_count != 0) {
         out->mesh_indexes = (uint32_t*)malloc(sizeof(uint32_t) * out->mesh_indices_count);
-        std::memcpy(out->mesh_indexes, mesh_indices.data(), sizeof(uint32_t) * out->mesh_count);
+        std::memcpy(out->mesh_indexes, mesh_indices.data(), sizeof(uint32_t) * out->mesh_indices_count);
     }
 
     if (out->mesh_indices_count != 0) {

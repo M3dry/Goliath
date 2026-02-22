@@ -3,6 +3,7 @@
 #include "goliath/transport2.hpp"
 #include "materials_.hpp"
 
+#include <mutex>
 #include <vector>
 #include <vulkan/vulkan_core.h>
 
@@ -10,6 +11,8 @@ namespace engine::materials {
     bool init_called = false;
     bool update = false;
     bool want_save = false;
+
+    std::mutex mutex{};
 
     struct Instances {
         uint32_t count = 0;
@@ -46,6 +49,7 @@ namespace engine::materials {
 
     bool update_gpu_buffer() {
         if (!init_called) return false;
+        std::lock_guard lock{mutex};
 
         if (transport2::is_ready(next_buffer_ticket)) {
             current_buffer = (current_buffer + 1) % 2;
@@ -125,6 +129,7 @@ namespace engine::materials {
 
     void load(const nlohmann::json& j) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         std::vector<JsonEntry> entries = j;
 
@@ -182,6 +187,7 @@ namespace engine::materials {
 
     nlohmann::json save() {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         auto arr = nlohmann::json::array();
 
@@ -223,12 +229,14 @@ namespace engine::materials {
 
     const Material& get_schema(uint32_t mat_id) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         return schemas[mat_id];
     }
 
     uint32_t add_schema(Material schema, std::string name) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         std::optional<uint32_t> free_ix{};
         if (deleted.size() != 0) {
@@ -261,6 +269,7 @@ namespace engine::materials {
 
     bool remove_schema(uint32_t mat_id) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         bool no_refs = true;
         for (const auto& ref_count : instances[mat_id].ref_counts) {
@@ -283,6 +292,7 @@ namespace engine::materials {
 
     std::span<uint8_t> get_instance_data(uint32_t mat_id, uint32_t instance_ix) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         auto schema_size = schemas[mat_id].total_size;
         return {instances[mat_id].data.data() + schema_size * instance_ix, schema_size};
@@ -290,6 +300,7 @@ namespace engine::materials {
 
     void update_instance_data(uint32_t mat_id, uint32_t instance_ix, uint8_t* new_data) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         auto schema_size = schemas[mat_id].total_size;
         auto mat_data = instances[mat_id].data.data() + schema_size * instance_ix;
@@ -302,6 +313,7 @@ namespace engine::materials {
 
     uint32_t add_instance(uint32_t mat_id, std::string name, uint8_t* data) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         auto schema_size = schemas[mat_id].total_size;
 
@@ -336,6 +348,7 @@ namespace engine::materials {
 
     bool remove_instance(uint32_t mat_id, uint32_t instance_ix) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         auto& insts = instances[mat_id];
         if (insts.ref_counts[instance_ix] != 0) {
@@ -350,17 +363,20 @@ namespace engine::materials {
 
     void acquire_instance(uint32_t mat_id, uint32_t instance_ix) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         instances[mat_id].ref_counts[instance_ix]++;
     }
 
     void release_instance(uint32_t mat_id, uint32_t instance_ix) {
         assert(init_called);
+        std::lock_guard lock{mutex};
 
         instances[mat_id].ref_counts[instance_ix]--;
     }
 
     Buffer get_buffer() {
+        std::lock_guard lock{mutex};
         return gpu_buffers[current_buffer];
     }
 }

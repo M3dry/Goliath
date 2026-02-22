@@ -98,6 +98,7 @@ namespace engine {
         }
 
         void destroy() {
+            free(indices);
             free(positions);
             free(normals);
             free(tangents);
