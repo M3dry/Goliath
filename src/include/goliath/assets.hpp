@@ -131,7 +131,9 @@ namespace engine {
         std::span<const models::gid> get_model_gids() const;
         std::span<const textures::gid> get_texture_gids() const;
 
+        bool want_to_save();
       private:
+        bool want_save = false;
         uint32_t models_start;
         uint32_t textures_start;
 

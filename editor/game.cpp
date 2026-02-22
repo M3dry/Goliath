@@ -10,6 +10,7 @@
 #include "goliath/vma_ptrs.hpp"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
+#include "project.hpp"
 #include <vulkan/vulkan_core.h>
 
 void rebuild_target(engine::GPUImage* targets, VkImageView* target_views, glm::uvec2 target_dimensions,
@@ -77,7 +78,14 @@ Game Game::make(engine::game_interface2::GameConfig config) {
     game.config.funcs.__engine_set_vma_ptrs(engine::vma_ptrs::get_internal_state());
 
     game.assets = engine::Assets::init(game.config.asset_inputs);
-    // game.assets.load(); TODO:
+    auto asset_inputs_json = engine::util::read_json(project::asset_inputs);
+    if (!asset_inputs_json.has_value() && asset_inputs_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::asset_inputs)) {
+        asset_inputs_json = engine::Assets::default_json();
+    } else if (!asset_inputs_json.has_value()) {
+        printf("Asset inputs file is corrupted\n");
+        exit(-1);
+    }
+    game.assets.load(*asset_inputs_json);
 
     game.waits.resize(game.config.max_wait_count + 1);
 

@@ -14,6 +14,7 @@ namespace project {
     std::filesystem::path textures_registry{};
     std::filesystem::path scenes_file{};
     std::filesystem::path editor_state{};
+    std::filesystem::path asset_inputs{};
 
     void parse(const std::filesystem::path& json_file) {
         std::ifstream i{json_file};
@@ -26,6 +27,7 @@ namespace project {
         textures_registry = std::filesystem::path{std::string{j["textures_registry"]}};
         scenes_file = std::filesystem::path{std::string{j["scenes"]}};
         editor_state = std::filesystem::path{std::string{j["editor_state"]}};
+        asset_inputs = std::filesystem::path{std::string{j["asset_inputs"]}};
     }
 
     bool find_project() {
@@ -58,6 +60,7 @@ namespace project {
             {"textures_registry", "./assets/textures.reg"},
             {"scenes", "./scenes.json"},
             {"editor_state", "./editor_state.json"},
+            {"asset_inputs", "./assets/inputs.json"},
         }.dump(4);
 
         std::filesystem::create_directory("./assets");

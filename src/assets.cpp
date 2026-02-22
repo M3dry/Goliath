@@ -318,4 +318,10 @@ namespace engine {
     std::span<const textures::gid> Assets::get_texture_gids() const {
         return texture_gids;
     }
+
+    bool Assets::want_to_save() {
+        auto res = want_save;
+        want_save = false;
+        return res;
+    }
 }

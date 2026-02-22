@@ -140,26 +140,9 @@ struct PBRShadingSet {
 };
 
 int main(int argc, char** argv) {
-    // EXVAR_SLIDER(exvar_reg, "Editor/Camera/fov", float, fov, = 90.0f, 0.0f, 180.0f);
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
-    // EXVAR_DRAG(exvar_reg, "Editor/Camera/sensitivity", float, sensitivity, = 0.5f, 0.0f, 1.0f);
-    // EXVAR_DRAG(exvar_reg, "Editor/Camera/movement speed", float, movement_speed, = 0.5f, 0.0f, 1.0f);
-
     EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
     EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
-
-    // glm::vec3 look_at{0.0f};
-    // engine::Camera cam{};
-    // cam.set_projection(engine::camera::Perspective{
-    //     // .fov = glm::radians(fov),
-    //     .fov = glm::radians(90.0f),
-    //     .aspect_ratio = 16.0f / 10.0f,
-    // });
-    // cam.position = glm::vec3{10.0f};
-    // cam.look_at(look_at);
-    // cam.update_matrices();
-
-    // exvar_reg.add_drag_reference("Editor/Camera/position", &cam.position);
 
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
@@ -501,6 +484,11 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
+            if (game && ImGui::Begin("Asset inputs")) {
+                ui::assets_inputs_pane(game->game.assets);
+            }
+            if (game) ImGui::End();
+
             ui::rename_popup();
             ui::scenes_settings_pane();
 
@@ -581,6 +569,11 @@ int main(int argc, char** argv) {
             if (engine::scenes::want_to_save()) {
                 std::ofstream o{project::scenes_file};
                 o << engine::scenes::save();
+            }
+
+            if (game && game->game.assets.want_to_save()) {
+                std::ofstream o{project::asset_inputs};
+                o << game->game.assets.save();
             }
 
             engine::event::update_tick();

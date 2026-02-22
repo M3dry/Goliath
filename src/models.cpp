@@ -99,6 +99,7 @@ namespace engine::models {
 
         uint32_t model_size;
         auto* model_data = engine::util::read_file(models_directory / make_model_path(gid), &model_size);
+        assert(model_data != nullptr);
 
         cpu_datas[gid.id()] = engine::Model{};
         engine::Model::load(cpu_datas[gid.id()].value(), {model_data, model_size});

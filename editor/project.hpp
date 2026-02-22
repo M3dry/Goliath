@@ -11,6 +11,7 @@ namespace project {
     extern std::filesystem::path textures_registry;
     extern std::filesystem::path scenes_file;
     extern std::filesystem::path editor_state;
+    extern std::filesystem::path asset_inputs;
 
     bool find_project();
 

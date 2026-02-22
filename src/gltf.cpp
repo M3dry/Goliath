@@ -350,7 +350,7 @@ engine::gltf::Err parse_node(const tinygltf::Model& model, int node_id, std::vec
         glm::vec3 scale{1.0f};
         if (node.scale.size() != 0) scale = glm::make_vec3(node.scale.data());
 
-        glm::quat rotation{0.0f, 0.0f, 0.0f, 1.0f};
+        glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
         if (node.rotation.size() != 0) rotation = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
 
         glm::vec3 translate{0.0f};
