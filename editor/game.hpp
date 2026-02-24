@@ -53,7 +53,7 @@ class Game {
 struct GameView {
     static VkSampler sampler;
 
-    bool skipped_window = false;
+    bool skipped_window = true;
     std::array<engine::GPUImage, engine::frames_in_flight> images{};
     std::array<VkImageView, engine::frames_in_flight> views{};
     std::array<glm::uvec2, engine::frames_in_flight> dimensions{};
@@ -62,6 +62,7 @@ struct GameView {
 
     GameView();
 
+    void process_pane(ImVec2 avail);
     bool draw_pane();
     void blit(Game& game);
 

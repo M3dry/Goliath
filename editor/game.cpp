@@ -366,12 +366,9 @@ GameView::GameView() {
     }
 }
 
-bool GameView::draw_pane() {
+void GameView::process_pane(ImVec2 avail) {
     auto curr_frame = engine::get_current_frame();
 
-    bool focused = ImGui::IsWindowFocused();
-    ImVec2 win_pos = ImGui::GetWindowPos();
-    ImVec2 avail = ImGui::GetWindowSize();
     skipped_window = avail.x <= 0 || avail.y <= 0;
 
     ImGui_ImplVulkan_RemoveTexture(textures_freeup[engine::get_current_frame()]);
@@ -385,6 +382,7 @@ bool GameView::draw_pane() {
 
         engine::gpu_image::destroy(image);
         engine::gpu_image_view::destroy(view);
+
         textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] = texture;
 
         image = engine::gpu_image::upload(std::format("GameView window texture #{}", curr_frame).c_str(),
@@ -398,17 +396,22 @@ bool GameView::draw_pane() {
                                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
         view = engine::gpu_image_view::create(engine::GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+
         texture = ImGui_ImplVulkan_AddTexture(sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
         dims.x = avail.x;
         dims.y = avail.y;
     }
+}
 
+bool GameView::draw_pane() {
     if (!skipped_window) {
         auto dim = dimensions[engine::get_current_frame()];
         ImGui::Image(textures[engine::get_current_frame()], ImVec2{(float)dim.x, (float)dim.y});
+        return ImGui::IsItemFocused();
     }
 
-    return focused;
+    return false;
 }
 
 void GameView::blit(Game& game) {

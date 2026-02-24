@@ -239,7 +239,8 @@ int main(int argc, char** argv) {
         game->game.init(argc - 2, argv + 2);
     }
 
-    auto visbuffer = engine::visbuffer::create({engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
+    auto visbuffer =
+        engine::visbuffer::create({engine::get_swapchain_extent().width, engine::get_swapchain_extent().height});
 
     uint32_t visbuffer_raster_vertex_spv_size;
     auto visbuffer_raster_vertex_spv_data =
@@ -392,7 +393,6 @@ int main(int argc, char** argv) {
 
         auto cam_info = scene::camera();
 
-        ImGuiWindow* scene_window = nullptr;
         {
             engine::imgui::begin();
             ui::begin();
@@ -412,21 +412,11 @@ int main(int argc, char** argv) {
                 engine::imgui::enable(lock_cam);
             }
 
+
             if (game) {
                 game->game.draw_game_imgui();
-
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
-                ImGui::Begin("Game viewport", nullptr,
-                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-                if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
-                    node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
-                }
-
-                game->focused = game_viewport.draw_pane();
-
-                ImGui::End();
-                ImGui::PopStyleVar();
             }
+            ui::viewport_window(game ? &game_viewport : nullptr, game ? &game->focused : nullptr);
 
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -527,13 +517,15 @@ int main(int argc, char** argv) {
                 auto right = cam_info.cam.right();
                 auto normalized_movement = glm::normalize(movement);
 
-                cam_info.cam.position += cam_info.movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
+                cam_info.cam.position +=
+                    cam_info.movement_speed * (-normalized_movement.z * forward + normalized_movement.x * right);
                 exvar_reg.modified();
             }
 
             auto mouse_delta = engine::event::get_mouse_delta();
             if (!lock_cam && (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f)) {
-                cam_info.cam.rotate(cam_info.sensitivity * glm::radians(-mouse_delta.x), cam_info.sensitivity * glm::radians(-mouse_delta.y));
+                cam_info.cam.rotate(cam_info.sensitivity * glm::radians(-mouse_delta.x),
+                                    cam_info.sensitivity * glm::radians(-mouse_delta.y));
             }
 
             cam_info.cam.update_matrices();
@@ -623,9 +615,10 @@ int main(int argc, char** argv) {
 
             engine::rendering::mark("Editor: scene flatten");
             engine::culling::bind_flatten();
-            transform_buffer_ticket = engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
+            transform_buffer_ticket =
+                engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
                     auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
-            });
+                });
 
             auto& draw_id_buffer = draw_id_buffers[engine::get_current_frame()];
             auto& indirect_draw_buffer = indirect_draw_buffers[engine::get_current_frame()];
@@ -701,7 +694,8 @@ int main(int argc, char** argv) {
                 for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                     uint8_t pbr_pc[PBRPC::size]{};
                     PBRPC::write(pbr_pc,
-                                 glm::vec<2, uint32_t>{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height},
+                                 glm::vec<2, uint32_t>{engine::get_swapchain_extent().width,
+                                                       engine::get_swapchain_extent().height},
                                  visbuffer.stages.address() + shading.indirect_buffer_offset,
                                  visbuffer.stages.address() + shading.fragment_id_buffer_offset,
                                  draw_id_buffer.address(), mat_id, mats_buffer);

@@ -2,6 +2,7 @@
 
 #include "goliath/models.hpp"
 #include "goliath/scenes.hpp"
+#include "goliath/textures.hpp"
 #include <cstdint>
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>

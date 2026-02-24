@@ -124,6 +124,9 @@ namespace engine {
 
         static void load(Model& out, std::span<uint8_t> data);
 
+        void acquire_textures() const;
+        void release_textures() const;
+
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {
                 meshes[i].destroy();

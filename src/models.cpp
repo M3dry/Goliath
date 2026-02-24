@@ -184,6 +184,8 @@ namespace engine::models {
         if (upload_gids.size() != 0) {
             for (const auto& gid : upload_gids) {
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
+                    cpu_datas[gid.id()]->acquire_textures();
+
                     auto& cpu_data = *cpu_datas[gid.id()];
                     engine::gpu_group::begin();
                     auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
@@ -474,7 +476,10 @@ namespace engine::models {
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
-            if (cpu_datas[gid.id()]) cpu_datas[gid.id()]->destroy();
+            if (cpu_datas[gid.id()]) {
+                cpu_datas[gid.id()]->release_textures();
+                cpu_datas[gid.id()]->destroy();
+            }
             cpu_datas[gid.id()] = std::nullopt;
 
             gpu_datas[gid.id()].destroy();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "game.hpp"
 #include "goliath/assets.hpp"
 #include "goliath/material.hpp"
 #include "goliath/texture.hpp"
@@ -13,6 +14,7 @@ namespace ui {
     void tick(float dt);
     void begin();
 
+    void viewport_window(GameView* game_viewport, bool* game_focused);
     bool game_window();
     bool skipped_game_window();
     std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);

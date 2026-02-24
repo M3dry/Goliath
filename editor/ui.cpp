@@ -138,6 +138,37 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
+    void viewport_window(GameView* game_viewport, bool* game_focused) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
+        ImGui::Begin("Viewport 2.0", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        // if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
+        //     node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
+        // }
+
+        *game_focused = false;
+        if (ImGui::BeginTabBar("viewport_tabbar", ImGuiTabBarFlags_Reorderable)) {
+            if (ImGui::BeginTabItem("Scene")) {
+                ImGui::Text("Scene viewport");
+                ImGui::EndTabItem();
+            }
+
+            if (game_viewport && ImGui::BeginTabItem("Game")) {
+                game_viewport->process_pane(ImGui::GetContentRegionAvail());
+                *game_focused = game_viewport->draw_pane();
+                ImGui::EndTabItem();
+            } else if (game_viewport) {
+                game_viewport->process_pane(ImVec2{0,0});
+            }
+
+            ImGui::EndTabBar();
+        } else if (game_viewport) {
+            game_viewport->process_pane(ImVec2{0,0});
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+    }
+
     bool game_window() {
         auto curr_frame = engine::get_current_frame();
         auto& game_window_ = game_windows[curr_frame];
@@ -759,9 +790,9 @@ namespace ui {
                                     payload != nullptr && payload->IsDelivery()) {
                                     auto gid = *(engine::textures::gid*)payload->Data;
 
+                                    engine::textures::release(data_ptr, 1);
                                     *data_ptr = gid;
-                                    // TODO: acquire texture @gid, then release current texture @*data_ptr - move
-                                    // material textures from gpu group to a separate thing
+                                    engine::textures::acquire(data_ptr, 1);
                                 }
 
                                 ImGui::EndDragDropTarget();
