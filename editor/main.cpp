@@ -8,6 +8,7 @@
 #include "goliath/engine.hpp"
 #include "goliath/event.hpp"
 #include "goliath/exvar.hpp"
+#include "goliath/game_interface2.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/materials.hpp"
 #include "goliath/models.hpp"
@@ -168,6 +169,9 @@ int main(int argc, char** argv) {
     GameView::init();
 
     std::optional<LoadedGame> game{};
+
+    bool scene_viewport_focused = false;
+    GameView scene_viewport{};
     GameView game_viewport{};
 
     auto state_json = engine::util::read_json(project::editor_state);
@@ -403,7 +407,14 @@ int main(int argc, char** argv) {
             }
             ImGui::End();
 
-            if ((ui::game_window() || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
+            if (game) {
+                game->game.draw_game_imgui();
+            }
+
+            ui::viewport_window(scene_viewport, scene_viewport_focused, game ? &game_viewport : nullptr,
+                                game ? &game->focused : nullptr);
+
+            if ((scene_viewport_focused || !lock_cam) && ImGui::IsKeyDown(ImGuiKey_LeftShift) &&
                 ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 lock_cam = !lock_cam;
                 exvar_reg.modified();
@@ -411,12 +422,6 @@ int main(int argc, char** argv) {
                 glfwSetInputMode(engine::window(), GLFW_CURSOR, lock_cam ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
                 engine::imgui::enable(lock_cam);
             }
-
-
-            if (game) {
-                game->game.draw_game_imgui();
-            }
-            ui::viewport_window(game ? &game_viewport : nullptr, game ? &game->focused : nullptr);
 
             if (ImGui::BeginMainMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
@@ -662,28 +667,11 @@ int main(int argc, char** argv) {
             engine::visbuffer::get_offsets(visbuffer, engine::get_current_frame());
             engine::visbuffer::write_fragment_ids(visbuffer, draw_id_buffer.address(), engine::get_current_frame());
 
-            VkImageMemoryBarrier2 target_barrier{};
-            target_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            target_barrier.pNext = nullptr;
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            target_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            target_barrier.image = target_images[engine::get_current_frame()].image;
-            target_barrier.subresourceRange = VkImageSubresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            target_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            auto& target = target_images[engine::get_current_frame()];
 
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(target.transition(
+                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT));
             engine::synchronization::end_barriers();
 
             engine::rendering::mark("Editor: visbuffer shading");
@@ -728,15 +716,10 @@ int main(int argc, char** argv) {
                 }
             }
 
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT));
             engine::synchronization::end_barriers();
 
             engine::rendering::mark("Editor: scene grid");
@@ -764,15 +747,8 @@ int main(int argc, char** argv) {
             });
             engine::rendering::end();
 
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target_barrier);
+            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT));
             engine::synchronization::end_barriers();
 
             auto pp_set = engine::descriptor::new_set(postprocessing_set_layout);
@@ -804,46 +780,12 @@ int main(int argc, char** argv) {
                 .group_count_z = 1,
             });
 
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            target_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
-            engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target_barrier);
-            engine::synchronization::end_barriers();
-
-            VkImageBlit2 blit_region{};
-            blit_region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
-            blit_region.srcOffsets[0] = VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
-            };
-            blit_region.srcOffsets[1] = VkOffset3D{
-                .x = (int32_t)engine::get_swapchain_extent().width,
-                .y = (int32_t)engine::get_swapchain_extent().height,
-                .z = 1,
-            };
-            blit_region.srcSubresource = VkImageSubresourceLayers{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            VkBlitImageInfo2 blit_info{};
-            blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
-            blit_info.srcImage = target_images[engine::get_current_frame()].image;
-            blit_info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            blit_info.filter = VK_FILTER_NEAREST;
-            blit_info.regionCount = 1;
-            blit_info.pRegions = &blit_region;
-            engine::rendering::mark("Editor: scene blit");
-            auto game_window_barrier = ui::blit_game_window(blit_info);
-
             if (game && !game_viewport.skipped_window) game_viewport.blit(game->game);
+            if (!scene_viewport.skipped_window)
+                scene_viewport.blit(
+                    engine::game_interface2::GameConfig::LetterBox, glm::vec4{0.0f},
+                    glm::uvec2{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height},
+                    target_images[engine::get_current_frame()]);
 
             engine::rendering::mark("Editor: UI");
             engine::rendering::begin(engine::RenderPass{}.add_color_attachment(
@@ -854,19 +796,11 @@ int main(int argc, char** argv) {
             engine::imgui::render();
             engine::rendering::end();
 
-            target_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            target_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            target_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            target_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            target_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            target_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
             engine::rendering::mark("Editor: culling clear");
             engine::culling::clear_buffers(draw_id_buffer, indirect_draw_buffer);
 
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target_barrier);
-            if (game_window_barrier) engine::synchronization::apply_barrier(*game_window_barrier);
+            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
             engine::synchronization::end_barriers();
 
             engine::rendering::end_mark_block();
@@ -921,6 +855,7 @@ int main(int argc, char** argv) {
     free(depth_image_views);
     free(depth_images);
 
+    scene_viewport.destroy();
     game_viewport.destroy();
     if (game) {
         game->game.unload();

@@ -13,6 +13,123 @@
 #include "project.hpp"
 #include <vulkan/vulkan_core.h>
 
+void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::vec2 src_dims,
+                 engine::GPUImage& src, engine::GPUImage out, glm::uvec2 out_dims) {
+    auto final_stage = out.current_stage;
+    auto final_access = out.current_access;
+    auto final_layout = out.current_layout;
+
+    engine::synchronization::begin_barriers();
+    engine::synchronization::apply_barrier(out.transition(
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
+    engine::synchronization::end_barriers();
+
+    VkClearColorValue clear{};
+    clear.float32[0] = clear_color.x / 255.0f;
+    clear.float32[1] = clear_color.y / 255.0f;
+    clear.float32[2] = clear_color.z / 255.0f;
+    clear.float32[3] = clear_color.w / 255.0f;
+
+    VkImageSubresourceRange range{
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+    };
+
+    vkCmdClearColorImage(engine::get_cmd_buf(), out.image, out.current_layout, &clear, 1, &range);
+
+    auto current_frame = engine::get_current_frame();
+
+    engine::synchronization::begin_barriers();
+    engine::synchronization::apply_barrier(out.transition(
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
+    engine::synchronization::apply_barrier(src.transition(
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT));
+    engine::synchronization::end_barriers();
+
+    VkImageBlit2 region{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
+        .pNext = nullptr,
+        .srcSubresource =
+            VkImageSubresourceLayers{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        .srcOffsets =
+            {
+                VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                },
+                VkOffset3D{
+                    .x = (int32_t)src_dims.x,
+                    .y = (int32_t)src_dims.y,
+                    .z = 1,
+                },
+            },
+        .dstSubresource =
+            VkImageSubresourceLayers{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
+    if (strategy == engine::game_interface2::GameConfig::Stretch) {
+        region.dstOffsets[0] = VkOffset3D{
+            .x = 0,
+            .y = 0,
+            .z = 0,
+        };
+        region.dstOffsets[1] = VkOffset3D{
+            .x = (int32_t)out_dims.x,
+            .y = (int32_t)out_dims.y,
+            .z = 1,
+        };
+    } else if (strategy == engine::game_interface2::GameConfig::LetterBox) {
+        float scale = std::min(out_dims.x / src_dims.x, out_dims.y / src_dims.y);
+        if (scale > 1.0f) {
+            scale = floor(scale);
+        }
+
+        src_dims *= scale;
+        auto offset = (glm::vec2{out_dims} - src_dims) * 0.5f;
+
+        region.dstOffsets[0] = VkOffset3D{
+            .x = (int32_t)offset.x,
+            .y = (int32_t)offset.y,
+            .z = 0,
+        };
+        region.dstOffsets[1] = VkOffset3D{
+            .x = (int32_t)offset.x + (int32_t)src_dims.x,
+            .y = (int32_t)offset.y + (int32_t)src_dims.y,
+            .z = 1,
+        };
+    }
+
+    VkBlitImageInfo2 blit_info{
+        .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
+        .pNext = nullptr,
+        .srcImage = src.image,
+        .srcImageLayout = src.current_layout,
+        .dstImage = out.image,
+        .dstImageLayout = out.current_layout,
+        .regionCount = 1,
+        .pRegions = &region,
+        .filter = VK_FILTER_NEAREST,
+    };
+    vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+
+    engine::synchronization::begin_barriers();
+    engine::synchronization::apply_barrier(out.transition(final_layout, final_stage, final_access));
+    engine::synchronization::end_barriers();
+}
+
 void rebuild_target(engine::GPUImage* targets, VkImageView* target_views, glm::uvec2 target_dimensions,
                     engine::game_interface2::GameConfig config) {
     vkDeviceWaitIdle(engine::device());
@@ -79,7 +196,8 @@ Game Game::make(engine::game_interface2::GameConfig config) {
 
     game.assets = engine::Assets::init(game.config.asset_inputs);
     auto asset_inputs_json = engine::util::read_json(project::asset_inputs);
-    if (!asset_inputs_json.has_value() && asset_inputs_json.error() == engine::util::ReadJsonErr::FileErr && !std::filesystem::exists(project::asset_inputs)) {
+    if (!asset_inputs_json.has_value() && asset_inputs_json.error() == engine::util::ReadJsonErr::FileErr &&
+        !std::filesystem::exists(project::asset_inputs)) {
         asset_inputs_json = engine::Assets::default_json();
     } else if (!asset_inputs_json.has_value()) {
         printf("Asset inputs file is corrupted\n");
@@ -198,160 +316,16 @@ uint32_t Game::render(glm::uvec2 game_window_dims) {
 }
 
 void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
-    auto final_stage = out.current_stage;
-    auto final_access = out.current_access;
-    auto final_layout = out.current_layout;
-
-    engine::synchronization::begin_barriers();
-    engine::synchronization::apply_barrier(out.transition(
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
-    engine::synchronization::end_barriers();
-
-    VkClearColorValue clear{};
-    clear.float32[0] = config.clear_color.x / 255.0f;
-    clear.float32[1] = config.clear_color.y / 255.0f;
-    clear.float32[2] = config.clear_color.z / 255.0f;
-    clear.float32[3] = config.clear_color.w / 255.0f;
-
-    VkImageSubresourceRange range{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-    };
-
-    vkCmdClearColorImage(engine::get_cmd_buf(), out.image, out.current_layout, &clear, 1, &range);
-
     auto current_frame = engine::get_current_frame();
     auto src = targets[current_frame];
 
-    engine::synchronization::begin_barriers();
-    engine::synchronization::apply_barrier(out.transition(
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
-    engine::synchronization::apply_barrier(src.transition(
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT));
-    engine::synchronization::end_barriers();
-
-    VkImageBlit2 region{};
-    if (config.target_dimensions == glm::uvec2{0, 0} ||
-        config.target_blit_strategy == engine::game_interface2::GameConfig::Stretch) {
-        region = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
-            .pNext = nullptr,
-            .srcSubresource =
-                VkImageSubresourceLayers{
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = 0,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            .srcOffsets =
-                {
-                    VkOffset3D{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    VkOffset3D{
-                        .x = (int32_t)target_dimensions.x,
-                        .y = (int32_t)target_dimensions.y,
-                        .z = 1,
-                    },
-                },
-            .dstSubresource =
-                VkImageSubresourceLayers{
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = 0,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            .dstOffsets =
-                {
-                    VkOffset3D{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    VkOffset3D{
-                        .x = (int32_t)out_dims.x,
-                        .y = (int32_t)out_dims.y,
-                        .z = 1,
-                    },
-                },
-        };
-    } else if (config.target_blit_strategy == engine::game_interface2::GameConfig::LetterBox) {
-        glm::vec2 src_dims = target_dimensions;
-        glm::vec2 dst_dims = out_dims;
-        float scale = std::min(dst_dims.x / src_dims.x, dst_dims.y / src_dims.y);
-        if (scale > 1.0f) {
-            scale = floor(scale);
-        }
-
-        src_dims *= scale;
-        glm::vec2 offset = (dst_dims - src_dims) * 0.5f;
-
-        VkImageBlit2 blit_region{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2,
-            .pNext = nullptr,
-            .srcSubresource =
-                VkImageSubresourceLayers{
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = 0,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            .srcOffsets =
-                {
-                    VkOffset3D{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    VkOffset3D{
-                        .x = (int32_t)target_dimensions.x,
-                        .y = (int32_t)target_dimensions.y,
-                        .z = 1,
-                    },
-                },
-            .dstSubresource =
-                VkImageSubresourceLayers{
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = 0,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            .dstOffsets =
-                {
-                    VkOffset3D{
-                        .x = (int32_t)offset.x,
-                        .y = (int32_t)offset.y,
-                        .z = 0,
-                    },
-                    VkOffset3D{
-                        .x = (int32_t)(offset.x + src_dims.x),
-                        .y = (int32_t)(offset.y + src_dims.y),
-                        .z = 1,
-                    },
-                },
-        };
-    }
-
-    VkBlitImageInfo2 blit_info{
-        .sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2,
-        .pNext = nullptr,
-        .srcImage = src.image,
-        .srcImageLayout = src.current_layout,
-        .dstImage = out.image,
-        .dstImageLayout = out.current_layout,
-        .regionCount = 1,
-        .pRegions = &region,
-        .filter = VK_FILTER_NEAREST,
-    };
-    vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
+    blit_target(config.target_dimensions == glm::uvec2{0, 0} ||
+                        config.target_blit_strategy == engine::game_interface2::GameConfig::Stretch
+                    ? engine::game_interface2::GameConfig::Stretch
+                    : engine::game_interface2::GameConfig::LetterBox,
+                config.clear_color, target_dimensions, src, out, out_dims);
 
     engine::synchronization::begin_barriers();
-    engine::synchronization::apply_barrier(out.transition(final_layout, final_stage, final_access));
     engine::synchronization::apply_barrier(
         src.transition(config.target_start_layout, config.target_start_stage, config.target_start_access));
     engine::synchronization::end_barriers();
@@ -404,19 +378,23 @@ void GameView::process_pane(ImVec2 avail) {
     }
 }
 
-bool GameView::draw_pane() {
+void GameView::draw_pane() {
     if (!skipped_window) {
         auto dim = dimensions[engine::get_current_frame()];
         ImGui::Image(textures[engine::get_current_frame()], ImVec2{(float)dim.x, (float)dim.y});
-        return ImGui::IsItemFocused();
     }
-
-    return false;
 }
 
 void GameView::blit(Game& game) {
     auto curr_frame = engine::get_current_frame();
     game.blit_game_target(images[curr_frame], dimensions[curr_frame]);
+}
+
+void GameView::blit(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color,
+                    glm::uvec2 src_dims, engine::GPUImage& src) {
+    auto curr_frame = engine::get_current_frame();
+
+    blit_target(strategy, clear_color, src_dims, src, images[curr_frame], dimensions[curr_frame]);
 }
 
 void GameView::init() {

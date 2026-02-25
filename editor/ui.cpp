@@ -138,31 +138,113 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
-    void viewport_window(GameView* game_viewport, bool* game_focused) {
+    void viewport_window(GameView& scene_viewport, bool& scene_focused, GameView* game_viewport, bool* game_focused) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
         ImGui::Begin("Viewport 2.0", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        // if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
-        //     node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
-        // }
+        if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
+            node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
+        }
 
-        *game_focused = false;
+        scene_focused = false;
+        if (game_focused) *game_focused = false;
         if (ImGui::BeginTabBar("viewport_tabbar", ImGuiTabBarFlags_Reorderable)) {
             if (ImGui::BeginTabItem("Scene")) {
-                ImGui::Text("Scene viewport");
+                ImVec2 win_pos = ImGui::GetWindowPos();
+                ImVec2 cursor = ImGui::GetCursorPos();
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+
+                scene_viewport.process_pane(avail);
+                scene_viewport.draw_pane();
+                scene_focused = ImGui::IsWindowFocused();
+
+                if (ImGui::BeginDragDropTarget()) {
+                    auto payload = ImGui::AcceptDragDropPayload("model");
+                    if (payload != nullptr && payload->IsDelivery()) {
+                        auto gid = *(engine::models::gid*)payload->Data;
+                        scene::add_instance(gid);
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+
+                ImVec2 gizmo_offset{win_pos.x + cursor.x, win_pos.y + cursor.y};
+                avail.x -= cursor.x;
+                avail.y -= cursor.y;
+                auto scale = ImViewGuizmo::GetStyle().scale;
+
+                // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward =
+                // +Z
+                static const glm::mat4 GL_TO_GIZMO = glm::mat4{1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
+
+                static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
+
+                auto cam_info = scene::camera();
+                glm::mat4 view_gizmo = GL_TO_GIZMO * cam_info.cam.view() * GIZMO_TO_GL;
+                auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
+                auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam_info.cam.position, 1.0f}};
+
+                bool changed =
+                    ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
+                                         ImVec2{gizmo_offset.x + (avail.x - scale * 90), gizmo_offset.y + scale * 90});
+                changed |= ImViewGuizmo::Pan(
+                    gizmo_pos, gizmo_quat,
+                    ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10), gizmo_offset.y + (avail.y - scale * 50 - 10)});
+                changed |= ImViewGuizmo::Dolly(gizmo_pos, gizmo_quat,
+                                               ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10),
+                                                      gizmo_offset.y + (avail.y - scale * 50 - 10 - scale * 50 - 10)});
+
+                if (changed) {
+                    cam_info.cam._orientation =
+                        glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
+                    cam_info.cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
+
+                    cam_info.cam.update_matrices();
+                    scene::update_camera(cam_info);
+                }
+
+                if (scene::selected_instance() != -1) {
+                    auto win_pos = ImGui::GetWindowPos();
+
+                    changed = false;
+                    ImGuizmo::SetOrthographic(false);
+                    ImGuizmo::AllowAxisFlip(false);
+                    ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
+                                      win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
+                    ImGuizmo::SetDrawlist();
+
+                    auto proj = cam_info.cam._projection;
+                    proj[1][1] *= -1;
+                    changed |= ImGuizmo::Manipulate(
+                        glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj),
+                        ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
+                        glm::value_ptr(
+                            engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()]));
+
+                    if (changed) {
+                        engine::scenes::update_transforms_buffer(scene::selected_scene());
+                        scene::update_camera(cam_info);
+                        update_instance_transform();
+                    }
+                }
+
                 ImGui::EndTabItem();
+            } else {
+                scene_viewport.process_pane(ImVec2{0,0});
             }
 
             if (game_viewport && ImGui::BeginTabItem("Game")) {
                 game_viewport->process_pane(ImGui::GetContentRegionAvail());
-                *game_focused = game_viewport->draw_pane();
+                game_viewport->draw_pane();
+                *game_focused = ImGui::IsWindowFocused();
+
                 ImGui::EndTabItem();
             } else if (game_viewport) {
                 game_viewport->process_pane(ImVec2{0,0});
             }
 
             ImGui::EndTabBar();
-        } else if (game_viewport) {
-            game_viewport->process_pane(ImVec2{0,0});
+        } else {
+            scene_viewport.process_pane(ImVec2{0,0});
+            if (game_viewport) game_viewport->process_pane(ImVec2{0,0});
         }
 
         ImGui::End();

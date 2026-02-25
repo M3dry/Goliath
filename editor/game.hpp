@@ -63,8 +63,9 @@ struct GameView {
     GameView();
 
     void process_pane(ImVec2 avail);
-    bool draw_pane();
+    void draw_pane();
     void blit(Game& game);
+    void blit(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::uvec2 src_dims, engine::GPUImage& src);
 
     static void init();
     void destroy();
