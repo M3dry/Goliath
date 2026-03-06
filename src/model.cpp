@@ -409,6 +409,7 @@ namespace engine::model {
         std::memcpy(&model, ctx, sizeof(void*));
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
+        auto data_start = data;
         for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
             auto mesh_ix = model->mesh_indexes[i];
             const auto& mesh = model->meshes[mesh_ix];
@@ -428,6 +429,7 @@ namespace engine::model {
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             data += model->meshes[i].upload_data(data);
         }
+        printf("written: %ld, size: %d\n", data - data_start, size);
 
         free(ctx);
     };

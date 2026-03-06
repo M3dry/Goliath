@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "project.hpp"
+#include "textures.hpp"
 #include <vulkan/vulkan_core.h>
 
 void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::vec2 src_dims,
@@ -194,7 +195,7 @@ Game Game::make(engine::game_interface2::GameConfig config) {
     game.config.funcs.__engine_set_visbuffer_state(engine::visbuffer::get_internal_state());
     game.config.funcs.__engine_set_vma_ptrs(engine::vma_ptrs::get_internal_state());
 
-    game.assets = engine::Assets::init(game.config.asset_inputs);
+    game.assets = engine::Assets::init(game.config.asset_inputs, game_textures);
     auto asset_inputs_json = engine::util::read_json(project::asset_inputs);
     if (!asset_inputs_json.has_value() && asset_inputs_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::asset_inputs)) {
@@ -215,7 +216,7 @@ Game Game::make(engine::game_interface2::GameConfig config) {
         rebuild_target(game.targets, game.target_views, game.target_dimensions, game.config);
     }
 
-    game.es = engine::game_interface2::make_engine_service(&game.assets);
+    game.es = engine::game_interface2::make_engine_service(&game.assets, game_textures);
     game.fs = engine::game_interface2::make_frame_service(&game.assets);
     game.ts = engine::game_interface2::make_tick_service();
     return game;

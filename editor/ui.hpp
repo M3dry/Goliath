@@ -3,8 +3,6 @@
 #include "game.hpp"
 #include "goliath/assets.hpp"
 #include "goliath/material.hpp"
-#include "goliath/texture.hpp"
-#include "imgui.h"
 #include "goliath/models.hpp"
 #include <vulkan/vulkan_core.h>
 
@@ -18,11 +16,11 @@ namespace ui {
 
     void assets_pane();
     void assets_entry_pre(engine::models::gid gid, uint32_t ix);
-    void assets_entry_pre(engine::textures::gid gid, uint32_t ix);
+    void assets_entry_pre(engine::Textures::gid gid, uint32_t ix);
     void assets_entry_post(engine::models::gid gid, uint32_t ix);
-    void assets_entry_post(engine::textures::gid gid, uint32_t ix);
+    void assets_entry_post(engine::Textures::gid gid, uint32_t ix);
     void assets_entry_drag_preview(engine::models::gid gid);
-    void assets_entry_drag_preview(engine::textures::gid gid);
+    void assets_entry_drag_preview(engine::Textures::gid gid);
 
     void instances_pane();
     size_t instance_entry(size_t scene_ix, size_t instance_ix);

@@ -124,7 +124,8 @@ namespace engine::models {
         {
             const auto& ext = orig_path.extension();
             auto path = models_directory / make_model_path(gid);
-            constexpr auto image_fn = [](std::span<uint8_t> data, int width, int height, VkFormat format, const std::string& name, Sampler sampler) {
+            constexpr auto image_fn = [](std::span<uint8_t> data, int width, int height, VkFormat format,
+                                         const std::string& name, Sampler sampler) {
                 return texs->add(data, width, height, format, name, sampler);
             };
             if (ext == ".glb") {
@@ -147,7 +148,6 @@ namespace engine::models {
 
             free(save_data);
         }
-        printf("finished adding model @%s\n", orig_path.c_str());
 
         if (generations[gid.id()] != gid.gen()) {
             std::filesystem::remove(models_directory /

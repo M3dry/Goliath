@@ -14,6 +14,7 @@ SET(EDITOR_SOURCES
     exvars.cpp
     state.cpp
     game.cpp
+    textures.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})

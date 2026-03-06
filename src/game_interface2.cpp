@@ -202,7 +202,7 @@ namespace engine::game_interface2 {
             .fullscreen = config.fullscreen,
         });
 
-        auto* textures = asset_paths.textures_dir == nullptr ? Textures::make(asset_paths.textures_dir) : nullptr;
+        auto* textures = asset_paths.textures_dir != nullptr ? Textures::make(asset_paths.textures_dir) : nullptr;
         auto assets = Assets::init(config.asset_inputs, textures);
 
         if (asset_paths.models_dir) {

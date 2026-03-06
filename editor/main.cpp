@@ -21,10 +21,10 @@
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "project.hpp"
 #include "scene.hpp"
 #include "state.hpp"
+#include "textures.hpp"
 #include "ui.hpp"
 #include <GLFW/glfw3.h>
 #include <cctype>
@@ -160,12 +160,13 @@ int main(int argc, char** argv) {
         .window_name = "Goliath editor",
         .texture_capacity = 1000,
         .fullscreen = false,
-        .textures_directory = project::textures_directory,
-        .models_directory = project::models_directory,
     });
     glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
+    game_textures = engine::Textures::make(project::textures_directory.c_str());
+    engine::materials::init();
+    engine::models::init(project::models_directory, game_textures);
     GameView::init();
 
     std::optional<LoadedGame> game{};
@@ -199,7 +200,7 @@ int main(int argc, char** argv) {
     }
 
     engine::samplers::load((*tex_reg_json)["samplers"]);
-    engine::textures::load((*tex_reg_json)["textures"]);
+    game_textures->load((*tex_reg_json)["textures"]);
 
     auto mats_json = engine::util::read_json(project::materials);
     if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -287,7 +288,7 @@ int main(int argc, char** argv) {
                                     .shader(pbr_module)
                                     .descriptor_layout(0, engine::visbuffer::shading_layout())
                                     .descriptor_layout(1, pbr_shading_set_layout)
-                                    .descriptor_layout(2, engine::textures::get_texture_pool().set_layout)
+                                    .descriptor_layout(2, game_textures->get_texture_pool().set_layout)
                                     .push_constant(PBRPC::size));
 
     uint32_t fullscreen_triangle_spv_size;
@@ -555,10 +556,10 @@ int main(int argc, char** argv) {
                 o << engine::materials::save();
             }
 
-            if (engine::textures_to_save()) {
+            if (game_textures->want_to_save()) {
                 std::ofstream o{project::textures_registry};
                 o << nlohmann::json{
-                    {"textures", engine::textures::save()},
+                    {"textures", game_textures->save()},
                     {"samplers", engine::samplers::save()},
                 };
             }
@@ -584,6 +585,7 @@ int main(int argc, char** argv) {
             }
         }
 
+        game_textures->process_uploads();
         if (engine::prepare_frame()) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
@@ -707,7 +709,7 @@ int main(int argc, char** argv) {
                             {
                                 shading.vis_and_target_set,
                                 pbr_shading_set,
-                                engine::textures::get_texture_pool().set,
+                                game_textures->get_texture_pool().set,
                                 engine::descriptor::null_set,
                             },
                         .indirect_buffer = visbuffer.stages,
@@ -866,6 +868,9 @@ int main(int argc, char** argv) {
     scene::destroy();
 
     engine::culling::destroy();
+    engine::models::destroy();
+    engine::materials::destroy();
+    delete game_textures;
     engine::destroy();
 
     exvar_reg.destroy();

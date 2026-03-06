@@ -182,7 +182,7 @@ namespace engine {
         delete impl;
     }
 
-    bool Textures::process_uploads() {
+    void Textures::process_uploads() {
         std::vector<upload_task> upload_tasks{};
         impl->upload_queue.drain(upload_tasks);
 
@@ -237,9 +237,7 @@ namespace engine {
             return found;
         });
 
-        initialized |= want_save;
-        want_save = false;
-        return initialized;
+        want_save |= initialized;
     }
 
     void Textures::rebuild_pool() {
@@ -513,6 +511,12 @@ namespace engine {
 
     std::span<std::string> Textures::get_names() {
         return names;
+    }
+
+    bool Textures::want_to_save() {
+        auto res = want_save;
+        want_save = false;
+        return res;
     }
 
     void Textures::modified() {

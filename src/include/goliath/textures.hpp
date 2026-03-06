@@ -1,6 +1,5 @@
 #pragma once
 
-#include "goliath/mspc_queue.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/texture_pool.hpp"
@@ -70,9 +69,10 @@ namespace engine {
         const TexturePool& get_texture_pool() const;
         std::span<std::string> get_names();
 
+        bool want_to_save();
         void modified();
 
-        bool process_uploads();
+        void process_uploads();
       private:
         Textures(const char* textures_directry, size_t texture_capacity = 1000);
 

@@ -725,13 +725,6 @@ namespace engine {
         return res;
     }
 
-    bool textures_to_save() {
-        assert(!shared_state);
-        auto res = state->textures_to_save_;
-        state->textures_to_save_ = false;
-        return res;
-    }
-
     bool drawing_prepared() {
         return state->_drawing_prepared;
     }

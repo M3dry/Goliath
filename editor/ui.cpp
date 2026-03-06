@@ -6,6 +6,7 @@
 #include "goliath/scenes.hpp"
 #include "goliath/textures.hpp"
 #include "state.hpp"
+#include "textures.hpp"
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #define IMVIEWGUIZMO_IMPLEMENTATION
@@ -224,7 +225,7 @@ namespace ui {
         ImGui::PopStyleVar();
     }
 
-    using scored_entry = std::pair<std::variant<engine::models::gid, engine::textures::gid>, int32_t>;
+    using scored_entry = std::pair<std::variant<engine::models::gid, engine::Textures::gid>, int32_t>;
 
     void score_models(bool current_scene, const std::string& query, std::vector<scored_entry>& out) {
         if (current_scene) {
@@ -249,11 +250,11 @@ namespace ui {
         if (current_scene) {
 
         } else {
-            auto names = engine::textures::get_names();
+            auto names = game_textures->get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
                 auto score = score_search(query, names[i]);
                 if (score > std::numeric_limits<int32_t>::min()) {
-                    out.emplace_back(engine::textures::gid{engine::textures::get_generation(i), i}, score);
+                    out.emplace_back(engine::Textures::gid{game_textures->get_generation(i), i}, score);
                 }
             }
         }
@@ -361,8 +362,8 @@ namespace ui {
         }
     }
 
-    void assets_entry_pre(engine::textures::gid gid, uint32_t ix) {
-        const auto& name = **engine::textures::get_name(gid);
+    void assets_entry_pre(engine::Textures::gid gid, uint32_t ix) {
+        const auto& name = **game_textures->get_name(gid);
         ImGui::TextWrapped("%s", name.c_str());
     }
 
@@ -397,16 +398,16 @@ namespace ui {
         }
     }
 
-    void assets_entry_post(engine::textures::gid gid, uint32_t ix) {
-        const auto& name = **engine::textures::get_name(gid);
+    void assets_entry_post(engine::Textures::gid gid, uint32_t ix) {
+        const auto& name = **game_textures->get_name(gid);
 
         if (ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
             if (ImGui::MenuItem("Rename")) {
                 rename_tmp = name;
                 rename_dst = [gid](const auto& str) {
-                    if (auto name = engine::textures::get_name(gid); name) {
+                    if (auto name = game_textures->get_name(gid); name) {
                         **name = str;
-                        engine::textures::modified();
+                        game_textures->modified();
                     }
                 };
             }
@@ -419,7 +420,7 @@ namespace ui {
         ImGui::SetDragDropPayload("model", &gid, sizeof(gid));
     }
 
-    void assets_entry_drag_preview(engine::textures::gid gid) {
+    void assets_entry_drag_preview(engine::Textures::gid gid) {
         ImGui::SetDragDropPayload("texture", &gid, sizeof(gid));
     }
 
@@ -603,17 +604,17 @@ namespace ui {
 
                             engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
                                                             MatData::dimension);
-                        } else if constexpr (std::same_as<engine::textures::gid, Attr>) {
-                            ImGui::InputText(name.c_str(), *engine::textures::get_name(*data_ptr),
+                        } else if constexpr (std::same_as<engine::Textures::gid, Attr>) {
+                            ImGui::InputText(name.c_str(), *game_textures->get_name(*data_ptr),
                                              ImGuiInputTextFlags_ReadOnly);
                             if (ImGui::BeginDragDropTarget()) {
                                 if (auto payload = ImGui::AcceptDragDropPayload("texture");
                                     payload != nullptr && payload->IsDelivery()) {
-                                    auto gid = *(engine::textures::gid*)payload->Data;
+                                    auto gid = *(engine::Textures::gid*)payload->Data;
 
-                                    engine::textures::release(data_ptr, 1);
+                                    game_textures->release({data_ptr, 1});
                                     *data_ptr = gid;
-                                    engine::textures::acquire(data_ptr, 1);
+                                    game_textures->acquire({data_ptr, 1});
                                 }
 
                                 ImGui::EndDragDropTarget();
@@ -776,18 +777,18 @@ namespace ui {
         if (ImGui::CollapsingHeader("Textures")) {
             for (size_t i = 0; i < texture_names.size(); i++) {
                 auto gid = texture_gids[i];
-                if (gid == engine::textures::gid{}) continue;
+                if (gid == engine::Textures::gid{}) continue;
 
-                auto name = engine::textures::get_name(gid);
+                auto name = game_textures->get_name(gid);
                 if (!name.has_value()) {
-                    assets.set(i, engine::textures::gid{});
+                    assets.set(i, engine::Textures::gid{});
                 }
 
                 ImGui::InputText(texture_names[i].c_str(), *name, ImGuiInputTextFlags_ReadOnly);
                 if (ImGui::BeginDragDropTarget()) {
                     if (auto payload = ImGui::AcceptDragDropPayload("texture");
                         payload != nullptr && payload->IsDelivery()) {
-                        assets.set(i, *(engine::textures::gid*)payload->Data);
+                        assets.set(i, *(engine::Textures::gid*)payload->Data);
                     }
 
                     ImGui::EndDragDropTarget();
