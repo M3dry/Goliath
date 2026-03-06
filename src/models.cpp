@@ -43,6 +43,8 @@ namespace engine::models {
         }
     };
 
+    Textures* texs;
+
     std::vector<std::string> names{};
     std::vector<uint32_t> ref_counts{};
 
@@ -122,10 +124,13 @@ namespace engine::models {
         {
             const auto& ext = orig_path.extension();
             auto path = models_directory / make_model_path(gid);
+            constexpr auto image_fn = [](std::span<uint8_t> data, int width, int height, VkFormat format, const std::string& name, Sampler sampler) {
+                return texs->add(data, width, height, format, name, sampler);
+            };
             if (ext == ".glb") {
-                engine::gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string());
+                engine::gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn);
             } else if (ext == ".gltf") {
-                engine::gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string());
+                engine::gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn);
             } else {
                 std::filesystem::copy(orig_path, path);
                 return;
@@ -184,7 +189,7 @@ namespace engine::models {
         if (upload_gids.size() != 0) {
             for (const auto& gid : upload_gids) {
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
-                    cpu_datas[gid.id()]->acquire_textures();
+                    cpu_datas[gid.id()]->acquire_textures(texs);
 
                     auto& cpu_data = *cpu_datas[gid.id()];
                     engine::gpu_group::begin();
@@ -224,7 +229,8 @@ namespace engine::models {
         return std::nullopt;
     }
 
-    void init(std::filesystem::path models_dir) {
+    void init(std::filesystem::path models_dir, Textures* textures) {
+        texs = textures;
         init_called = true;
         models_directory = models_dir;
     }
@@ -477,7 +483,7 @@ namespace engine::models {
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
             if (cpu_datas[gid.id()]) {
-                cpu_datas[gid.id()]->release_textures();
+                cpu_datas[gid.id()]->release_textures(texs);
                 cpu_datas[gid.id()]->destroy();
             }
             cpu_datas[gid.id()] = std::nullopt;

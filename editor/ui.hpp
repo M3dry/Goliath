@@ -15,11 +15,6 @@ namespace ui {
     void begin();
 
     void viewport_window(GameView& scene_viewport, bool& scene_focused, GameView* game_viewport, bool* game_focused);
-    // bool game_window();
-    // bool skipped_game_window();
-    // std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 src_blit_info);
-    // ImVec2 game_window_size();
-    // engine::GPUImage get_window_image();
 
     void assets_pane();
     void assets_entry_pre(engine::models::gid gid, uint32_t ix);

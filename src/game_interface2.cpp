@@ -17,19 +17,20 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::game_interface2 {
-    EngineService make_engine_service(Assets* assets) {
+    EngineService make_engine_service(Assets* assets, Textures* texs) {
         return EngineService{.assets = EngineService::AssetsServicePtrs{
                                  .assets = assets,
-                                 .acquire_scene = [](auto* a, auto handle) { a->acquire(handle); },
-                                 .acquire_model = [](auto* a, auto handle) { a->acquire(handle); },
-                                 .acquire_texture = [](auto* a, auto handle) { a->acquire(handle); },
-                                 .release_scene = [](auto* a, auto handle) { a->release(handle); },
-                                 .release_model = [](auto* a, auto handle) { a->release(handle); },
-                                 .release_texture = [](auto* a, auto handle) { a->release(handle); },
+                                 .acquire_scene = [](auto* a, auto handle) { ((Assets*)a)->acquire(handle); },
+                                 .acquire_model = [](auto* a, auto handle) { ((Assets*)a)->acquire(handle); },
+                                 .acquire_texture = [](auto* a, auto handle) { ((Assets*)a)->acquire(handle); },
+                                 .release_scene = [](auto* a, auto handle) { ((Assets*)a)->release(handle); },
+                                 .release_model = [](auto* a, auto handle) { ((Assets*)a)->release(handle); },
+                                 .release_texture = [](auto* a, auto handle) { ((Assets*)a)->release(handle); },
                              },
                              .textures = EngineService::TexturesServicePtrs{
-                                 .name = [](auto gid, auto* err, auto* erred) -> std::string* {
-                                     auto res = textures::get_name(gid);
+                                 .textures = texs,
+                                 .name = [](auto* t, auto gid, auto* err, auto* erred) -> std::string* {
+                                     auto res = ((Textures*)t)->get_name(gid);
                                      *erred = !res.has_value();
                                      if (!res) {
                                          *err = res.error();
@@ -38,18 +39,8 @@ namespace engine::game_interface2 {
 
                                      return *res;
                                  },
-                                 .image = [](auto gid, auto* err, auto* erred) -> GPUImage {
-                                     auto res = textures::get_image(gid);
-                                     *erred = !res.has_value();
-                                     if (!res) {
-                                         *err = res.error();
-                                         return GPUImage{};
-                                     }
-
-                                     return *res;
-                                 },
-                                 .image_view = [](auto gid, auto* err, auto* erred) -> VkImageView {
-                                     auto res = textures::get_image_view(gid);
+                                 .image = [](auto* t,auto gid, auto* err, auto* erred) -> VkImage {
+                                     auto res = ((Textures*)t)->get_image(gid);
                                      *erred = !res.has_value();
                                      if (!res) {
                                          *err = res.error();
@@ -58,7 +49,17 @@ namespace engine::game_interface2 {
 
                                      return *res;
                                  },
-                                 .texture_pool = []() { return &textures::get_texture_pool(); },
+                                 .image_view = [](auto* t,auto gid, auto* err, auto* erred) -> VkImageView {
+                                     auto res = ((Textures*)t)->get_image_view(gid);
+                                     *erred = !res.has_value();
+                                     if (!res) {
+                                         *err = res.error();
+                                         return nullptr;
+                                     }
+
+                                     return *res;
+                                 },
+                                 .texture_pool = [](auto* t) { return &((Textures*)t)->get_texture_pool(); },
                              },
                              .materials = EngineService::MaterialsServicePtrs{
                                  .instance_data =
@@ -199,13 +200,16 @@ namespace engine::game_interface2 {
         init(Init{
             .window_name = config.name,
             .fullscreen = config.fullscreen,
-            .textures_directory =
-                asset_paths.textures_dir == nullptr ? std::nullopt : std::make_optional(asset_paths.textures_dir),
-            .models_directory =
-                asset_paths.models_dir == nullptr ? std::nullopt : std::make_optional(asset_paths.models_dir),
         });
 
-        auto assets = Assets::init(config.asset_inputs);
+        auto* textures = asset_paths.textures_dir == nullptr ? Textures::make(asset_paths.textures_dir) : nullptr;
+        auto assets = Assets::init(config.asset_inputs, textures);
+
+        if (asset_paths.models_dir) {
+            models::init(asset_paths.models_dir, textures);
+            materials::init();
+        }
+
         if (asset_paths.asset_inputs != nullptr) {
             auto asset_inputs_json = util::read_json(asset_paths.asset_inputs);
             if (!asset_inputs_json.has_value() && asset_inputs_json.error() == util::ReadJsonErr::FileErr &&
@@ -219,6 +223,8 @@ namespace engine::game_interface2 {
         }
 
         if (asset_paths.textures_reg != nullptr) {
+            assert(textures != nullptr);
+
             auto tex_reg_json = util::read_json(asset_paths.textures_reg);
             if (!tex_reg_json.has_value() && tex_reg_json.error() == util::ReadJsonErr::FileErr &&
                 !std::filesystem::exists(asset_paths.textures_reg)) {
@@ -232,7 +238,7 @@ namespace engine::game_interface2 {
             }
 
             samplers::load((*tex_reg_json)["samplers"]);
-            textures::load((*tex_reg_json)["textures"]);
+            textures->load((*tex_reg_json)["textures"]);
         }
 
         if (asset_paths.materials != nullptr) {
@@ -274,7 +280,7 @@ namespace engine::game_interface2 {
             scenes::load(*scenes_json);
         }
 
-        auto es = make_engine_service(&assets);
+        auto es = make_engine_service(&assets, textures);
         auto fs = make_frame_service(&assets);
         auto ts = make_tick_service();
 
@@ -588,6 +594,10 @@ namespace engine::game_interface2 {
             gpu_image_view::destroy(target_views[i]);
             gpu_image::destroy(targets[i]);
         }
+
+        models::destroy();
+        materials::destroy();
+        delete textures;
 
         destroy();
     }

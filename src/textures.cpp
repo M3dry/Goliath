@@ -2,7 +2,6 @@
 #include "goliath/mspc_queue.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/thread_pool.hpp"
-#include "textures_.hpp"
 
 #include "xxHash/xxhash.h"
 
@@ -17,71 +16,31 @@ struct Metadata {
     VkFormat format;
 };
 
-namespace engine::textures {
-    bool want_save = false;
-    bool init_called = false;
-    std::filesystem::path texture_directory{};
-
-    std::filesystem::path make_texture_path(gid gid) {
+namespace engine {
+    std::filesystem::path make_texture_path(Textures::gid gid) {
         return std::format("{:02X}{:06X}.goi", (uint8_t)gid.gen(), gid.id());
     }
 
-    void to_json(nlohmann::json& j, const gid& gid) {
+    void to_json(nlohmann::json& j, const Textures::gid& gid) {
         j = gid.value;
     }
 
-    void from_json(const nlohmann::json& j, gid& gid) {
+    void from_json(const nlohmann::json& j, Textures::gid& gid) {
         gid.value = j;
     }
 
-    TexturePool texture_pool;
-
-    std::vector<std::string> names{};
-    std::vector<uint8_t> generations{};
-    std::vector<bool> deleted{};
-
-    std::vector<uint32_t> ref_counts{};
-    std::vector<GPUImage> gpu_images{};
-    std::vector<VkImageView> gpu_image_views{};
-    std::vector<uint32_t> samplers{};
-
-    std::vector<gid> initializing_textures{};
-    static constexpr std::size_t initialized_queue_size = 32;
-    MSPCQueue<gid, initialized_queue_size> initialized_queue;
+    struct Metadata {
+        uint32_t width;
+        uint32_t height;
+        VkFormat format;
+    };
 
     struct upload_task {
-        gid gid;
+        Textures::gid gid;
         uint8_t* image_data;
         uint32_t image_size;
         Metadata metadata;
     };
-
-    static constexpr std::size_t upload_queue_size = 64;
-    MSPCQueue<upload_task, upload_queue_size> upload_queue;
-    std::deque<std::pair<transport2::ticket, gid>> finalize_queue{};
-    std::mutex gid_read{};
-
-    std::optional<gid> find_empty_gid() {
-        for (uint32_t i = 0; i < deleted.size(); i++) {
-            if (deleted[i]) {
-                return gid{generations[i], i};
-            }
-        }
-
-        return std::nullopt;
-    }
-
-    void set_default_texture(gid gid) {
-        if (generations[gid.id()] != gid.gen()) return;
-
-        texture_pool.update(gid.id(), gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            samplers::get(samplers[0]));
-    }
-
-    bool is_initializing(gid gid) {
-        return std::find(initializing_textures.begin(), initializing_textures.end(), gid) !=
-               initializing_textures.end();
-    }
 
     struct task {
         enum Type {
@@ -90,83 +49,104 @@ namespace engine::textures {
         };
 
         Type type;
-        gid gid;
+        Textures* texs;
+        Textures::gid gid;
         std::filesystem::path orig_path;
     };
 
-    void load_texture_data(gid gid, uint8_t*& image_data, uint32_t& image_size, Metadata& metadata) {
-        std::lock_guard locK{gid_read};
-
-        if (generations[gid.id()] != gid.gen()) return;
-
-        auto path = texture_directory / make_texture_path(gid);
-
-        std::ifstream file{path, std::ios::binary | std::ios::ate};
-        auto size_signed = file.tellg();
-        if (size_signed < 0) {
-            printf("trying to load gid{.gen = %d, .id = %d}\n", gid.gen(), gid.id());
-            fflush(stdout);
-            assert(false && "texture somehow isn't on disk");
+    struct textures::TexturesImpl {
+        static TexturesImpl* make() {
+            return new TexturesImpl{};
         }
 
-        image_size = (uint32_t)size_signed - sizeof(Metadata);
-        image_data = (uint8_t*)malloc(image_size);
+        static constexpr std::size_t upload_queue_size = 64;
+        MSPCQueue<upload_task, upload_queue_size> upload_queue{};
 
-        file.seekg(0, std::ios::beg);
-        file.read((char*)&metadata, sizeof(Metadata));
-        file.read((char*)image_data, image_size);
-    }
+        std::vector<Textures::gid> initializing_textures{};
+        static constexpr std::size_t initialized_queue_size = 32;
+        MSPCQueue<Textures::gid, initialized_queue_size> initialized_queue{};
 
-    void add_texture(gid gid, std::filesystem::path orig_path) {
-        std::lock_guard locK{gid_read};
+        std::mutex gid_read{};
 
-        if (orig_path.extension() == ".goi") {
-            std::filesystem::copy(orig_path, texture_directory / make_texture_path(gid));
-        } else {
-            auto img = Image::load8((const char*)orig_path.c_str());
-
-            auto path = texture_directory / make_texture_path(gid);
-            Metadata metadata{
-                .width = img.width,
-                .height = img.height,
-                .format = img.format,
-            };
-
-            std::ofstream file{path, std::ios::binary};
-            file.write((const char*)&metadata, sizeof(Metadata));
-            file.write((const char*)img.data, img.size);
-            file.flush();
-
-            img.destroy();
+        bool is_initializing(Textures::gid gid) {
+            return std::find(initializing_textures.begin(), initializing_textures.end(), gid) !=
+                   initializing_textures.end();
         }
-    }
 
-    auto io_pool = make_thread_pool([](task&& task) {
-        switch (task.type) {
-            case task::Acquire: {
-                while (is_initializing(task.gid)) {
-                    _mm_pause();
-                }
+        void load_texture_data(Textures& texs, Textures::gid gid, uint8_t*& image_data, uint32_t& image_size, Metadata& metadata) {
+            std::lock_guard locK{gid_read};
 
-                upload_task up_task{
-                    .gid = task.gid,
-                };
-                load_texture_data(task.gid, up_task.image_data, up_task.image_size, up_task.metadata);
-                upload_queue.enqueue(up_task);
-                break;
+            if (texs.generations[gid.id()] != gid.gen()) return;
+
+            auto path = texs.texture_directory / make_texture_path(gid);
+
+            std::ifstream file{path, std::ios::binary | std::ios::ate};
+            auto size_signed = file.tellg();
+            if (size_signed < 0) {
+                printf("trying to load gid{.gen = %d, .id = %d}\n", gid.gen(), gid.id());
+                fflush(stdout);
+                assert(false && "texture somehow isn't on disk");
             }
-            case task::Add:
-                add_texture(task.gid, task.orig_path);
-                initialized_queue.enqueue(task.gid);
-                break;
+
+            image_size = (uint32_t)size_signed - sizeof(Metadata);
+            image_data = (uint8_t*)malloc(image_size);
+
+            file.seekg(0, std::ios::beg);
+            file.read((char*)&metadata, sizeof(Metadata));
+            file.read((char*)image_data, image_size);
         }
-    });
 
-    void init(uint32_t init_texture_capacity, std::filesystem::path texture_dir) {
-        init_called = true;
-        texture_directory = texture_dir;
-        texture_pool = TexturePool{std::max<uint32_t>(init_texture_capacity, 1)};
+        void add_texture(Textures& texs, Textures::gid gid, std::filesystem::path orig_path) {
+            std::lock_guard locK{gid_read};
 
+            if (orig_path.extension() == ".goi") {
+                std::filesystem::copy(orig_path, texs.texture_directory / make_texture_path(gid));
+            } else {
+                auto img = Image::load8((const char*)orig_path.c_str());
+
+                auto path = texs.texture_directory / make_texture_path(gid);
+                Metadata metadata{
+                    .width = img.width,
+                    .height = img.height,
+                    .format = img.format,
+                };
+
+                std::ofstream file{path, std::ios::binary};
+                file.write((const char*)&metadata, sizeof(Metadata));
+                file.write((const char*)img.data, img.size);
+                file.flush();
+
+                img.destroy();
+            }
+        }
+
+        static decltype(auto) thread_pool() {
+            return make_thread_pool([](task&& task) {
+                switch (task.type) {
+                    case task::Acquire: {
+                        while (task.texs->impl->is_initializing(task.gid)) {
+                            _mm_pause();
+                        }
+
+                        upload_task up_task{
+                            .gid = task.gid,
+                        };
+                        task.texs->impl->load_texture_data(*task.texs, task.gid, up_task.image_data, up_task.image_size, up_task.metadata);
+                        task.texs->impl->upload_queue.enqueue(up_task);
+                        break;
+                    }
+                    case task::Add:
+                        task.texs->impl->add_texture(*task.texs, task.gid, task.orig_path);
+                        task.texs->impl->initialized_queue.enqueue(task.gid);
+                        break;
+                }
+            });
+        };
+    };
+
+    auto io_pool = textures::TexturesImpl::thread_pool();
+
+    Textures::Textures(const char* textures_directry, size_t texture_capacity) : texture_directory(textures_directry), texture_pool(std::max<uint32_t>(texture_capacity, 1)), impl(textures::TexturesImpl::make()) {
         auto data = (uint8_t*)malloc(4);
         std::memset(data, 0xFF, 4);
 
@@ -179,7 +159,7 @@ namespace engine::textures {
         gpu_image_views.emplace_back();
         samplers.emplace_back(0);
 
-        upload_queue.enqueue(upload_task{
+        impl->upload_queue.enqueue(upload_task{
             .gid = {0, 0},
             .image_data = data,
             .image_size = 4,
@@ -192,25 +172,22 @@ namespace engine::textures {
         });
     }
 
-    void destroy() {
-        if (!init_called) return;
-
+    Textures::~Textures() {
         for (std::size_t i = 0; i < names.size(); i++) {
             gpu_image::destroy(gpu_images[i]);
             gpu_image_view::destroy(gpu_image_views[i]);
         }
 
         texture_pool.destroy();
+        delete impl;
     }
 
-    bool process_uploads() {
-        if (!init_called) return false;
-
+    bool Textures::process_uploads() {
         std::vector<upload_task> upload_tasks{};
-        upload_queue.drain(upload_tasks);
+        impl->upload_queue.drain(upload_tasks);
 
         std::vector<gid> initialized_gids{};
-        initialized_queue.drain(initialized_gids);
+        impl->initialized_queue.drain(initialized_gids);
 
         if (upload_tasks.size() != 0) {
             for (const auto& up_task : upload_tasks) {
@@ -232,9 +209,9 @@ namespace engine::textures {
                                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-                    gpu_images[gid.id()] = image;
                     gpu_image_views[gid.id()] =
                         gpu_image_view::create(GPUImageView{image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
+                    gpu_images[gid.id()] = std::move(image);
 
                     finalize_queue.emplace_back(ticket, gid);
                 }
@@ -253,9 +230,9 @@ namespace engine::textures {
         }
 
         bool initialized = false;
-        std::erase_if(initializing_textures, [&](auto gid) {
+        std::erase_if(impl->initializing_textures, [&](auto gid) {
             auto found =
-                std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initializing_textures.end();
+                std::find(initialized_gids.begin(), initialized_gids.end(), gid) != impl->initializing_textures.end();
             initialized |= found;
             return found;
         });
@@ -265,9 +242,7 @@ namespace engine::textures {
         return initialized;
     }
 
-    void rebuild_pool() {
-        assert(init_called);
-
+    void Textures::rebuild_pool() {
         for (uint32_t gid = 0; gid < names.size(); gid++) {
             if (deleted[gid]) continue;
             if (ref_counts[gid] == 0) continue;
@@ -279,7 +254,7 @@ namespace engine::textures {
 
     struct JsonTextureEntry {
         std::string name;
-        gid gid;
+        Textures::gid gid;
         uint32_t sampler;
     };
 
@@ -297,9 +272,7 @@ namespace engine::textures {
         j["sampler"].get_to(entry.sampler);
     }
 
-    void load(nlohmann::json j) {
-        assert(init_called);
-
+    void Textures::load(nlohmann::json j) {
         std::vector<JsonTextureEntry> entries = j;
 
         names.resize(1);
@@ -340,9 +313,7 @@ namespace engine::textures {
         }
     }
 
-    nlohmann::json save() {
-        assert(init_called);
-
+    nlohmann::json Textures::save() const {
         std::vector<JsonTextureEntry> entries{};
 
         for (uint32_t i = 1; i < names.size(); i++) {
@@ -358,9 +329,7 @@ namespace engine::textures {
         return entries;
     }
 
-    gid add(std::filesystem::path path, std::string name, Sampler sampler) {
-        assert(init_called);
-
+    Textures::gid Textures::add(std::filesystem::path path, std::string name, Sampler sampler) {
         auto sampler_ix = samplers::add(sampler);
 
         gid gid;
@@ -378,7 +347,7 @@ namespace engine::textures {
             gpu_image_views[gid.id()] = nullptr;
             samplers[gid.id()] = sampler_ix;
         } else {
-            std::lock_guard lock{gid_read};
+            std::lock_guard lock{impl->gid_read};
 
             if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
                 texture_pool.destroy();
@@ -398,16 +367,14 @@ namespace engine::textures {
             samplers.emplace_back(sampler_ix);
         }
 
-        initializing_textures.emplace_back(gid);
-        io_pool.enqueue({task::Add, gid, path});
+        impl->initializing_textures.emplace_back(gid);
+        io_pool.enqueue({task::Add, this, gid, path});
 
         return gid;
     }
 
-    gid add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name,
+    Textures::gid Textures::add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name,
             Sampler sampler) {
-        assert(init_called);
-
         auto sampler_ix = samplers::add(sampler);
 
         gid gid;
@@ -422,7 +389,7 @@ namespace engine::textures {
             gpu_image_views[gid.id()] = nullptr;
             samplers[gid.id()] = sampler_ix;
         } else {
-            std::lock_guard lock{gid_read};
+            std::lock_guard lock{impl->gid_read};
 
             if (auto cap = texture_pool.get_capacity(); cap <= names.size()) {
                 texture_pool.destroy();
@@ -454,15 +421,13 @@ namespace engine::textures {
         file.write((const char*)image.data(), image.size());
         file.flush();
 
-        initializing_textures.emplace_back(gid);
-        initialized_queue.enqueue(gid);
+        impl->initializing_textures.emplace_back(gid);
+        impl->initialized_queue.enqueue(gid);
 
         return gid;
     }
 
-    bool remove(gid gid) {
-        assert(init_called);
-
+    bool Textures::remove(gid gid) {
         if (generations[gid.id()] != gid.gen()) return false;
         if (ref_counts[gid.id()] > 0) return false;
         if (deleted[gid.id()]) return false;
@@ -484,50 +449,38 @@ namespace engine::textures {
         return true;
     }
 
-    std::expected<std::string*, Err> get_name(gid gid) {
-        assert(init_called);
-
-        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
+    std::expected<std::string*, textures::Err> Textures::get_name(gid gid) {
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(textures::Err::BadGeneration);
 
         return &names[gid.id()];
     }
 
-    std::expected<GPUImage, Err> get_image(gid gid) {
-        assert(init_called);
+    std::expected<VkImage, textures::Err> Textures::get_image(gid gid) {
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(textures::Err::BadGeneration);
 
-        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
-
-        return gpu_images[gid.id()];
+        return gpu_images[gid.id()].image;
     }
 
-    std::expected<VkImageView, Err> get_image_view(gid gid) {
-        assert(init_called);
-
-        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
+    std::expected<VkImageView, textures::Err> Textures::get_image_view(gid gid) {
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(textures::Err::BadGeneration);
 
         return gpu_image_views[gid.id()];
     }
 
-    std::expected<uint32_t, Err> get_sampler(gid gid) {
-        assert(init_called);
-
-        if (generations[gid.id()] != gid.gen()) return std::unexpected(Err::BadGeneration);
+    std::expected<uint32_t, textures::Err> Textures::get_sampler(gid gid) {
+        if (generations[gid.id()] != gid.gen()) return std::unexpected(textures::Err::BadGeneration);
 
         return samplers[gid.id()];
     }
 
-    uint8_t get_generation(uint32_t ix) {
-        assert(init_called);
-
+    uint8_t Textures::get_generation(uint32_t ix) const {
         return generations[ix];
     }
 
-    void acquire(const gid* gids, uint32_t count) {
-        assert(init_called);
-
-        for (size_t i = 0; i < count; i++) {
+    void Textures::acquire(std::span<const gid> gids) {
+        for (size_t i = 0; i < gids.size(); i++) {
             auto gid = gids[i];
-            if (gid == textures::gid{}) continue;
+            if (gid == Textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (++ref_counts[gid.id()] != 1) continue;
 
@@ -535,16 +488,14 @@ namespace engine::textures {
 
             gpu_images[gid.id()] = GPUImage{};
             gpu_image_views[gid.id()] = nullptr;
-            io_pool.enqueue({task::Acquire, gid});
+            io_pool.enqueue({task::Acquire, this, gid});
         }
     }
 
-    void release(const gid* gids, uint32_t count) {
-        assert(init_called);
-
-        for (std::size_t i = 0; i < count; i++) {
+    void Textures::release(std::span<const gid> gids) {
+        for (std::size_t i = 0; i < gids.size(); i++) {
             auto gid = gids[i];
-            if (gid == textures::gid{}) continue;
+            if (gid == Textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
@@ -556,17 +507,15 @@ namespace engine::textures {
         }
     }
 
-    const TexturePool& get_texture_pool() {
-        assert(init_called);
-
+    const TexturePool& Textures::get_texture_pool() const {
         return texture_pool;
     }
 
-    std::span<std::string> get_names() {
+    std::span<std::string> Textures::get_names() {
         return names;
     }
 
-    void modified() {
+    void Textures::modified() {
         want_save = true;
     }
 }

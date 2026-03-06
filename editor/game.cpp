@@ -14,7 +14,7 @@
 #include <vulkan/vulkan_core.h>
 
 void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::vec2 src_dims,
-                 engine::GPUImage& src, engine::GPUImage out, glm::uvec2 out_dims) {
+                 engine::GPUImage& src, engine::GPUImage& out, glm::uvec2 out_dims) {
     auto final_stage = out.current_stage;
     auto final_access = out.current_access;
     auto final_layout = out.current_layout;
@@ -315,9 +315,9 @@ uint32_t Game::render(glm::uvec2 game_window_dims) {
     }
 }
 
-void Game::blit_game_target(engine::GPUImage out, glm::uvec2 out_dims) {
+void Game::blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims) {
     auto current_frame = engine::get_current_frame();
-    auto src = targets[current_frame];
+    auto& src = targets[current_frame];
 
     blit_target(config.target_dimensions == glm::uvec2{0, 0} ||
                         config.target_blit_strategy == engine::game_interface2::GameConfig::Stretch

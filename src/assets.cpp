@@ -9,8 +9,9 @@ namespace engine::assets {
 }
 
 namespace engine {
-    Assets Assets::init(Inputs& in) {
+    Assets Assets::init(Inputs& in, Textures* texs) {
         Assets a{};
+        a.texs = texs;
 
         for (size_t i = 0; i < in.scenes_size; i++) {
             a.names.emplace_back(in.scenes[i].name);
@@ -39,7 +40,7 @@ namespace engine {
             a.ref_counts.emplace_back(0);
             a.in_draw.emplace_back(false);
 
-            a.texture_gids.emplace_back(textures::gid{});
+            a.texture_gids.emplace_back(Textures::gid{});
 
             *in.textures[i].handle = {a.names.size() - 1};
         }
@@ -67,7 +68,7 @@ namespace engine {
         for (size_t i = textures_start; i < ref_counts.size(); i++) {
             auto rc = ref_counts[i];
             while (rc-- != 0) {
-                textures::release(&texture_gids[i - textures_start], 1);
+                texs->release({&texture_gids[i - textures_start], 1});
             }
         }
     }
@@ -158,7 +159,7 @@ namespace engine {
     }
 
     void Assets::acquire(TextureHandle handle) {
-        textures::acquire(&texture_gids[handle.n], 1);
+        texs->acquire({&texture_gids[handle.n], 1});
         ref_counts[textures_start + handle.n]++;
     }
 
@@ -180,7 +181,7 @@ namespace engine {
 
     void Assets::release(TextureHandle handle) {
         auto ix = textures_start + handle.n;
-        textures::acquire(&texture_gids[handle.n], 1);
+        texs->acquire({&texture_gids[handle.n], 1});
 
         assert(ref_counts[ix] != 0);
         ref_counts[ix]--;
@@ -210,7 +211,7 @@ namespace engine {
         auto ix = textures_start + handle.n;
         auto gid = texture_gids[handle.n];
         assert(!in_draw[ix]);
-        if (gid == textures::gid{}) {
+        if (gid == Textures::gid{}) {
             assert(false && "TODO: throw an editor error");
         }
         in_draw[ix] = true;
@@ -281,15 +282,15 @@ namespace engine {
         model_gids[ix] = gid;
     }
 
-    void Assets::set(size_t ix, textures::gid gid) {
+    void Assets::set(size_t ix, Textures::gid gid) {
         auto gix = ix + textures_start;
         assert(!in_draw[gix]);
 
         auto old_gid = texture_gids[ix];
         auto rc = ref_counts[gix];
         while (rc-- != 0) {
-            textures::release(&old_gid, 1);
-            textures::acquire(&gid, 1);
+            texs->release({&old_gid, 1});
+            texs->acquire({&gid, 1});
         }
 
         texture_gids[ix] = gid;
@@ -315,7 +316,7 @@ namespace engine {
         return model_gids;
     }
 
-    std::span<const textures::gid> Assets::get_texture_gids() const {
+    std::span<const Textures::gid> Assets::get_texture_gids() const {
         return texture_gids;
     }
 

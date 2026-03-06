@@ -47,20 +47,20 @@ namespace engine::material::pbr {
     void write_data_blob(const Data& data, void* out) {
         uint8_t* blob = (uint8_t*)out;
 
-        std::memcpy(blob, &data.albedo_map, sizeof(textures::gid));
-        blob += sizeof(textures::gid);
+        std::memcpy(blob, &data.albedo_map, sizeof(Textures::gid));
+        blob += sizeof(Textures::gid);
 
-        std::memcpy(blob, &data.metallic_roughness_map, sizeof(textures::gid));
-        blob += sizeof(textures::gid);
+        std::memcpy(blob, &data.metallic_roughness_map, sizeof(Textures::gid));
+        blob += sizeof(Textures::gid);
 
-        std::memcpy(blob, &data.normal_map, sizeof(textures::gid));
-        blob += sizeof(textures::gid);
+        std::memcpy(blob, &data.normal_map, sizeof(Textures::gid));
+        blob += sizeof(Textures::gid);
 
-        std::memcpy(blob, &data.occlusion_map, sizeof(textures::gid));
-        blob += sizeof(textures::gid);
+        std::memcpy(blob, &data.occlusion_map, sizeof(Textures::gid));
+        blob += sizeof(Textures::gid);
 
-        std::memcpy(blob, &data.emissive_map, sizeof(textures::gid));
-        blob += sizeof(textures::gid);
+        std::memcpy(blob, &data.emissive_map, sizeof(Textures::gid));
+        blob += sizeof(Textures::gid);
 
         std::memcpy(blob, &data.albedo_texcoord, sizeof(uint32_t));
         blob += sizeof(uint32_t);

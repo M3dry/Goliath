@@ -379,24 +379,24 @@ namespace engine {
         }
     }
 
-    void Model::acquire_textures() const {
+    void Model::acquire_textures(Textures* texs) const {
         for (size_t i = 0; i < mesh_count; i++) {
             auto& mesh = meshes[i];
             auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
 
             for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-                textures::acquire((textures::gid*)(data.data() + off), 1);
+                texs->acquire({(Textures::gid*)(data.data() + off), 1});
             }
         }
     }
 
-    void Model::release_textures() const {
+    void Model::release_textures(Textures* texs) const {
         for (size_t i = 0; i < mesh_count; i++) {
             auto& mesh = meshes[i];
             auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
 
             for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-                textures::release((textures::gid*)(data.data() + off), 1);
+                texs->release({(Textures::gid*)(data.data() + off), 1});
             }
         }
     }

@@ -12,14 +12,9 @@
 #include "ImViewGuizmo/ImViewGuizmo.h"
 #undef IMVIEWGUIZMO_IMPLEMENTATION
 #include "goliath/camera.hpp"
-#include "goliath/engine.hpp"
 #include "goliath/imgui_reflection.hpp"
 #include "goliath/models.hpp"
-#include "goliath/samplers.hpp"
-#include "goliath/synchronization.hpp"
-#include "goliath/texture.hpp"
 #include "imgui.h"
-#include "imgui_impl_vulkan.h"
 #include "imgui_internal.h"
 #include "misc/cpp/imgui_stdlib.h"
 #include "scene.hpp"
@@ -51,17 +46,6 @@ int32_t score_search(std::string_view query, std::string_view candidate) {
 }
 
 namespace ui {
-    bool skip_game_window = false;
-    ImVec2 game_windows[engine::frames_in_flight]{};
-    engine::GPUImage game_window_images[engine::frames_in_flight]{};
-    VkImageView game_window_image_views[engine::frames_in_flight]{};
-    VkDescriptorSet game_window_textures[engine::frames_in_flight]{};
-    VkDescriptorSet game_window_textures_freeup[engine::frames_in_flight]{};
-    std::pair<bool, VkImageMemoryBarrier2> game_window_barriers[engine::frames_in_flight]{};
-    VkSampler game_window_sampler;
-    glm::vec2 game_image_offset{0.0f};
-    glm::vec2 game_image_dims{0.0f};
-
     struct SelectedInstance {
         size_t scene;
         size_t instance;
@@ -97,21 +81,9 @@ namespace ui {
     }
 
     void init() {
-        game_window_sampler = engine::samplers::get(0);
-
-        for (size_t i = 0; i < engine::frames_in_flight; i++) {
-            game_windows[i].x = -1.0f;
-            game_windows[i].y = -1.0f;
-        }
     }
 
     void destroy() {
-        for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
-            engine::gpu_image::destroy(game_window_images[i]);
-            engine::gpu_image_view::destroy(game_window_image_views[i]);
-            ImGui_ImplVulkan_RemoveTexture(game_window_textures[i]);
-            ImGui_ImplVulkan_RemoveTexture(game_window_textures_freeup[i]);
-        }
     }
 
     void tick(float dt) {
@@ -155,6 +127,7 @@ namespace ui {
 
                 scene_viewport.process_pane(avail);
                 scene_viewport.draw_pane();
+                auto image_size = ImGui::GetItemRectSize();
                 scene_focused = ImGui::IsWindowFocused();
 
                 if (ImGui::BeginDragDropTarget()) {
@@ -207,8 +180,8 @@ namespace ui {
                     changed = false;
                     ImGuizmo::SetOrthographic(false);
                     ImGuizmo::AllowAxisFlip(false);
-                    ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
-                                      win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
+                    ImGuizmo::SetRect(win_pos.x + cursor.x,
+                                      win_pos.y + cursor.y, image_size.x, image_size.y);
                     ImGuizmo::SetDrawlist();
 
                     auto proj = cam_info.cam._projection;
@@ -249,240 +222,6 @@ namespace ui {
 
         ImGui::End();
         ImGui::PopStyleVar();
-    }
-
-    bool game_window() {
-        auto curr_frame = engine::get_current_frame();
-        auto& game_window_ = game_windows[curr_frame];
-        auto& game_window_image = game_window_images[curr_frame];
-        auto& game_window_image_view = game_window_image_views[curr_frame];
-        auto& game_window_texture = game_window_textures[curr_frame];
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-        if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
-            node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode | ImGuiDockNodeFlags_NoTabBar;
-        }
-
-        bool focused = ImGui::IsWindowFocused();
-
-        ImVec2 win_pos = ImGui::GetWindowPos();
-        ImVec2 avail = ImGui::GetWindowSize();
-        skip_game_window = avail.x <= 0 || avail.y <= 0;
-
-        ImGui_ImplVulkan_RemoveTexture(game_window_textures_freeup[engine::get_current_frame()]);
-        game_window_textures_freeup[engine::get_current_frame()] = nullptr;
-        if ((avail.x != game_window_.x || avail.y != game_window_.y) && !skip_game_window) {
-            engine::gpu_image::destroy(game_window_image);
-            engine::gpu_image_view::destroy(game_window_image_view);
-            game_window_textures_freeup[(engine::get_current_frame() + 1) % engine::frames_in_flight] =
-                game_window_texture;
-
-            game_window_image =
-                engine::gpu_image::upload(std::format("Game window texture #{}", curr_frame).c_str(),
-                                          engine::GPUImageInfo{}
-                                              .new_layout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                                              .aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT)
-                                              .width(avail.x)
-                                              .height(avail.y)
-                                              .format(VK_FORMAT_R8G8B8A8_UNORM)
-                                              .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT),
-                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-            game_window_image_view = engine::gpu_image_view::create(
-                engine::GPUImageView{game_window_image}.aspect_mask(VK_IMAGE_ASPECT_COLOR_BIT));
-
-            game_window_texture = ImGui_ImplVulkan_AddTexture(game_window_sampler, game_window_image_view,
-                                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-            game_window_ = avail;
-        }
-
-        if (!skip_game_window) {
-            ImVec2 cursor = ImGui::GetCursorPos();
-            ImGui::Image(game_window_texture, game_window_);
-            if (ImGui::BeginDragDropTarget()) {
-                auto payload = ImGui::AcceptDragDropPayload("model");
-                if (payload != nullptr && payload->IsDelivery()) {
-                    auto gid = *(engine::models::gid*)payload->Data;
-                    scene::add_instance(gid);
-                }
-                ImGui::EndDragDropTarget();
-            }
-
-            ImVec2 gizmo_offset{win_pos.x + cursor.x, win_pos.y + cursor.y};
-            avail.x -= cursor.x;
-            avail.y -= cursor.y;
-            auto scale = ImViewGuizmo::GetStyle().scale;
-
-            // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward =
-            // +Z
-            static const glm::mat4 GL_TO_GIZMO = glm::mat4{1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
-
-            static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
-
-            auto cam_info = scene::camera();
-            glm::mat4 view_gizmo = GL_TO_GIZMO * cam_info.cam.view() * GIZMO_TO_GL;
-            auto gizmo_quat = glm::quat_cast(glm::inverse(view_gizmo));
-            auto gizmo_pos = glm::vec3{GL_TO_GIZMO * glm::vec4{cam_info.cam.position, 1.0f}};
-
-            bool changed =
-                ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
-                                     ImVec2{gizmo_offset.x + (avail.x - scale * 90), gizmo_offset.y + scale * 90});
-            changed |= ImViewGuizmo::Pan(
-                gizmo_pos, gizmo_quat,
-                ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10), gizmo_offset.y + (avail.y - scale * 50 - 10)});
-            changed |= ImViewGuizmo::Dolly(gizmo_pos, gizmo_quat,
-                                           ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10),
-                                                  gizmo_offset.y + (avail.y - scale * 50 - 10 - scale * 50 - 10)});
-
-            if (changed) {
-                cam_info.cam._orientation =
-                    glm::normalize(glm::quat_cast(GIZMO_TO_GL * glm::mat4_cast(gizmo_quat) * GL_TO_GIZMO));
-                cam_info.cam.position = glm::vec3{GIZMO_TO_GL * glm::vec4{gizmo_pos, 1.0f}};
-
-                cam_info.cam.update_matrices();
-                scene::update_camera(cam_info);
-            }
-
-            if (scene::selected_instance() != -1) {
-                auto win_pos = ImGui::GetWindowPos();
-
-                changed = false;
-                ImGuizmo::SetOrthographic(false);
-                ImGuizmo::AllowAxisFlip(false);
-                ImGuizmo::SetRect(win_pos.x + cursor.x + game_image_offset.x,
-                                  win_pos.y + cursor.y + game_image_offset.y, game_image_dims.x, game_image_dims.y);
-                ImGuizmo::SetDrawlist();
-
-                auto proj = cam_info.cam._projection;
-                proj[1][1] *= -1;
-                changed |= ImGuizmo::Manipulate(
-                    glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj),
-                    ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
-                    glm::value_ptr(
-                        engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()]));
-
-                if (changed) {
-                    engine::scenes::update_transforms_buffer(scene::selected_scene());
-                    scene::update_camera(cam_info);
-                    update_instance_transform();
-                }
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleVar();
-
-        return focused;
-    }
-
-    bool skipped_game_window() {
-        return skip_game_window;
-    }
-
-    std::optional<VkImageMemoryBarrier2> blit_game_window(VkBlitImageInfo2 blit_info) {
-        if (ui::skipped_game_window()) return std::nullopt;
-
-        auto curr_frame = engine::get_current_frame();
-        auto& game_window_ = game_windows[curr_frame];
-        auto& game_window_image = game_window_images[curr_frame];
-
-        VkImageMemoryBarrier2 barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.pNext = nullptr;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = game_window_image.image;
-        barrier.subresourceRange = VkImageSubresourceRange{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        };
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
-        VkClearColorValue clear_color{};
-        clear_color.float32[0] = 0.0f;
-        clear_color.float32[1] = 0.0f;
-        clear_color.float32[2] = 0.0f;
-        clear_color.float32[3] = 255.0f;
-        VkImageSubresourceRange clear_range = barrier.subresourceRange;
-        vkCmdClearColorImage(engine::get_cmd_buf(), game_window_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             &clear_color, 1, &clear_range);
-
-        engine::synchronization::begin_barriers();
-        engine::synchronization::apply_barrier(barrier);
-        engine::synchronization::end_barriers();
-
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-
-        blit_info.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
-        blit_info.dstImage = game_window_image.image;
-        blit_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        VkImageBlit2 region = blit_info.pRegions[0];
-
-        game_image_dims = {region.srcOffsets[1].x, region.srcOffsets[1].y};
-        glm::vec2 window{game_window_.x, game_window_.y};
-
-        float scale = std::min(window.x / game_image_dims.x, window.y / game_image_dims.y);
-        if (scale > 1.0) {
-            scale = floor(scale);
-        }
-
-        game_image_dims *= scale;
-        game_image_offset = (window - game_image_dims) * 0.5f;
-
-        region.dstOffsets[0] = VkOffset3D{
-            .x = (int32_t)game_image_offset.x,
-            .y = (int32_t)game_image_offset.y,
-            .z = 0,
-        };
-        region.dstOffsets[1] = VkOffset3D{
-            .x = region.dstOffsets[0].x + (int32_t)game_image_dims.x,
-            .y = region.dstOffsets[0].y + (int32_t)game_image_dims.y,
-            .z = 1,
-        };
-        region.dstSubresource = VkImageSubresourceLayers{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .mipLevel = 0,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        };
-        blit_info.pRegions = &region;
-
-        vkCmdBlitImage2(engine::get_cmd_buf(), &blit_info);
-
-        engine::synchronization::begin_barriers();
-        engine::synchronization::apply_barrier(barrier);
-        engine::synchronization::end_barriers();
-
-        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-
-        return barrier;
-    }
-
-    ImVec2 game_window_size() {
-        return game_windows[engine::get_current_frame()];
-    }
-
-    engine::GPUImage get_window_image() {
-        return game_window_images[engine::get_current_frame()];
     }
 
     using scored_entry = std::pair<std::variant<engine::models::gid, engine::textures::gid>, int32_t>;
@@ -718,7 +457,7 @@ namespace ui {
                         };
                     }
 
-                    if (ImGui::MenuItem("Delete")) {
+                    if (scenes.size() != 1 && ImGui::MenuItem("Delete")) {
                         to_delete = i;
                     }
 

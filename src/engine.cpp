@@ -6,7 +6,6 @@
 #include "goliath/vma_ptrs.hpp"
 #include "materials_.hpp"
 #include "models_.hpp"
-#include "textures_.hpp"
 #include "vma_ptrs_.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdint>
@@ -424,11 +423,6 @@ namespace engine {
         imgui::init();
         event::register_glfw_callbacks();
         descriptor::create_empty_set();
-        if (opts.textures_directory) textures::init(opts.texture_capacity, *opts.textures_directory);
-        if (opts.models_directory) {
-            materials::init();
-            models::init(*opts.models_directory);
-        }
         visbuffer::init();
 
         glfwShowWindow(window());
@@ -439,9 +433,6 @@ namespace engine {
         vkDeviceWaitIdle(device());
 
         visbuffer::destroy();
-        materials::destroy();
-        models::destroy();
-        textures::destroy();
         samplers::destroy();
         descriptor::destroy_empty_set();
         imgui::destroy();
@@ -607,7 +598,6 @@ namespace engine {
         transition_image(cmd_buf, get_swapchain(), VK_IMAGE_LAYOUT_UNDEFINED,
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        state->textures_to_save_ |= textures::process_uploads();
         state->models_to_save_ |= models::process_uploads();
 
         VkBufferMemoryBarrier2 material_barrier{};

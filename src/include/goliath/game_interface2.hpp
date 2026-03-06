@@ -19,14 +19,14 @@ namespace engine::game_interface2 {
 
     struct EngineService {
         struct AssetsServicePtrs {
-            Assets* assets;
-            void (*acquire_scene)(Assets* assets, Assets::SceneHandle handle);
-            void (*acquire_model)(Assets* assets, Assets::ModelHandle handle);
-            void (*acquire_texture)(Assets* assets, Assets::TextureHandle handle);
+            void* assets;
+            void (*acquire_scene)(void* assets, Assets::SceneHandle handle);
+            void (*acquire_model)(void* assets, Assets::ModelHandle handle);
+            void (*acquire_texture)(void* assets, Assets::TextureHandle handle);
 
-            void (*release_scene)(Assets* assets, Assets::SceneHandle handle);
-            void (*release_model)(Assets* assets, Assets::ModelHandle handle);
-            void (*release_texture)(Assets* assets, Assets::TextureHandle handle);
+            void (*release_scene)(void* assets, Assets::SceneHandle handle);
+            void (*release_model)(void* assets, Assets::ModelHandle handle);
+            void (*release_texture)(void* assets, Assets::TextureHandle handle);
         };
 
         class AssetsService {
@@ -66,11 +66,13 @@ namespace engine::game_interface2 {
         };
 
         struct TexturesServicePtrs {
-            std::string* (*name)(textures::gid gid, textures::Err* err, bool* erred);
-            GPUImage (*image)(textures::gid gid, textures::Err* err, bool* erred);
-            VkImageView (*image_view)(textures::gid gid, textures::Err* err, bool* erred);
+            void* textures;
 
-            const TexturePool* (*texture_pool)();
+            std::string* (*name)(void* textures, Textures::gid gid, textures::Err* err, bool* erred);
+            VkImage (*image)(void* textures, Textures::gid gid, textures::Err* err, bool* erred);
+            VkImageView (*image_view)(void* textures, Textures::gid gid, textures::Err* err, bool* erred);
+
+            const TexturePool* (*texture_pool)(void* textures);
         };
 
         class TexturesService {
@@ -85,31 +87,31 @@ namespace engine::game_interface2 {
             }
 
             const TexturePool& texture_pool() const {
-                return *ptrs.texture_pool();
+                return *ptrs.texture_pool(ptrs.textures);
             }
 
-            std::expected<std::string*, textures::Err> name(textures::gid gid) const {
+            std::expected<std::string*, textures::Err> name(Textures::gid gid) const {
                 bool erred = false;
                 textures::Err err;
-                auto res = ptrs.name(gid, &err, &erred);
+                auto res = ptrs.name(ptrs.textures, gid, &err, &erred);
                 if (erred) return std::unexpected(err);
 
                 return res;
             }
 
-            std::expected<GPUImage, textures::Err> image(textures::gid gid) const {
+            std::expected<VkImage, textures::Err> image(Textures::gid gid) const {
                 bool erred = false;
                 textures::Err err;
-                auto res = ptrs.image(gid, &err, &erred);
+                auto res = ptrs.image(ptrs.textures, gid, &err, &erred);
                 if (erred) return std::unexpected(err);
 
                 return res;
             }
 
-            std::expected<VkImageView, textures::Err> image_view(textures::gid gid) const {
+            std::expected<VkImageView, textures::Err> image_view(Textures::gid gid) const {
                 bool erred = false;
                 textures::Err err;
-                auto res = ptrs.image_view(gid, &err, &erred);
+                auto res = ptrs.image_view(ptrs.textures, gid, &err, &erred);
                 if (erred) return std::unexpected(err);
 
                 return res;
@@ -359,7 +361,7 @@ namespace engine::game_interface2 {
         }
     };
 
-    EngineService make_engine_service(Assets* assets);
+    EngineService make_engine_service(Assets* assets, Textures* texs);
     FrameService make_frame_service(Assets* assets);
     TickService make_tick_service();
 

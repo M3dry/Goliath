@@ -32,6 +32,9 @@ namespace engine::models {
         }
     };
 
+    void init(std::filesystem::path models_dir, Textures* textures);
+    void destroy();
+
     void to_json(nlohmann::json& j, const gid& gid);
     void from_json(const nlohmann::json& j, gid& gid);
 

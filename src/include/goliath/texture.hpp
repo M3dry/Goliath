@@ -172,6 +172,42 @@ namespace engine {
         VkPipelineStageFlags2 current_stage;
         VkAccessFlags2 current_access;
 
+        GPUImage() = default;
+        GPUImage(const GPUImage&) = delete;
+        GPUImage& operator=(const GPUImage&) = delete;
+        GPUImage(GPUImage&& img) noexcept {
+            image = img.image;
+            allocation = img.allocation;
+            format = img.format;
+            current_layout = img.current_layout;
+            current_stage = img.current_stage;
+            current_access = img.current_access;
+
+            img.image = nullptr;
+            img.allocation = nullptr;
+            img.format = VkFormat{};
+            img.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            img.current_stage = VK_PIPELINE_STAGE_2_NONE;
+            img.current_access = VK_ACCESS_2_NONE;
+        };
+        GPUImage& operator=(GPUImage&& img) noexcept {
+            image = img.image;
+            allocation = img.allocation;
+            format = img.format;
+            current_layout = img.current_layout;
+            current_stage = img.current_stage;
+            current_access = img.current_access;
+
+            img.image = nullptr;
+            img.allocation = nullptr;
+            img.format = VkFormat{};
+            img.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            img.current_stage = VK_PIPELINE_STAGE_2_NONE;
+            img.current_access = VK_ACCESS_2_NONE;
+
+            return *this;
+        }
+
         VkImageMemoryBarrier2 transition(std::optional<VkImageLayout> new_layout, VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access);
     };
 

@@ -30,9 +30,6 @@ namespace engine {
         const char* window_name;
         uint32_t texture_capacity = 1000;
         bool fullscreen = true;
-
-        std::optional<std::filesystem::path> textures_directory{};
-        std::optional<std::filesystem::path> models_directory{};
     };
 
     void init(Init opts);

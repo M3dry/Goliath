@@ -6,6 +6,9 @@
 #include <nlohmann/json.hpp>
 
 namespace engine::materials {
+    void init();
+    void destroy();
+
     void load(const nlohmann::json& j);
     nlohmann::json save();
 

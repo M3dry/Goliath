@@ -43,7 +43,7 @@ class Game {
     void draw_game_imgui();
     uint32_t render(glm::uvec2 game_window_dims);
 
-    void blit_game_target(engine::GPUImage out, glm::uvec2 out_dims);
+    void blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims);
 
   private:
     bool destroyed_state = true;

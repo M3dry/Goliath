@@ -3,6 +3,7 @@
 #include "goliath/buffer.hpp"
 #include "goliath/collisions.hpp"
 #include "goliath/rendering.hpp"
+#include "goliath/textures.hpp"
 #include <cstdint>
 #include <cstring>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -124,8 +125,8 @@ namespace engine {
 
         static void load(Model& out, std::span<uint8_t> data);
 
-        void acquire_textures() const;
-        void release_textures() const;
+        void acquire_textures(Textures* texs) const;
+        void release_textures(Textures* texs) const;
 
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {

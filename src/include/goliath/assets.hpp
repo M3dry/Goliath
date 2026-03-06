@@ -79,7 +79,7 @@ namespace engine {
             }
         };
 
-        static Assets init(Inputs& assets);
+        static Assets init(Inputs& assets, Textures* texs);
         void destroy();
 
         void load(const nlohmann::json& j);
@@ -105,11 +105,11 @@ namespace engine {
         void end_model_draw(ModelHandle handle);
 
         struct TextureDraw {
-            textures::gid gid;
+            Textures::gid gid;
             GPUImage image;
 
             operator bool() {
-                return gid == textures::gid{};
+                return gid == Textures::gid{};
             }
         };
         // if -1, texture isn't usable
@@ -122,7 +122,7 @@ namespace engine {
 
         void set(size_t ix, size_t gid);
         void set(size_t ix, models::gid gid);
-        void set(size_t ix, textures::gid gid);
+        void set(size_t ix, Textures::gid gid);
 
         std::span<const std::string> get_scene_names() const;
         std::span<const std::string> get_model_names() const;
@@ -130,10 +130,12 @@ namespace engine {
 
         std::span<const size_t> get_scene_gids() const;
         std::span<const models::gid> get_model_gids() const;
-        std::span<const textures::gid> get_texture_gids() const;
+        std::span<const Textures::gid> get_texture_gids() const;
 
         bool want_to_save();
       private:
+        Textures* texs;
+
         bool want_save = false;
         uint32_t models_start;
         uint32_t textures_start;
@@ -144,6 +146,6 @@ namespace engine {
 
         std::vector<size_t> scene_gids;
         std::vector<models::gid> model_gids;
-        std::vector<textures::gid> texture_gids;
+        std::vector<Textures::gid> texture_gids;
     };
 }

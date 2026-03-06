@@ -32,7 +32,7 @@ namespace engine::material {
     constexpr size_t size(const attribute& attr) {
         switch (attr) {
             using enum attribute;
-            case Texture: return sizeof(textures::gid);
+            case Texture: return sizeof(Textures::gid);
             case Float: return sizeof(float);
             case Uint: return sizeof(uint32_t);
             case Int: return sizeof(int32_t);
@@ -58,7 +58,7 @@ namespace engine::material {
     #define HELPER(attr_v, t) case attr_v: return f.template operator()<t>()
         switch (attr) {
             using enum attribute;
-            HELPER(Texture, textures::gid);
+            HELPER(Texture, Textures::gid);
             HELPER(Float, float);
             HELPER(Uint, uint32_t);
             HELPER(Int, int32_t);
@@ -131,21 +131,21 @@ namespace engine {
             total_size = current_offset;
         }
 
-        void acquire_textures(uint8_t* material_data) {
+        void acquire_textures(Textures& texs, uint8_t* material_data) {
             for (const auto& offset : texture_gid_offsets) {
-                textures::gid gid;
+                Textures::gid gid;
                 std::memcpy(&gid, material_data + offset, sizeof(uint32_t));
 
-                textures::acquire(&gid, 1);
+                texs.acquire({&gid, 1});
             }
         }
 
-        void release_textures(uint8_t* material_data) {
+        void release_textures(Textures& texs, uint8_t* material_data) {
             for (const auto& offset : texture_gid_offsets) {
-                textures::gid gid;
+                Textures::gid gid;
                 std::memcpy(&gid, material_data + offset, sizeof(uint32_t));
 
-                textures::release(&gid, 1);
+                texs.release({&gid, 1});
             }
         }
 
@@ -163,11 +163,11 @@ namespace engine::material::pbr {
     extern Material schema;
 
     struct Data {
-        textures::gid albedo_map{0, 0};
-        textures::gid metallic_roughness_map{0, 0};
-        textures::gid normal_map{0, 0};
-        textures::gid occlusion_map{0, 0};
-        textures::gid emissive_map{0, 0};
+        Textures::gid albedo_map{0, 0};
+        Textures::gid metallic_roughness_map{0, 0};
+        Textures::gid normal_map{0, 0};
+        Textures::gid occlusion_map{0, 0};
+        Textures::gid emissive_map{0, 0};
 
         uint32_t albedo_texcoord;
         uint32_t metallic_roughness_texcoord;

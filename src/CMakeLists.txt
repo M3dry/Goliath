@@ -94,7 +94,6 @@ SET(ENGINE_SOURCES
     culling.cpp
     exvar.cpp
     dyn_module.cpp
-    game_interface.cpp
     game_interface2.cpp
     scenes.cpp
     assets.cpp
