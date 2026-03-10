@@ -159,6 +159,25 @@ namespace engine::scenes {
         want_save = true;
     }
 
+    void remove_all_instances_of_model(size_t scene_ix, models::gid model, size_t& selected_instance) {
+        auto& scene = scenes[scene_ix];
+
+        auto it = std::find(scene.used_models.begin(), scene.used_models.end(), model);
+        if (it == scene.used_models.end()) return;
+        auto model_ix = std::distance(scene.used_models.begin(), it);
+
+        size_t i = 0;
+        while (i < scene.instances_of_used_models[model_ix].size()) {
+            auto instance_ix = scene.instances_of_used_models[model_ix][i];
+            remove_instance(scene_ix, instance_ix);
+            i++;
+
+            if (instance_ix == selected_instance) {
+                selected_instance = -1;
+            }
+        }
+    }
+
     void add(std::string name) {
         scene_names.emplace_back(name);
         instance_namess.emplace_back();

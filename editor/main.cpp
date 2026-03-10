@@ -1,3 +1,4 @@
+#include "error_stack.hpp"
 #include "exvars.hpp"
 #include "game.hpp"
 #include "goliath/buffer.hpp"
@@ -6,9 +7,11 @@
 #include "goliath/culling.hpp"
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/errors.hpp"
 #include "goliath/event.hpp"
 #include "goliath/exvar.hpp"
 #include "goliath/game_interface2.hpp"
+#include "goliath/gltf.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/materials.hpp"
 #include "goliath/models.hpp"
@@ -21,6 +24,7 @@
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
+#include "layout.hpp"
 #include "project.hpp"
 #include "scene.hpp"
 #include "state.hpp"
@@ -161,6 +165,69 @@ int main(int argc, char** argv) {
         .texture_capacity = 1000,
         .fullscreen = false,
     });
+    engine::errors::add_handler([](auto err_type, auto* err_data) {
+        engine::errors::visit(
+            [&]<typename ErrType>() {
+                ErrType err = *(const ErrType*)err_data;
+                error_stack::Fn fn;
+
+                if constexpr (std::is_same_v<ErrType, engine::models::AddError>) {
+                    fn = [err]() -> bool {
+                        if (err.loader == engine::gltf::Ok) {
+                            ImGui::Text("When loading model `%s` at path `%s` gotten a tinygltf warning: %s",
+                                        err.model_name.c_str(), err.model_src_file.c_str(),
+                                        err.tinygltf_warning.c_str());
+                            return ImGui::Button("Ok");
+                        } else {
+                            ImGui::Text("Model `%s` at path `%s` couldn't be added to the asset database.",
+                                        err.model_name.c_str(), err.model_src_file.c_str());
+                            if (err.loader == engine::gltf::TinyGLTFErr) {
+                                ImGui::Text("Tinygltf error: %s", err.tinygltf_error.c_str());
+                            } else {
+                                ImGui::Text("Tinygltf error: %s", err.tinygltf_error.c_str());
+                            }
+
+                            if (ImGui::Button("Ok")) {
+                                engine::models::remove(err.model);
+                                for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
+                                    auto selected_instance = scene::selected_instance();
+                                    engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
+                                    scene::select_instance(selected_instance);
+                                }
+                                return true;
+                            }
+                        }
+
+                        return false;
+                    };
+                } else if constexpr (std::is_same_v<ErrType, engine::models::LoadError>) {
+                    fn = [err]() -> bool {
+                        ImGui::Text("Model at gid{%d, %d} couldn't be retrived from disk", err.model.gen(),
+                                    err.model.id());
+                        if (ImGui::Button("Remove model from project")) {
+                            engine::models::remove(err.model);
+                            for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
+                                auto selected_instance = scene::selected_instance();
+                                engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
+                                scene::select_instance(selected_instance);
+                            }
+                            return true;
+                        }
+                        if (ImGui::Button("Ignore")) {
+                            return true;
+                        }
+
+                        return false;
+                    };
+                } else {
+                    assert(false);
+                }
+
+                error_stack::push(std::move(fn));
+            },
+            err_type);
+    });
+
     glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
@@ -170,6 +237,8 @@ int main(int argc, char** argv) {
     GameView::init();
 
     std::optional<LoadedGame> game{};
+
+    layouts::set_to_default();
 
     bool scene_viewport_focused = false;
     GameView scene_viewport{};
@@ -283,13 +352,12 @@ int main(int argc, char** argv) {
                                                                         .type = engine::descriptor::Binding::UBO,
                                                                         .stages = VK_SHADER_STAGE_COMPUTE_BIT,
                                                                     }>{});
-    auto pbr_pipeline =
-        engine::compute::create(engine::ComputePipelineBuilder{}
-                                    .shader(pbr_module)
-                                    .descriptor_layout(0, engine::visbuffer::shading_layout())
-                                    .descriptor_layout(1, pbr_shading_set_layout)
-                                    .descriptor_layout(2, game_textures->get_texture_pool().set_layout)
-                                    .push_constant(PBRPC::size));
+    auto pbr_pipeline = engine::compute::create(engine::ComputePipelineBuilder{}
+                                                    .shader(pbr_module)
+                                                    .descriptor_layout(0, engine::visbuffer::shading_layout())
+                                                    .descriptor_layout(1, pbr_shading_set_layout)
+                                                    .descriptor_layout(2, game_textures->get_texture_pool().set_layout)
+                                                    .push_constant(PBRPC::size));
 
     uint32_t fullscreen_triangle_spv_size;
     auto fullscreen_triangle_spv_data =
@@ -455,6 +523,41 @@ int main(int argc, char** argv) {
                             NFD_PathSet_Free(paths);
                         }
                     }
+                    if (ImGui::MenuItem("Add texture")) {
+                        nfdu8filteritem_t filters[1] = {
+                            {"Texture files", "goi,png,jpg,jpeg,bmp"},
+                        };
+                        auto current_path = std::filesystem::current_path();
+                        nfdopendialogu8args_t args{};
+                        args.filterCount = 1;
+                        args.filterList = filters;
+                        args.defaultPath = (const char*)current_path.c_str();
+                        NFD_GetNativeWindowFromGLFWWindow(engine::window(), &args.parentWindow);
+
+                        const nfdpathset_t* paths;
+                        auto res = NFD_OpenDialogMultipleU8_With(&paths, &args);
+                        if (res == NFD_OKAY) {
+                            nfdpathsetenum_t enumerator;
+                            NFD_PathSet_GetEnum(paths, &enumerator);
+
+                            nfdchar_t* path;
+                            std::size_t i = 0;
+
+                            while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
+                                game_textures->add(path, std::filesystem::path{path}.stem().string(),
+                                                   engine::Sampler{});
+                                NFD_PathSet_FreePath(path);
+                            }
+
+                            NFD_PathSet_FreeEnum(&enumerator);
+                            NFD_PathSet_Free(paths);
+                        }
+                    }
+                    ImGui::EndMenu();
+                }
+
+                if (ImGui::BeginMenu("View")) {
+                    if (ImGui::MenuItem("Default layout")) {}
                     ImGui::EndMenu();
                 }
             }
@@ -488,6 +591,8 @@ int main(int argc, char** argv) {
             ui::rename_popup();
             ui::scenes_settings_pane();
 
+            error_stack::draw_top();
+
             engine::imgui::end();
         }
 
@@ -495,11 +600,6 @@ int main(int argc, char** argv) {
             accum -= dt;
 
             ui::tick(dt);
-
-            // cam.set_projection(engine::camera::Perspective{
-            //     .fov = glm::radians(fov),
-            //     .aspect_ratio = 16.0f / 10.0f,
-            // });
 
             glm::vec3 movement{0.0f};
             if (!lock_cam) {
@@ -750,7 +850,9 @@ int main(int argc, char** argv) {
             engine::rendering::end();
 
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT));
+            engine::synchronization::apply_barrier(
+                target.transition(VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                  VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT));
             engine::synchronization::end_barriers();
 
             auto pp_set = engine::descriptor::new_set(postprocessing_set_layout);
@@ -802,7 +904,9 @@ int main(int argc, char** argv) {
             engine::culling::clear_buffers(draw_id_buffer, indirect_draw_buffer);
 
             engine::synchronization::begin_barriers();
-            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT));
+            engine::synchronization::apply_barrier(target.transition(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                                     VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                                                     VK_ACCESS_2_TRANSFER_WRITE_BIT));
             engine::synchronization::end_barriers();
 
             engine::rendering::end_mark_block();

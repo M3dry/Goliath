@@ -26,6 +26,7 @@ namespace state {
     nlohmann::json save() {
         return nlohmann::json{
             {"models_query", models_query},
+            {"assets_scope", assets_scope},
             {"assets_scene_only_scope", assets_scene_only_scope},
         };
     }
@@ -35,6 +36,8 @@ namespace state {
     }
 
     bool want_to_save() {
-        return want_to_save_;
+        auto res = want_to_save_;
+        want_to_save_ = false;
+        return res;
     }
 }

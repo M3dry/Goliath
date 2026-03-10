@@ -113,9 +113,10 @@ namespace ui {
 
     void viewport_window(GameView& scene_viewport, bool& scene_focused, GameView* game_viewport, bool* game_focused) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
-        ImGui::Begin("Viewport 2.0", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
             node->LocalFlags |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
+            node->LocalFlags |= ImGuiDockNodeFlags_NoTabBar;
         }
 
         scene_focused = false;
@@ -238,9 +239,12 @@ namespace ui {
         } else {
             auto names = engine::models::get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
+                auto gid = engine::models::gid{engine::models::get_generation(i), i};
+                if (engine::models::is_deleted(gid)) continue;
+
                 auto score = score_search(query, names[i]);
                 if (score > std::numeric_limits<int32_t>::min()) {
-                    out.emplace_back(engine::models::gid{engine::models::get_generation(i), i}, score);
+                    out.emplace_back(gid, score);
                 }
             }
         }

@@ -20,9 +20,9 @@ namespace engine::gltf {
         InvalidFormat,
     };
 
-    Err load_json(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
+    [[nodiscard]] Err load_json(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
                   std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
 
-    Err load_bin(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
+    [[nodiscard]] Err load_bin(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
                  std::string* tinygltf_error = nullptr, std::string* tinygltf_warning = nullptr);
 }

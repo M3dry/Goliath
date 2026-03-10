@@ -1,5 +1,6 @@
 #pragma once
 
+#include "goliath/gltf.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/model.hpp"
 #include <nlohmann/json.hpp>
@@ -32,6 +33,21 @@ namespace engine::models {
         }
     };
 
+    struct AddError {
+        gid model;
+        gltf::Err loader;
+        std::string tinygltf_warning;
+        std::string tinygltf_error;
+
+        std::string model_name;
+        std::string model_src_file;
+    };
+
+    struct LoadError {
+        gid model;
+    };
+
+
     void init(std::filesystem::path models_dir, Textures* textures);
     void destroy();
 
@@ -41,7 +57,7 @@ namespace engine::models {
     void load(const nlohmann::json& j);
     nlohmann::json save();
 
-    gid add(std::filesystem::path path, std::string name);
+    void add(std::filesystem::path path, std::string name);
     bool remove(gid gid);
 
     std::expected<std::string*, Err> get_name(gid gid);
@@ -67,6 +83,8 @@ namespace engine::models {
     std::span<std::string> get_names();
 
     void modified();
+
+    bool is_deleted(gid gid);
 }
 
 namespace engine::culling {

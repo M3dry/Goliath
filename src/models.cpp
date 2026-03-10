@@ -1,5 +1,6 @@
 #include "goliath/models.hpp"
 #include "goliath/culling.hpp"
+#include "goliath/errors.hpp"
 #include "goliath/gltf.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/materials.hpp"
@@ -54,23 +55,6 @@ namespace engine::models {
     std::vector<uint8_t> generations{};
     std::vector<bool> deleted{};
 
-    struct JsonModelEntry {
-        std::string name;
-        gid gid;
-    };
-
-    void to_json(nlohmann::json& j, const JsonModelEntry& entry) {
-        j = nlohmann::json{
-            {"name", entry.name},
-            {"path", entry.gid},
-        };
-    }
-
-    void from_json(const nlohmann::json& j, JsonModelEntry& entry) {
-        j["name"].get_to(entry.name);
-        j["path"].get_to(entry.gid);
-    }
-
     struct task {
         enum Type {
             Acquire,
@@ -94,31 +78,39 @@ namespace engine::models {
         return std::find(initializing_models.begin(), initializing_models.end(), gid) != initializing_models.end();
     }
 
-    void load_model_data(gid gid) {
+    bool load_model_data(gid gid) {
         std::lock_guard lock{gid_read};
 
-        if (generations[gid.id()] != gid.gen()) return;
+        if (generations[gid.id()] != gid.gen()) return false;
 
         uint32_t model_size;
         auto* model_data = engine::util::read_file(models_directory / make_model_path(gid), &model_size);
-        assert(model_data != nullptr);
+        if (model_data == nullptr) {
+            auto error = LoadError{
+                .model = gid,
+            };
+            errors::throw_err(errors::Models_Load, &error);
+            return false;
+        }
 
         cpu_datas[gid.id()] = engine::Model{};
         engine::Model::load(cpu_datas[gid.id()].value(), {model_data, model_size});
 
         free(model_data);
+        return true;
     }
 
-    void add_model(gid gid, std::filesystem::path orig_path) {
+    bool add_model(gid gid, std::filesystem::path orig_path) {
         std::lock_guard lock{gid_read};
 
-        if (generations[gid.id()] != gid.gen()) return;
+        if (generations[gid.id()] != gid.gen()) return false;
 
         uint32_t model_size;
         auto* model_data = engine::util::read_file(orig_path, &model_size);
 
         engine::Model model{};
 
+        bool success = false;
         if (generations[gid.id()] != gid.gen()) goto cleanup;
 
         {
@@ -128,13 +120,45 @@ namespace engine::models {
                                          const std::string& name, Sampler sampler) {
                 return texs->add(data, width, height, format, name, sampler);
             };
+
+            bool thrown = false;
+            auto error = AddError{
+                .model = gid,
+                .model_name = names[gid.id()],
+                .model_src_file = orig_path,
+            };
+            
             if (ext == ".glb") {
-                engine::gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn);
+                std::string warning_str{};
+                std::string error_str{};
+                auto err = engine::gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn, &warning_str, &error_str);
+
+                if ((thrown = err != engine::gltf::Err::Ok) || !warning_str.empty()) {
+                    error.loader = err;
+                    error.tinygltf_warning = std::move(warning_str);
+                    error.tinygltf_error = std::move(error_str);
+                    errors::throw_err(errors::Models_Add, &error);
+                }
             } else if (ext == ".gltf") {
-                engine::gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn);
+                std::string warning_str{};
+                std::string error_str{};
+                auto err = engine::gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn, &error_str, &warning_str);
+
+                if ((thrown = err != engine::gltf::Err::Ok) || !warning_str.empty()) {
+                    error.loader = err;
+                    error.tinygltf_warning = std::move(warning_str);
+                    error.tinygltf_error = std::move(error_str);
+                    errors::throw_err(errors::Models_Add, &error);
+                }
             } else {
                 std::filesystem::copy(orig_path, path);
-                return;
+                return true;
+            }
+
+            if (thrown) {
+                free(model_data);
+                remove(gid);
+                return false;
             }
 
             if (generations[gid.id()] != gid.gen()) goto cleanup;
@@ -155,9 +179,12 @@ namespace engine::models {
             goto cleanup;
         }
 
+        success = true;
     cleanup:
         model.destroy();
         free(model_data);
+
+        return success;
     }
 
     auto io_pool = engine::make_thread_pool([](task&& task) {
@@ -167,12 +194,14 @@ namespace engine::models {
                     _mm_pause();
                 }
 
-                load_model_data(task.gid);
-                gpu_queue.enqueue(task.gid);
+                if (load_model_data(task.gid)) {
+                    gpu_queue.enqueue(task.gid);
+                }
                 break;
             case task::Add:
-                add_model(task.gid, task.orig_path);
-                initialized_queue.enqueue(task.gid);
+                if (add_model(task.gid, task.orig_path)) {
+                    initialized_queue.enqueue(task.gid);
+                }
                 break;
         }
     });
@@ -250,7 +279,7 @@ namespace engine::models {
     void load(const nlohmann::json& j) {
         assert(init_called);
 
-        std::vector<JsonModelEntry> entries{};
+        std::vector<nlohmann::json> entries{};
         j.get_to(entries);
 
         if (names.size() > 0) {
@@ -268,52 +297,50 @@ namespace engine::models {
             deleted.clear();
         }
 
-        uint32_t id_counter = 0;
-        for (auto&& entry : entries) {
-            auto gid = entry.gid;
-            while (gid.id() > id_counter) {
+        for (uint32_t i = 0; i < entries.size(); i++) {
+            auto entry = entries[i];
+
+            if (entry.contains("deleted")) {
                 names.emplace_back();
-
                 ref_counts.emplace_back(0);
-
                 cpu_datas.emplace_back();
                 gpu_datas.emplace_back();
-
-                generations.emplace_back(0);
-
+                generations.emplace_back(entry["gen"]);
                 deleted.emplace_back(true);
-                id_counter++;
+            } else {
+                names.emplace_back(std::move(entry["name"]));
+                ref_counts.emplace_back(0);
+                cpu_datas.emplace_back();
+                gpu_datas.emplace_back();
+                generations.emplace_back(entry["gen"]);
+                deleted.emplace_back(false);
             }
-
-            names.emplace_back(std::move(entry.name));
-
-            ref_counts.emplace_back(0);
-
-            cpu_datas.emplace_back();
-            gpu_datas.emplace_back();
-
-            generations.emplace_back(gid.gen());
-            deleted.emplace_back(false);
-
-            id_counter++;
         }
     }
 
     nlohmann::json save() {
         assert(init_called);
 
-        std::vector<JsonModelEntry> entries{};
+        auto j = nlohmann::json::array();
 
         for (uint32_t i = 0; i < names.size(); i++) {
-            if (deleted[i]) continue;
-
-            entries.emplace_back(names[i], gid{generations[i], i});
+            if (deleted[i]) {
+                j.emplace_back(nlohmann::json{
+                    {"deleted", true},
+                    {"gen", generations[i]},
+                });
+            } else {
+                j.emplace_back(nlohmann::json{
+                    {"name", names[i]},
+                    {"gen", generations[i]},
+                });
+            }
         }
 
-        return nlohmann::json(entries);
+        return j;
     }
 
-    gid add(std::filesystem::path path, std::string name) {
+    void add(std::filesystem::path path, std::string name) {
         assert(init_called);
 
         gid gid;
@@ -348,38 +375,38 @@ namespace engine::models {
 
         initializing_models.emplace_back(gid);
         io_pool.enqueue({task::Add, gid, path});
-
-        return gid;
     }
 
     bool remove(gid gid) {
         assert(init_called);
 
         if (generations[gid.id()] != gid.gen()) return false;
-        if (ref_counts[gid.id()] > 0) return false;
         if (deleted[gid.id()]) return false;
 
         deleted[gid.id()] = true;
         generations[gid.id()] += 1;
 
-        uint32_t model_size;
-        auto* model_data = util::read_file(models_directory / make_model_path(gid), &model_size);
+        auto model_path = models_directory / make_model_path(gid);
+        if (std::filesystem::exists(model_path)) {
+            uint32_t model_size;
+            auto* model_data = util::read_file(models_directory / make_model_path(gid), &model_size);
 
-        Model model;
-        Model::load(model, {model_data, model_size});
+            Model model;
+            Model::load(model, {model_data, model_size});
 
-        for (size_t i = 0; i < model.mesh_count; i++) {
-            auto& mesh = model.meshes[i];
+            for (size_t i = 0; i < model.mesh_count; i++) {
+                auto& mesh = model.meshes[i];
 
-            auto mat_id = mesh.material_id;
-            auto instance_ix = mesh.material_instance;
+                auto mat_id = mesh.material_id;
+                auto instance_ix = mesh.material_instance;
 
-            materials::release_instance(mat_id, instance_ix);
+                materials::release_instance(mat_id, instance_ix);
+            }
+
+            model.destroy();
+
+            std::filesystem::remove(models_directory / make_model_path(gid));
         }
-
-        model.destroy();
-
-        std::filesystem::remove(models_directory / make_model_path(gid));
 
         if (cpu_datas[gid.id()]) cpu_datas[gid.id()]->destroy();
         gpu_datas[gid.id()].destroy();
@@ -388,6 +415,8 @@ namespace engine::models {
 
         cpu_datas[gid.id()] = std::nullopt;
         gpu_datas[gid.id()] = UploadedModelData{};
+
+        modified();
 
         return true;
     }
@@ -499,6 +528,11 @@ namespace engine::models {
 
     void modified() {
         want_save = true;
+    }
+
+    bool is_deleted(gid gid) {
+        if (generations[gid.id()] > gid.gen()) return true;
+        return deleted[gid.id()];
     }
 }
 

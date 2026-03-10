@@ -98,6 +98,7 @@ SET(ENGINE_SOURCES
     scenes.cpp
     assets.cpp
     vma_ptrs.cpp
+    errors.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

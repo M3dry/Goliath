@@ -16,6 +16,7 @@ namespace engine::scenes {
 
     void add_instance(size_t scene_ix, std::string name, glm::mat4 transform, models::gid model);
     void remove_instance(size_t scene_ix, size_t instance_ix);
+    void remove_all_instances_of_model(size_t scene_ix, models::gid model, size_t& selected_instance);
 
     void add(std::string name);
     void remove(size_t scene_ix);
