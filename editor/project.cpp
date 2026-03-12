@@ -15,6 +15,7 @@ namespace project {
     std::filesystem::path scenes_file{};
     std::filesystem::path editor_state{};
     std::filesystem::path asset_inputs{};
+    std::filesystem::path dependency_graph_metadata_directory{};
 
     void parse(const std::filesystem::path& json_file) {
         std::ifstream i{json_file};
@@ -28,6 +29,7 @@ namespace project {
         scenes_file = std::filesystem::path{std::string{j["scenes"]}};
         editor_state = std::filesystem::path{std::string{j["editor_state"]}};
         asset_inputs = std::filesystem::path{std::string{j["asset_inputs"]}};
+        dependency_graph_metadata_directory = std::filesystem::path{std::string{j["dependency_metadata_directory"]}};
     }
 
     bool find_project() {
@@ -61,11 +63,16 @@ namespace project {
             {"scenes", "./scenes.json"},
             {"editor_state", "./editor_state.json"},
             {"asset_inputs", "./assets/inputs.json"},
+            {"dependency_metadata_directory", "./assets/dependencies"}
         }.dump(4);
 
         std::filesystem::create_directory("./assets");
         std::filesystem::create_directory("./assets/models");
         std::filesystem::create_directory("./assets/textures");
+
+        std::filesystem::create_directory("./assets/dependencies");
+        std::filesystem::create_directory("./assets/dependencies/models");
+        std::filesystem::create_directory("./assets/dependencies/textures");
 
         o.flush();
     }

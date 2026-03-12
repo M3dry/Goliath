@@ -1,3 +1,4 @@
+#include "goliath/dependency_graph.hpp"
 #include "goliath/models.hpp"
 #include "goliath/culling.hpp"
 #include "goliath/errors.hpp"
@@ -20,6 +21,8 @@ namespace engine::models {
     bool want_save = false;
     bool init_called = false;
     std::filesystem::path models_directory;
+
+    DependencyGraph* dep_graph;
 
     std::filesystem::path make_model_path(gid gid) {
         return std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff);
@@ -116,9 +119,11 @@ namespace engine::models {
         {
             const auto& ext = orig_path.extension();
             auto path = models_directory / make_model_path(gid);
-            constexpr auto image_fn = [](std::span<uint8_t> data, int width, int height, VkFormat format,
+            auto image_fn = [&](std::span<uint8_t> data, int width, int height, VkFormat format,
                                          const std::string& name, Sampler sampler) {
-                return texs->add(data, width, height, format, name, sampler);
+                auto tex_gid = texs->add(data, width, height, format, name, sampler);
+                dep_graph->add_dep(gid, tex_gid);
+                return tex_gid;
             };
 
             bool thrown = false;
@@ -258,10 +263,11 @@ namespace engine::models {
         return std::nullopt;
     }
 
-    void init(std::filesystem::path models_dir, Textures* textures) {
+    void init(std::filesystem::path models_dir, Textures* textures, DependencyGraph* dependency_graph) {
         texs = textures;
         init_called = true;
         models_directory = models_dir;
+        dep_graph = dependency_graph;
     }
 
     void destroy() {
@@ -340,7 +346,7 @@ namespace engine::models {
         return j;
     }
 
-    void add(std::filesystem::path path, std::string name) {
+    gid add(std::filesystem::path path, std::string name) {
         assert(init_called);
 
         gid gid;
@@ -375,6 +381,8 @@ namespace engine::models {
 
         initializing_models.emplace_back(gid);
         io_pool.enqueue({task::Add, gid, path});
+
+        return gid;
     }
 
     bool remove(gid gid) {
@@ -385,6 +393,8 @@ namespace engine::models {
 
         deleted[gid.id()] = true;
         generations[gid.id()] += 1;
+
+        dep_graph->remove_asset(gid);
 
         auto model_path = models_directory / make_model_path(gid);
         if (std::filesystem::exists(model_path)) {

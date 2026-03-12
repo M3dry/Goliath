@@ -5,6 +5,10 @@
 #include "goliath/model.hpp"
 #include <nlohmann/json.hpp>
 
+namespace engine {
+    class DependencyGraph;
+}
+
 namespace engine::models {
     enum struct Err {
         BadGeneration,
@@ -47,8 +51,7 @@ namespace engine::models {
         gid model;
     };
 
-
-    void init(std::filesystem::path models_dir, Textures* textures);
+    void init(std::filesystem::path models_dir, Textures* textures, DependencyGraph* dep_graph = nullptr);
     void destroy();
 
     void to_json(nlohmann::json& j, const gid& gid);
@@ -57,7 +60,7 @@ namespace engine::models {
     void load(const nlohmann::json& j);
     nlohmann::json save();
 
-    void add(std::filesystem::path path, std::string name);
+    gid add(std::filesystem::path path, std::string name);
     bool remove(gid gid);
 
     std::expected<std::string*, Err> get_name(gid gid);

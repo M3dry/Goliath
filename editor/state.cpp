@@ -1,4 +1,5 @@
 #include "state.hpp"
+#include "goliath/dependency_graph.hpp"
 
 namespace state {
     bool want_to_save_ = false;
@@ -6,6 +7,8 @@ namespace state {
     std::string models_query{};
     int assets_scope{};
     bool assets_scene_only_scope;
+
+    engine::DependencyGraph* dependency_graph{};
 
     nlohmann::json default_json() {
         return nlohmann::json{

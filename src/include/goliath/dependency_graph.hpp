@@ -11,16 +11,27 @@ namespace engine {
       public:
         using AssetGID = std::variant<models::gid, Textures::gid>;
 
-        std::span<const AssetGID> get_deps(AssetGID gid) const;
-        std::span<const AssetGID> get_r_deps(AssetGID gid) const;
+        template <typename F>
+        decltype(auto) with_deps(F&& f, AssetGID gid) {
+            std::lock_guard lock{mutex};
+            return f(get_deps(gid));
+        }
+
+        template <typename F>
+        decltype(auto) with_r_deps(F&& f, AssetGID gid) {
+            std::lock_guard lock{mutex};
+            return f(get_deps(gid));
+        }
 
         void remove_asset(AssetGID asset);
         void add_dep(AssetGID asset, AssetGID dep);
 
-        static std::expected<DependencyGraph, util::ReadJsonErr> init(std::filesystem::path metadata_dir);
-        void save(std::filesystem::path alternative_dir = "") const;
+        static std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>> init(std::filesystem::path metadata_dir);
+        void save(std::filesystem::path alternative_dir = "");
 
         bool want_to_save() {
+            std::lock_guard lock{mutex};
+
             auto res = want_save;
             want_save = false;
             return res;
@@ -31,6 +42,7 @@ namespace engine {
 
         std::filesystem::path metadata_dir;
         bool want_save = false;
+        std::mutex mutex{};
 
         struct Asset {
             uint32_t generation = -1;
@@ -48,6 +60,9 @@ namespace engine {
         void build_r_deps();
 
         void add_dep(AssetGID target, AssetGID dep, bool reverse);
+
+        std::span<const AssetGID> get_deps(AssetGID gid) const;
+        std::span<const AssetGID> get_r_deps(AssetGID gid) const;
 
         template <typename GID> std::vector<Asset>& get_assets() {
             if constexpr (std::is_same_v<GID, models::gid>) {
@@ -124,8 +139,8 @@ namespace engine {
         }
 
         template <typename F>
-        static constexpr void visit_gids(F&& f) {
-            [&]<typename GID, typename... GIDs>(std::in_place_type_t<std::variant<GID, GIDs...>>) {
+        static constexpr decltype(auto) visit_gids(F&& f) {
+            return [&]<typename GID, typename... GIDs>(std::in_place_type_t<std::variant<GID, GIDs...>>) {
                using ErrType = decltype(std::declval<F>().template operator()<GID>());
 
                if constexpr (std::is_same_v<ErrType, void>) {

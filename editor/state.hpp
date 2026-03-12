@@ -1,5 +1,6 @@
 #pragma once
 
+#include "goliath/dependency_graph.hpp"
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -8,6 +9,8 @@ namespace state {
     extern std::string models_query;
     extern int assets_scope;
     extern bool assets_scene_only_scope;
+
+    extern engine::DependencyGraph* dependency_graph;
 
     nlohmann::json default_json();
 

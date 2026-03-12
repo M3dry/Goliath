@@ -5,6 +5,7 @@
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
 #include "goliath/culling.hpp"
+#include "goliath/dependency_graph.hpp"
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
 #include "goliath/errors.hpp"
@@ -160,6 +161,14 @@ int main(int argc, char** argv) {
     }
     std::filesystem::current_path(project::project_root);
 
+    auto dep_graph = engine::DependencyGraph::init(project::dependency_graph_metadata_directory);
+    if (!dep_graph) {
+        auto [path, err] = dep_graph.error();
+        printf("Couldn't create the asset dependency graph, error %d at file `%s`\n", err, path.string().c_str());
+        return 0;
+    }
+    state::dependency_graph = *dep_graph;
+
     engine::init(engine::Init{
         .window_name = "Goliath editor",
         .texture_capacity = 1000,
@@ -233,7 +242,7 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
     game_textures = engine::Textures::make(project::textures_directory.c_str());
     engine::materials::init();
-    engine::models::init(project::models_directory, game_textures);
+    engine::models::init(project::models_directory, game_textures, state::dependency_graph);
     GameView::init();
 
     std::optional<LoadedGame> game{};
@@ -637,6 +646,10 @@ int main(int argc, char** argv) {
             cam_info.cam.update_matrices();
             scene::update_camera(cam_info);
 
+            if (state::dependency_graph->want_to_save()) {
+                state::dependency_graph->save();
+            }
+
             if (state::want_to_save() || exvar_reg.want_to_save() || scene::want_to_save()) {
                 std::ofstream o{project::editor_state};
                 o << nlohmann::json{
@@ -975,6 +988,7 @@ int main(int argc, char** argv) {
     engine::models::destroy();
     engine::materials::destroy();
     delete game_textures;
+    delete state::dependency_graph;
     engine::destroy();
 
     exvar_reg.destroy();

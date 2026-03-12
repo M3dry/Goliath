@@ -12,6 +12,7 @@ namespace project {
     extern std::filesystem::path scenes_file;
     extern std::filesystem::path editor_state;
     extern std::filesystem::path asset_inputs;
+    extern std::filesystem::path dependency_graph_metadata_directory;
 
     bool find_project();
 
