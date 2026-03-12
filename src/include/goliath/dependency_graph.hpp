@@ -124,7 +124,7 @@ namespace engine {
         }
 
         template <typename F>
-        static void visit_gids(F&& f) {
+        static constexpr void visit_gids(F&& f) {
             [&]<typename GID, typename... GIDs>(std::in_place_type_t<std::variant<GID, GIDs...>>) {
                using ErrType = decltype(std::declval<F>().template operator()<GID>());
 

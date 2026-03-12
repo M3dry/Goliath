@@ -153,7 +153,7 @@ namespace engine {
 
             for (uint32_t i = 0; i < assets.size(); i++) {
                 nlohmann::json j = assets[i].deps;
-                std::ofstream o{entries_path / std::format("{:02X}{:06X}.{}", file_ext)};
+                std::ofstream o{entries_path / std::format("{:02X}{:06X}.{}", assets[i].generation, i, file_ext)};
                 o << j;
             }
         });
