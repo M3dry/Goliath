@@ -4,6 +4,7 @@
 #include "goliath/textures.hpp"
 #include "goliath/util.hpp"
 #include <functional>
+#include <mutex>
 #include <utility>
 
 namespace engine {
@@ -11,22 +12,28 @@ namespace engine {
       public:
         using AssetGID = std::variant<models::gid, Textures::gid>;
 
-        template <typename F>
-        decltype(auto) with_deps(F&& f, AssetGID gid) {
+        template <typename F> decltype(auto) with_deps(F&& f, AssetGID gid) {
             std::lock_guard lock{mutex};
             return f(get_deps(gid));
         }
 
-        template <typename F>
-        decltype(auto) with_r_deps(F&& f, AssetGID gid) {
+        template <typename F> decltype(auto) with_r_deps(F&& f, AssetGID gid) {
             std::lock_guard lock{mutex};
             return f(get_deps(gid));
         }
 
-        void remove_asset(AssetGID asset);
+        void remove_asset(AssetGID gid) {
+            std::lock_guard lock{mutex};
+            if (auto asset = _remove_asset(gid); asset) {
+                modified();
+                asset->get() = Asset{};
+            }
+        }
+
         void add_dep(AssetGID asset, AssetGID dep);
 
-        static std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>> init(std::filesystem::path metadata_dir);
+        static std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>>
+        init(std::filesystem::path metadata_dir);
         void save(std::filesystem::path alternative_dir = "");
 
         bool want_to_save() {
@@ -35,6 +42,20 @@ namespace engine {
             auto res = want_save;
             want_save = false;
             return res;
+        }
+
+        std::pair<std::vector<AssetGID>, std::vector<std::pair<AssetGID, AssetGID>>> deep_remove(AssetGID root) {
+            std::lock_guard lock{mutex};
+            std::vector<AssetGID> ret{};
+            std::vector<std::pair<AssetGID, AssetGID>> removals{};
+            _deep_remove(root, ret, removals);
+            if (ret.empty()) {
+                ret.emplace_back(root);
+            }
+            modified();
+
+            debug_print();
+            return {ret, removals};
         }
 
       private:
@@ -61,6 +82,59 @@ namespace engine {
 
         void add_dep(AssetGID target, AssetGID dep, bool reverse);
 
+        std::optional<std::reference_wrapper<Asset>> _remove_asset(AssetGID gid, std::optional<std::reference_wrapper<std::vector<std::pair<AssetGID, AssetGID>>>> removals = std::nullopt) {
+            auto asset_ = get_asset(gid);
+            if (!asset_) return std::nullopt;
+            auto& asset = asset_->get();
+
+            for (const auto& dep : asset.deps) {
+                auto ddep = get_asset(dep);
+                if (!ddep) continue;
+                std::erase_if(ddep->get().r_deps, [&](auto r_dgid) {
+                    auto& assets = get_assets(r_dgid);
+                    if ((assets.size() > get_id(r_dgid) && get_gen(r_dgid) < assets[get_id(r_dgid)].generation) ||
+                           gid == r_dgid) {
+                        if (removals) removals->get().emplace_back(gid, r_dgid);
+                        return true;
+                    }
+
+                    return false;
+                });
+            }
+
+            for (const auto& dep : asset.r_deps) {
+                auto ddep = get_asset(dep);
+                if (!ddep) continue;
+                std::erase_if(ddep->get().deps, [&](auto dgid) {
+                    auto& assets = get_assets(dgid);
+                    return (assets.size() > get_id(dgid) && get_gen(dgid) < assets[get_id(dgid)].generation) ||
+                           gid == dgid;
+                });
+            }
+
+            return asset;
+        }
+
+        void _deep_remove(AssetGID root, std::vector<AssetGID>& out, std::vector<std::pair<AssetGID, AssetGID>>& removals) {
+            auto asset_ = _remove_asset(root, removals);
+            if (!asset_) return;
+            auto& asset = asset_->get();
+
+            out.emplace_back(root);
+
+            auto deps = std::move(asset.deps);
+            asset = Asset{};
+
+            bool acc = false;
+            for (const auto& dep_gid : deps) {
+                auto dep_asset = get_asset(dep_gid);
+                if (!dep_asset) continue;
+                if (!dep_asset->get().r_deps.empty()) continue;
+
+                _deep_remove(dep_gid, out, removals);
+            }
+        }
+
         std::span<const AssetGID> get_deps(AssetGID gid) const;
         std::span<const AssetGID> get_r_deps(AssetGID gid) const;
 
@@ -85,7 +159,8 @@ namespace engine {
         }
 
         std::vector<Asset>& get_assets(AssetGID gid_type) {
-            return std::visit([&](auto&& gid) -> std::vector<Asset>& { return get_assets<std::decay_t<decltype(gid)>>(); }, gid_type);
+            return std::visit(
+                [&](auto&& gid) -> std::vector<Asset>& { return get_assets<std::decay_t<decltype(gid)>>(); }, gid_type);
         }
 
         std::span<const Asset> get_assets(AssetGID gid_type) const {
@@ -93,27 +168,19 @@ namespace engine {
         }
 
         std::optional<std::reference_wrapper<Asset>> get_asset(AssetGID gid) {
-            return std::visit(
-                [&](auto&& gid) -> std::optional<std::reference_wrapper<Asset>> {
-                    auto assets = get_assets<std::decay_t<decltype(gid)>>();
-                    if (assets.size() <= get_id(gid)) return std::nullopt;
-                    if (assets[gid.id()].generation != get_gen(gid)) return std::nullopt;
+            auto& assets = get_assets(gid);
+            if (assets.size() <= get_id(gid)) return std::nullopt;
+            if (assets[get_id(gid)].generation != get_gen(gid)) return std::nullopt;
 
-                    return assets[gid.id()];
-                },
-                gid);
+            return assets[get_id(gid)];
         }
 
         std::optional<std::reference_wrapper<const Asset>> get_asset(AssetGID gid) const {
-            return std::visit(
-                [&](auto&& gid) -> std::optional<std::reference_wrapper<const Asset>> {
-                    auto assets = get_assets<std::decay_t<decltype(gid)>>();
-                    if (assets.size() <= get_id(gid)) return std::nullopt;
-                    if (assets[gid.id()].generation != get_gen(gid)) return std::nullopt;
+            auto assets = get_assets(gid);
+            if (assets.size() <= get_id(gid)) return std::nullopt;
+            if (assets[get_id(gid)].generation != get_gen(gid)) return std::nullopt;
 
-                    return assets[gid.id()];
-                },
-                gid);
+            return assets[get_id(gid)];
         }
 
         static uint32_t get_id(AssetGID gid) {
@@ -138,21 +205,55 @@ namespace engine {
             return std::visit([&](auto&& gid) -> AssetGID { return (std::decay_t<decltype(gid)>){gen, id}; }, src);
         }
 
-        template <typename F>
-        static constexpr decltype(auto) visit_gids(F&& f) {
+        template <typename F> static constexpr decltype(auto) visit_gids(F&& f) {
             return [&]<typename GID, typename... GIDs>(std::in_place_type_t<std::variant<GID, GIDs...>>) {
-               using ErrType = decltype(std::declval<F>().template operator()<GID>());
+                using ErrType = decltype(std::declval<F>().template operator()<GID>());
 
-               if constexpr (std::is_same_v<ErrType, void>) {
-                   (f.template operator()<GIDs>(), ...);
-               } else {
-                   ErrType err{};
+                if constexpr (std::is_same_v<ErrType, void>) {
+                    f.template operator()<GID>();
+                    (f.template operator()<GIDs>(), ...);
+                } else {
+                    ErrType err = f.template operator()<GID>();
 
-                   ((!err && (err = f.template operator()<GIDs>())), ...);
+                    ((!err && (err = f.template operator()<GIDs>())), ...);
 
-                   return err;
-               }
+                    return err;
+                }
             }(std::in_place_type_t<AssetGID>{});
+        }
+
+        void debug_print() const {
+            printf("models:\n");
+            for (const auto& asset : model_deps) {
+                printf("{ .gen = %d, .deps = [\n", asset.generation);
+
+                for (const auto& dep : asset.deps) {
+                    printf(" \t{ .gen = %d, .id = %d }\n", get_gen(dep), get_id(dep));
+                }
+                printf(" ], .r_deps = [\n");
+
+                for (const auto& dep : asset.r_deps) {
+                    printf(" \t{ .gen = %d, .id = %d }\n", get_gen(dep), get_id(dep));
+                }
+                printf(" ]\n}\n");
+            }
+
+            printf("textures:\n");
+            for (const auto& asset : texture_deps) {
+                printf("{ .gen = %d, .deps = [\n", asset.generation);
+
+                for (const auto& dep : asset.deps) {
+                    printf(" \t{ .gen = %d, .id = %d }\n", get_gen(dep), get_id(dep));
+                }
+                printf(" ], .r_deps = [\n");
+
+                for (const auto& dep : asset.r_deps) {
+                    printf(" \t{ .gen = %d, .id = %d }\n", get_gen(dep), get_id(dep));
+                }
+                printf(" ]\n}\n");
+            }
+
+            printf("-------------------------------------\n");
         }
     };
 }

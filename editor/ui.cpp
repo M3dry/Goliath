@@ -256,6 +256,9 @@ namespace ui {
         } else {
             auto names = game_textures->get_names();
             for (uint32_t i = 0; i < names.size(); i++) {
+                auto gid = engine::Textures::gid{game_textures->get_generation(i), i};
+                if (game_textures->is_deleted(gid)) continue;
+
                 auto score = score_search(query, names[i]);
                 if (score > std::numeric_limits<int32_t>::min()) {
                     out.emplace_back(engine::Textures::gid{game_textures->get_generation(i), i}, score);

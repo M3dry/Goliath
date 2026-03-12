@@ -96,8 +96,8 @@ namespace engine::util {
         static constexpr std::array<size_t, 2> dimension = {N, M};
     };
 
-    constexpr std::pair<uint32_t, uint32_t> parse_gid(std::string_view str, const char* file_ext) {
-        if (str.size() != 12 || str.substr(8) != file_ext) return {-1, -1};
+    constexpr std::pair<uint32_t, uint32_t> parse_gid(std::string_view str, std::string_view file_ext) {
+        if (str.size() != file_ext.size() + 9 || str.substr(9) != file_ext) return {-1, -1};
 
         for (uint32_t i = 0; i < 8; ++i) {
             if (!std::isxdigit(str[i])) return {-1, -1};

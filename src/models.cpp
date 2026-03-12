@@ -363,6 +363,8 @@ namespace engine::models {
 
             generations[gid.id()] += 1;
             deleted[gid.id()] = false;
+
+            gid = models::gid{generations[gid.id()], gid.id()};
         } else {
             std::lock_guard lock{gid_read};
 

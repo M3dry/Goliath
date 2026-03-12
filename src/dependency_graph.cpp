@@ -56,36 +56,6 @@ namespace engine {
         return {};
     }
 
-    void DependencyGraph::remove_asset(AssetGID gid) {
-        std::lock_guard lock{mutex};
-
-        auto asset_ = get_asset(gid);
-        if (!asset_) return;
-        auto& asset = asset_->get();
-
-        for (const auto& dep : asset.deps) {
-            auto ddep = get_asset(dep);
-            if (!ddep) continue;
-            std::erase_if(ddep->get().r_deps, [&](auto r_dgid) {
-                auto& assets = get_assets(r_dgid);
-                return (assets.size() > get_id(r_dgid) && get_gen(r_dgid) < assets[get_id(r_dgid)].generation) ||
-                       gid == r_dgid;
-            });
-        }
-
-        for (const auto& dep : asset.r_deps) {
-            auto ddep = get_asset(dep);
-            if (!ddep) continue;
-            std::erase_if(ddep->get().deps, [&](auto dgid) {
-                auto& assets = get_assets(dgid);
-                return (assets.size() > get_id(dgid) && get_gen(dgid) < assets[get_id(dgid)].generation) || gid == dgid;
-            });
-        }
-
-        modified();
-        asset = Asset{};
-    }
-
     void DependencyGraph::add_dep(AssetGID asset, AssetGID dep) {
         std::lock_guard lock{mutex};
         add_dep(asset, dep, false);
@@ -111,15 +81,15 @@ namespace engine {
             for (const auto& entry : std::filesystem::directory_iterator{entries_path}) {
                 if (!entry.is_regular_file()) continue;
 
-                auto [gen, id] = util::parse_gid(entry.path().stem().string(), file_ext);
+                auto [gen, id] = util::parse_gid(entry.path().filename().string(), file_ext);
                 while (assets.size() <= id) {
                     assets.emplace_back();
                 }
 
                 if (assets[id].generation != -1) {
                     fprintf(stderr, "multiple dependency metadata files with same id");
+                    if (assets[id].generation > gen) continue;
                 }
-                if (assets[id].generation > gen) continue;
 
                 auto j = util::read_json(entry.path());
                 if (!j) return std::pair{entry.path(), j.error()};
@@ -135,6 +105,7 @@ namespace engine {
         if (err) return std::unexpected(*err);
 
         graph->build_r_deps();
+
         return graph;
     }
 
@@ -156,13 +127,14 @@ namespace engine {
 
             auto& assets = get_assets<GID>();
 
+            std::filesystem::remove_all(entries_path);
+            std::filesystem::create_directory(entries_path);
             for (uint32_t i = 0; i < assets.size(); i++) {
+                auto path = entries_path / std::format("{:02X}{:06X}.{}", assets[i].generation, i, file_ext);
                 if (assets[i].generation == -1) continue;
 
                 nlohmann::json j = assets[i].deps;
-                auto path = entries_path / std::format("{:02X}{:06X}.{}", assets[i].generation, i, file_ext);
                 std::ofstream o{path};
-                printf("%s: %s\n", path.string().c_str(), j.dump(4).c_str());
                 o << j;
             }
         });

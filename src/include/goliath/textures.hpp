@@ -63,6 +63,8 @@ namespace engine {
 
         uint8_t get_generation(uint32_t ix) const;
 
+        bool is_deleted(gid gid) const;
+
         void acquire(std::span<const gid> gids);
         void release(std::span<const gid> gids);
 

@@ -427,7 +427,6 @@ namespace engine {
 
     bool Textures::remove(gid gid) {
         if (generations[gid.id()] != gid.gen()) return false;
-        if (ref_counts[gid.id()] > 0) return false;
         if (deleted[gid.id()]) return false;
 
         deleted[gid.id()] = true;
@@ -443,6 +442,8 @@ namespace engine {
         gpu_images[gid.id()] = GPUImage{};
         gpu_image_views[gid.id()] = nullptr;
         samplers[gid.id()] = -1;
+
+        modified();
 
         return true;
     }
@@ -474,6 +475,12 @@ namespace engine {
     uint8_t Textures::get_generation(uint32_t ix) const {
         return generations[ix];
     }
+
+    bool Textures::is_deleted(gid gid) const {
+        if (generations[gid.gen()] > gid.gen()) return true;
+        return deleted[gid.id()];
+    }
+
 
     void Textures::acquire(std::span<const gid> gids) {
         for (size_t i = 0; i < gids.size(); i++) {
