@@ -1,26 +1,29 @@
 #include "goliath/dependency_graph.hpp"
 #include "goliath/util.hpp"
 #include <filesystem>
+#include <fstream>
 #include <variant>
 
 namespace engine {
     void to_json(nlohmann::json& j, const DependencyGraph::AssetGID& gid) {
-        std::visit([&j](auto&& gid) {
-            using T = std::decay_t<decltype(gid)>;
+        std::visit(
+            [&j](auto&& gid) {
+                using T = std::decay_t<decltype(gid)>;
 
-            const char* str;
-            if constexpr (std::is_same_v<T, models::gid>) {
-                str = "model";
-            } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                str = "texture";
-            }
+                const char* str;
+                if constexpr (std::is_same_v<T, models::gid>) {
+                    str = "model";
+                } else if constexpr (std::is_same_v<T, Textures::gid>) {
+                    str = "texture";
+                }
 
-            j = {
-                {"type", str},
-                {"gen", gid.gen()},
-                {"id", gid.id()},
-            };
-        }, gid);
+                j = {
+                    {"type", str},
+                    {"gen", gid.gen()},
+                    {"id", gid.id()},
+                };
+            },
+            gid);
     }
 
     void from_json(const nlohmann::json& j, DependencyGraph::AssetGID& gid) {
@@ -32,244 +35,162 @@ namespace engine {
         } else if (type == "texture") {
             gid = Textures::gid{gen, id};
         } else {
-            assert(false && "figure out a good way to report this error such that it conveys which asset metadata is corrupted");
+            assert(false &&
+                   "figure out a good way to report this error such that it conveys which asset metadata is corrupted");
         }
     }
 
-    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_deps_of(models::gid gid) const {
-        auto& asset = model_deps[gid.id()];
-        if (asset.generation != gid.gen()) return {};
-
-        return asset.deps;
-    }
-
-    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_deps_of(Textures::gid gid) const {
-        auto& asset = texture_deps[gid.id()];
-        if (asset.generation != gid.gen()) return {};
-
-        return asset.deps;
-    }
-
-    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_r_deps_of(models::gid gid) const {
-        auto& asset = model_deps[gid.id()];
-        if (asset.generation != gid.gen()) return {};
-
-        return asset.r_deps;
-    }
-
-    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_r_deps_of(Textures::gid gid) const {
-        auto& asset = texture_deps[gid.id()];
-        if (asset.generation != gid.gen()) return {};
-
-        return asset.r_deps;
-    }
-
-    void DependencyGraph::remove_asset(models::gid asset) {
-        if (model_deps.size() <= asset.id()) return;
-        auto& deps = model_deps[asset.id()];
-        if (deps.generation > asset.gen()) return;
-
-        for (const auto& dep : deps.deps) {
-            std::visit([&](auto&& gid) {
-                using T = std::decay_t<decltype(gid)>;
-
-                if constexpr (std::is_same_v<T, models::gid>) {
-                    std::erase_if(model_deps[gid.id()].r_deps, [&](auto r_gid) {
-                        return std::holds_alternative<models::gid>(r_gid) && std::get<models::gid>(r_gid) == gid;
-                    });
-                } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                    std::erase_if(texture_deps[gid.id()].r_deps, [&](auto r_gid) {
-                        return std::holds_alternative<Textures::gid>(r_gid) && std::get<Textures::gid>(r_gid) == gid;
-                    });
-                }
-            }, dep);
+    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_deps(AssetGID gid) const {
+        if (auto asset = get_asset(gid); asset) {
+            return asset->get().deps;
         }
 
-        for (const auto& dep : deps.r_deps) {
-            std::visit([&](auto&& gid) {
-                using T = std::decay_t<decltype(gid)>;
-
-                if constexpr (std::is_same_v<T, models::gid>) {
-                    std::erase_if(model_deps[gid.id()].deps, [&](auto r_gid) {
-                        return std::holds_alternative<models::gid>(r_gid) && std::get<models::gid>(r_gid) == gid;
-                    });
-                } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                    std::erase_if(texture_deps[gid.id()].deps, [&](auto r_gid) {
-                        return std::holds_alternative<Textures::gid>(r_gid) && std::get<Textures::gid>(r_gid) == gid;
-                    });
-                }
-            }, dep);
-        }
-
-        model_deps[asset.id()] = Asset{};
+        return {};
     }
 
-    void DependencyGraph::remove_asset(Textures::gid asset) {
-        if (texture_deps.size() <= asset.id()) return;
-        auto& deps = texture_deps[asset.id()];
-        if (deps.generation > asset.gen()) return;
-
-        for (const auto& dep : deps.deps) {
-            std::visit([&](auto&& gid) {
-                using T = std::decay_t<decltype(gid)>;
-
-                if constexpr (std::is_same_v<T, models::gid>) {
-                    std::erase_if(texture_deps[gid.id()].r_deps, [&](auto r_gid) {
-                        return std::holds_alternative<models::gid>(r_gid) && std::get<models::gid>(r_gid) == gid;
-                    });
-                } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                    std::erase_if(texture_deps[gid.id()].r_deps, [&](auto r_gid) {
-                        return std::holds_alternative<Textures::gid>(r_gid) && std::get<Textures::gid>(r_gid) == gid;
-                    });
-                }
-            }, dep);
+    std::span<const DependencyGraph::AssetGID> DependencyGraph::get_r_deps(AssetGID gid) const {
+        if (auto asset = get_asset(gid); asset) {
+            return asset->get().r_deps;
         }
 
-        for (const auto& dep : deps.r_deps) {
-            std::visit([&](auto&& gid) {
-                using T = std::decay_t<decltype(gid)>;
+        return {};
+    }
 
-                if constexpr (std::is_same_v<T, models::gid>) {
-                    std::erase_if(texture_deps[gid.id()].deps, [&](auto r_gid) {
-                        return std::holds_alternative<models::gid>(r_gid) && std::get<models::gid>(r_gid) == gid;
-                    });
-                } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                    std::erase_if(texture_deps[gid.id()].deps, [&](auto r_gid) {
-                        return std::holds_alternative<Textures::gid>(r_gid) && std::get<Textures::gid>(r_gid) == gid;
-                    });
-                }
-            }, dep);
+    void DependencyGraph::remove_asset(AssetGID gid) {
+        auto asset_ = get_asset(gid);
+        if (!asset_) return;
+        auto& asset = asset_->get();
+
+        for (const auto& dep : asset.deps) {
+            auto ddep = get_asset(dep);
+            if (!ddep) continue;
+            std::erase_if(ddep->get().r_deps, [&](auto r_dgid) {
+                auto assets = get_assets(r_dgid);
+                return (assets.size() > get_id(r_dgid) && get_gen(r_dgid) < assets[get_id(r_dgid)].generation) ||
+                       gid == r_dgid;
+            });
         }
 
-        texture_deps[asset.id()] = Asset{};
+        for (const auto& dep : asset.r_deps) {
+            auto ddep = get_asset(dep);
+            if (!ddep) continue;
+            std::erase_if(ddep->get().deps, [&](auto dgid) {
+                auto assets = get_assets(dgid);
+                return (assets.size() > get_id(dgid) && get_gen(dgid) < assets[get_id(dgid)].generation) || gid == dgid;
+            });
+        }
+
+        modified();
+        asset = Asset{};
     }
 
-    void DependencyGraph::add_dep(models::gid asset, AssetGID dep) {
-        add_dep(asset, dep, false);
-    }
-
-    void DependencyGraph::add_dep(Textures::gid asset, AssetGID dep) {
+    void DependencyGraph::add_dep(AssetGID asset, AssetGID dep) {
         add_dep(asset, dep, false);
     }
 
     std::expected<DependencyGraph, util::ReadJsonErr> DependencyGraph::init(std::filesystem::path metadata_dir) {
         DependencyGraph graph{metadata_dir};
 
-        for (const auto& entry : std::filesystem::directory_iterator{ metadata_dir / "models" }) {
-            if (!entry.is_regular_file()) continue;
+        visit_gids([&]<typename GID>() -> std::optional<util::ReadJsonErr> {
+            std::filesystem::path entries_path = metadata_dir;
+            const char* file_ext;
 
-            auto [gen, id] = util::parse_gom(entry.path().stem().string());
+            if constexpr (std::is_same_v<GID, models::gid>) {
+                entries_path /= "models";
+                file_ext = "gom";
+            } else if constexpr (std::is_same_v<GID, Textures::gid>) {
+                entries_path /= "textures";
+                file_ext = "goi";
+            } else if constexpr (std::is_same_v<GID, Textures::gid>) {
+            } else static_assert("impossible");
 
-            while (graph.model_deps.size() <= id) {
-                graph.model_deps.emplace_back();
+            auto assets = graph.get_assets<GID>();
+            for (const auto& entry : std::filesystem::directory_iterator{entries_path}) {
+                if (!entry.is_regular_file()) continue;
+
+                auto [gen, id] = util::parse_gid(entry.path().stem().string(), file_ext);
+                while (assets.size() < id) {
+                    assets.emplace_back();
+                }
+
+                if (assets[id].generation != -1) {
+                    fprintf(stderr, "multiple dependency metadata files with same id");
+                }
+                if (assets[id].generation > gen) continue;
+
+                auto j = util::read_json(entry.path());
+                if (!j) return j.error();
+
+                assets[id] = Asset{
+                    .generation = gen,
+                    .deps = *j,
+                };
             }
 
-            if (graph.model_deps[id].generation != -1) { fprintf(stderr, "multiple dependency metadata files with same id"); };
-            if (graph.model_deps[id].generation > gen) continue;
-
-            auto j = util::read_json(entry.path());
-            if (!j) return std::unexpected(j.error());
-
-            graph.model_deps[id] = Asset{
-                .generation = gen,
-                .deps = *j,
-            };
-        }
-
-        for (const auto& entry : std::filesystem::directory_iterator{ metadata_dir / "textures" }) {
-            if (!entry.is_regular_file()) continue;
-
-            auto [gen, id] = util::parse_goi(entry.path().stem().string());
-
-            while (graph.texture_deps.size() <= id) {
-                graph.texture_deps.emplace_back();
-            }
-
-            if (graph.texture_deps[id].generation != -1) { fprintf(stderr, "multiple dependency metadata files with same id"); };
-            if (graph.texture_deps[id].generation > gen) continue;
-
-            auto j = util::read_json(entry.path());
-            if (!j) return std::unexpected(j.error());
-
-            graph.texture_deps[id] = Asset{
-                .generation = gen,
-                .deps = *j,
-            };
-        }
+            return std::nullopt;
+        });
 
         graph.build_r_deps();
         return graph;
     }
 
+    void DependencyGraph::save(std::filesystem::path alternative_dir) const {
+        if (alternative_dir.empty()) alternative_dir = metadata_dir;
+
+        visit_gids([&]<typename GID>() {
+            std::filesystem::path entries_path = alternative_dir;
+            const char* file_ext;
+
+            if constexpr (std::is_same_v<GID, models::gid>) {
+                entries_path /= "models";
+                file_ext = "gom";
+            } else if constexpr (std::is_same_v<GID, Textures::gid>) {
+                entries_path /= "textures";
+                file_ext = "goi";
+            } else static_assert("impossible");
+
+            auto assets = get_assets<GID>();
+
+            for (uint32_t i = 0; i < assets.size(); i++) {
+                nlohmann::json j = assets[i].deps;
+                std::ofstream o{entries_path / std::format("{:02X}{:06X}.{}", file_ext)};
+                o << j;
+            }
+        });
+    }
+
     void DependencyGraph::build_r_deps() {
-        for (uint32_t i = 0; i < model_deps.size(); i++) {
-            for (const auto& dep : model_deps[i].deps) {
-                std::visit([&](auto&& gid) {
-                    using T = std::decay_t<decltype(gid)>;
+        visit_gids([&]<typename GID>() {
+            auto assets = get_assets<GID>();
+            for (uint32_t i = 0; i < assets.size(); i++) {
+                for (const auto& dep : assets[i].deps) {
+                    auto r_dep = get_asset(dep);
+                    if (!r_dep) continue;
 
-                    if constexpr (std::is_same_v<T, models::gid>) {
-                        model_deps[gid.id()].deps.emplace_back(models::gid{model_deps[i].generation, i});
-                    } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                        texture_deps[gid.id()].deps.emplace_back(models::gid{model_deps[i].generation, i});
-                    }
-                }, dep);
+                    r_dep->get().deps.emplace_back(GID{assets[i].generation, i});
+                }
             }
-        }
-
-        for (uint32_t i = 0; i < texture_deps.size(); i++) {
-            for (const auto& dep : texture_deps[i].deps) {
-                std::visit([&](auto&& gid) {
-                    using T = std::decay_t<decltype(gid)>;
-
-                    if constexpr (std::is_same_v<T, models::gid>) {
-                        model_deps[gid.id()].deps.emplace_back(Textures::gid{texture_deps[i].generation, i});
-                    } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                        texture_deps[gid.id()].deps.emplace_back(Textures::gid{texture_deps[i].generation, i});
-                    }
-                }, dep);
-            }
-        }
+        });
     }
 
-    void DependencyGraph::add_dep(models::gid asset, AssetGID dep, bool reverse) {
-        while (model_deps.size() <= asset.id()) {
-            model_deps.emplace_back();
-        }
-
-        auto& deps = model_deps[asset.id()];
-        if (deps.generation > asset.gen()) return;
-        if (deps.generation < asset.gen()) {
-            remove_asset(asset);
-            deps = Asset{};
-            deps.generation = asset.gen();
-        }
-
-        deps.deps.emplace_back(dep);
-        if (reverse) return;
-
-        std::visit([&](auto&& gid) {
-            add_dep(gid, asset, true);
-        }, dep);
-    }
-
-    void DependencyGraph::add_dep(Textures::gid asset, AssetGID dep, bool reverse) {
-        while (texture_deps.size() <= asset.id()) {
+    void DependencyGraph::add_dep(AssetGID target, AssetGID dep, bool reverse) {
+        auto assets = get_assets(target);
+        while (assets.size() < get_id(target)) {
             texture_deps.emplace_back();
         }
 
-        auto& deps = texture_deps[asset.id()];
-        if (deps.generation > asset.gen()) return;
-        if (deps.generation < asset.gen()) {
-            remove_asset(asset);
-            deps = Asset{};
-            deps.generation = asset.gen();
+        auto& asset = assets[get_id(target)];
+        if (asset.generation > get_gen(target)) return;
+        if (asset.generation < get_gen(target)) {
+            remove_asset(modify_gen(target, asset.generation));
+            asset = Asset{};
+            asset.generation = get_gen(target);
         }
 
-        deps.deps.emplace_back(dep);
+        asset.deps.emplace_back(dep);
+        modified();
         if (reverse) return;
 
-        std::visit([&](auto&& gid) {
-            add_dep(gid, asset, true);
-        }, dep);
+        add_dep(dep, target, true);
     }
 }

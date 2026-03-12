@@ -96,27 +96,8 @@ namespace engine::util {
         static constexpr std::array<size_t, 2> dimension = {N, M};
     };
 
-    // yes ik parse_gom and parse_goi are basically the same thing, idc rn
-    constexpr std::pair<uint32_t, uint32_t> parse_gom(std::string_view str) {
-        if (str.size() != 12 || str.substr(8) != ".gom") return {-1, -1};
-
-        for (uint32_t i = 0; i < 8; ++i) {
-            if (!std::isxdigit(str[i])) return {-1, -1};
-        }
-
-        uint32_t a = -1;
-        uint32_t b = -1;
-
-        auto gen = std::from_chars(str.data(), str.data() + 2, a, 16);
-        auto id = std::from_chars(str.data() + 2, str.data() + 8, b, 16);
-
-        if (gen.ec != std::errc() || id.ec != std::errc()) return {-1, -1};
-
-        return {a, b};
-    }
-
-    constexpr std::pair<uint32_t, uint32_t> parse_goi(std::string_view str) {
-        if (str.size() != 12 || str.substr(8) != ".goi") return {-1, -1};
+    constexpr std::pair<uint32_t, uint32_t> parse_gid(std::string_view str, const char* file_ext) {
+        if (str.size() != 12 || str.substr(8) != file_ext) return {-1, -1};
 
         for (uint32_t i = 0; i < 8; ++i) {
             if (!std::isxdigit(str[i])) return {-1, -1};
