@@ -412,7 +412,7 @@ namespace engine::models {
                 auto mat_id = mesh.material_id;
                 auto instance_ix = mesh.material_instance;
 
-                materials::release_instance(mat_id, instance_ix);
+                // materials::release_instance(mat_id, instance_ix);
             }
 
             model.destroy();

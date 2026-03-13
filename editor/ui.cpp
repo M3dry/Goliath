@@ -622,6 +622,7 @@ namespace ui {
                                     game_textures->release({data_ptr, 1});
                                     *data_ptr = gid;
                                     game_textures->acquire({data_ptr, 1});
+
                                 }
 
                                 ImGui::EndDragDropTarget();

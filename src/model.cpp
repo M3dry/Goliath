@@ -382,22 +382,22 @@ namespace engine {
     void Model::acquire_textures(Textures* texs) const {
         for (size_t i = 0; i < mesh_count; i++) {
             auto& mesh = meshes[i];
-            auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
-
-            for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-                texs->acquire({(Textures::gid*)(data.data() + off), 1});
-            }
+            // auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
+            //
+            // for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
+            //     texs->acquire({(Textures::gid*)(data.data() + off), 1});
+            // }
         }
     }
 
     void Model::release_textures(Textures* texs) const {
         for (size_t i = 0; i < mesh_count; i++) {
             auto& mesh = meshes[i];
-            auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
-
-            for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-                texs->release({(Textures::gid*)(data.data() + off), 1});
-            }
+            // auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
+            //
+            // for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
+            //     texs->release({(Textures::gid*)(data.data() + off), 1});
+            // }
         }
     }
 }
@@ -440,15 +440,12 @@ namespace engine::model {
 
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
-        uint32_t texture_count = 0;
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
             offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
-            texture_count += materials::get_schema(model->meshes[i].material_id).texture_gid_offsets.size();
-            ;
         }
 
         auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
@@ -489,14 +486,12 @@ namespace engine::model {
 
         GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
 
-        uint32_t texture_count = 0;
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
             offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
             offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
-            texture_count += materials::get_schema(model->meshes[i].material_id).texture_gid_offsets.size();
         }
         auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {

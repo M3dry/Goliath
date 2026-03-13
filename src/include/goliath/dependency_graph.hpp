@@ -30,6 +30,26 @@ namespace engine {
             }
         }
 
+        void remove_dep(AssetGID gid, AssetGID dgid) {
+            std::lock_guard lock{mutex};
+
+            auto asset_ = get_asset(gid);
+            if (!asset_) return;
+            auto& asset = asset_->get();
+
+            std::erase_if(asset.deps, [&](auto gid) {
+                return gid == dgid;
+            });
+
+            auto dasset_ = get_asset(dgid);
+            if (!dasset_) return;
+            auto& dasset = dasset_->get();
+
+            std::erase_if(dasset.r_deps, [&](auto rdgid) {
+                return gid == rdgid;
+            });
+        }
+
         void add_dep(AssetGID asset, AssetGID dep);
 
         static std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>>
@@ -54,7 +74,7 @@ namespace engine {
             }
             modified();
 
-            debug_print();
+            // debug_print();
             return {ret, removals};
         }
 
