@@ -47,18 +47,6 @@ namespace engine {
     }
 }
 
-namespace engine::sampler {
-    VkSampler create(const Sampler& prototype) {
-        VkSampler sampler;
-        vkCreateSampler(device(), &prototype._info, nullptr, &sampler);
-        return sampler;
-    }
-
-    void destroy(VkSampler sampler) {
-        engine::destroy_sampler(sampler);
-    }
-}
-
 namespace engine::samplers {
     uint64_t hash_sampler(const Sampler& sampler) {
         return XXH3_64bits(&sampler, sizeof(Sampler));
@@ -69,121 +57,64 @@ namespace engine::samplers {
     std::vector<Sampler> prototypes{};
     std::vector<VkSampler> samplers{};
 
-    void init() {
-        hashes.emplace_back(hash_sampler(Sampler{}));
-        ref_counts.emplace_back(1);
-        prototypes.emplace_back(Sampler{});
-        samplers.emplace_back(sampler::create(Sampler{}));
-    }
-
     void destroy() {
         for (auto sampler : samplers) {
-            sampler::destroy(sampler);
+            engine::destroy_sampler(sampler);
         }
     }
+}
 
-    struct JsonEntry {
-        uint32_t ix;
-        uint32_t ref_count;
-        Sampler prototype;
-    };
-    void to_json(nlohmann::json& j, const JsonEntry& entry) {
-        j = nlohmann::json{
-            {"ix", entry.ix},
-            {"ref_count", entry.ref_count},
-            {"prototype", entry.prototype},
-        };
+namespace engine::sampler {
+    VkSampler _create(const Sampler& prototype) {
+        VkSampler sampler;
+        vkCreateSampler(device(), &prototype._info, nullptr, &sampler);
+        return sampler;
     }
 
-    void from_json(const nlohmann::json& j, JsonEntry& entry) {
-        j["ix"].get_to(entry.ix);
-        j["ref_count"].get_to(entry.ref_count);
-        j["prototype"].get_to(entry.prototype);
-    }
-
-    void load(nlohmann::json j) {
-        std::vector<JsonEntry> entries = j;
-
-        auto ix_counter = 1;
-        for (auto&& entry : entries) {
-            auto ix = entry.ix;
-            while (ix > ix_counter) {
-                hashes.emplace_back(0);
-                ref_counts.emplace_back(0);
-                prototypes.emplace_back();
-                samplers.emplace_back(nullptr);
-
-                ix_counter++;
-            }
-
-            hashes.emplace_back(hash_sampler(entry.prototype));
-            ref_counts.emplace_back(entry.ref_count);
-            prototypes.emplace_back(entry.prototype);
-            samplers.emplace_back(sampler::create(entry.prototype));
-
-            ix_counter++;
-        }
-    }
-
-    nlohmann::json save() {
-        std::vector<JsonEntry> entries{};
-
-        for (uint32_t i = 1; i < hashes.size(); i++) {
-            if (ref_counts[i] == 0) continue;
-
-            entries.emplace_back(JsonEntry{
-                .ix = i,
-                .ref_count = ref_counts[i],
-                .prototype = prototypes[i],
-            });
-        }
-
-        return entries;
-    }
-
-    uint32_t add(const Sampler& new_sampler) {
-        uint64_t sampler_hash = hash_sampler(new_sampler);
+    VkSampler create(const Sampler& prototype) {
+        auto hash = samplers::hash_sampler(prototype);
         uint32_t empty_spot = -1;
 
-        for (uint32_t i = 0; i < hashes.size(); i++) {
-            if (ref_counts[i] == 0) {
+        for (uint32_t i = 0; i < samplers::hashes.size(); i++) {
+            if (samplers::ref_counts[i] == 0) {
                 empty_spot = i;
                 continue;
             }
-            if (sampler_hash != hashes[i]) continue;
-            if (new_sampler != prototypes[i]) continue;
+            if (hash != samplers::hashes[i]) continue;
+            if (prototype != samplers::prototypes[i]) continue;
 
-            ref_counts[i]++;
-            return i;
+            samplers::ref_counts[i]++;
+            return samplers::samplers[i];
         }
 
         if (empty_spot == -1) {
-            hashes.emplace_back(sampler_hash);
-            ref_counts.emplace_back(1);
-            prototypes.emplace_back(new_sampler);
-            samplers.emplace_back(sampler::create(new_sampler));
+            samplers::hashes.emplace_back(hash);
+            samplers::ref_counts.emplace_back(1);
+            samplers::prototypes.emplace_back(prototype);
+            samplers::samplers.emplace_back(_create(prototype));
 
-            return hashes.size() - 1;
+            return samplers::samplers.back();
         } else {
-            hashes[empty_spot] = sampler_hash;
-            ref_counts[empty_spot] = 1;
-            prototypes[empty_spot] = new_sampler;
-            samplers[empty_spot] = sampler::create(new_sampler);
+            samplers::hashes[empty_spot] = hash;
+            samplers::ref_counts[empty_spot] = 1;
+            samplers::prototypes[empty_spot] = prototype;
+            samplers::samplers[empty_spot] = _create(prototype);
 
-            return empty_spot;
+            return samplers::samplers[empty_spot];
         }
     }
 
-    void remove(uint32_t ix) {
-        if (--ref_counts[ix] != 0) return;
+    void destroy(VkSampler sampler) {
+        for (size_t i = 0; i < samplers::samplers.size(); i++) {
+            if (samplers::samplers[i] != sampler) continue;
 
-        sampler::destroy(samplers[ix]);
+            if (samplers::ref_counts[i] == 0) return;
+            if (--samplers::ref_counts[i] != 0) return;
 
-        hashes[ix] = 0;
-        samplers[ix] = nullptr;
-    }
-
-    VkSampler get(uint32_t ix) {
-        return samplers[ix];
+            samplers::hashes[i] = 0;
+            samplers::prototypes[i] = {};
+            samplers::samplers[i] = nullptr;
+            engine::destroy_sampler(sampler);
+        }
     }
 }

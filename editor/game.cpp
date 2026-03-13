@@ -399,7 +399,7 @@ void GameView::blit(engine::game_interface2::GameConfig::BlitStrategy strategy, 
 }
 
 void GameView::init() {
-    sampler = engine::samplers::get(engine::samplers::add(engine::Sampler{}));
+    sampler = engine::sampler::create(engine::Sampler{});
 }
 
 void GameView::destroy() {

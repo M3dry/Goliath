@@ -228,17 +228,13 @@ namespace engine::game_interface2 {
             auto tex_reg_json = util::read_json(asset_paths.textures_reg);
             if (!tex_reg_json.has_value() && tex_reg_json.error() == util::ReadJsonErr::FileErr &&
                 !std::filesystem::exists(asset_paths.textures_reg)) {
-                tex_reg_json = nlohmann::json{
-                    {"textures", nlohmann::json::array()},
-                    {"samplers", nlohmann::json::array()},
-                };
+                tex_reg_json = nlohmann::json::array();
             } else if (!tex_reg_json.has_value()) {
                 printf("Texture registry file is corrupted\n");
                 exit(-1);
             }
 
-            samplers::load((*tex_reg_json)["samplers"]);
-            textures->load((*tex_reg_json)["textures"]);
+            textures->load((*tex_reg_json));
         }
 
         if (asset_paths.materials != nullptr) {

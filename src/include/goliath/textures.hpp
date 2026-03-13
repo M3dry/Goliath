@@ -53,13 +53,15 @@ namespace engine {
         nlohmann::json save() const;
 
         gid add(std::filesystem::path path, std::string name, Sampler sampler);
-        gid add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name, Sampler sampler);
+        gid add(std::span<uint8_t> image, uint32_t width, uint32_t height, VkFormat format, std::string name,
+                Sampler sampler);
         bool remove(gid gid);
 
         std::expected<std::string*, textures::Err> get_name(gid gid);
         std::expected<VkImage, textures::Err> get_image(gid gid);
         std::expected<VkImageView, textures::Err> get_image_view(gid gid);
-        std::expected<uint32_t, textures::Err> get_sampler(gid gid);
+        std::expected<VkSampler, textures::Err> get_sampler(gid gid);
+        std::expected<Sampler, textures::Err> get_sampler_prototype(gid gid);
 
         uint8_t get_generation(uint32_t ix) const;
 
@@ -75,6 +77,7 @@ namespace engine {
         void modified();
 
         void process_uploads();
+
       private:
         Textures(const char* textures_directry, size_t texture_capacity = 1000);
 
@@ -90,7 +93,8 @@ namespace engine {
         std::vector<uint32_t> ref_counts{};
         std::vector<GPUImage> gpu_images{};
         std::vector<VkImageView> gpu_image_views{};
-        std::vector<uint32_t> samplers{};
+        std::vector<Sampler> sampler_prototypes{};
+        std::vector<VkSampler> samplers{};
 
         std::deque<std::pair<transport2::ticket, Textures::gid>> finalize_queue{};
 
@@ -107,8 +111,7 @@ namespace engine {
         void set_default_texture(gid gid) {
             if (generations[gid.id()] != gid.gen()) return;
 
-            texture_pool.update(gid.id(), gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                samplers::get(samplers[0]));
+            texture_pool.update(gid.id(), gpu_image_views[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, samplers[0]);
         }
 
         void rebuild_pool();

@@ -167,20 +167,11 @@ namespace engine {
     void from_json(const nlohmann::json& j, Sampler& sampler);
 }
 
+namespace engine::samplers {
+    void destroy();
+}
+
 namespace engine::sampler {
     VkSampler create(const Sampler& prototype);
     void destroy(VkSampler sampler);
-}
-
-namespace engine::samplers {
-    void init();
-    void destroy();
-
-    void load(nlohmann::json j);
-    nlohmann::json save();
-
-    uint32_t add(const Sampler& new_sampler);
-    void remove(uint32_t ix);
-
-    VkSampler get(uint32_t ix);
 }

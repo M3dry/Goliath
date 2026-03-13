@@ -182,7 +182,9 @@ int main(int argc, char** argv) {
                 error_stack::Fn fn;
 
                 if constexpr (std::is_same_v<ErrType, engine::models::AddError>) {
-                    fn = [err]() -> bool {
+                    auto dep_graph = state::dependency_graph;
+                    auto texs = game_textures;
+                    fn = [err, dep_graph, texs]() -> bool {
                         if (err.loader == engine::gltf::Ok) {
                             ImGui::Text("When loading model `%s` at path `%s` gotten a tinygltf warning: %s",
                                         err.model_name.c_str(), err.model_src_file.c_str(),
@@ -198,7 +200,23 @@ int main(int argc, char** argv) {
                             }
 
                             if (ImGui::Button("Ok")) {
-                                engine::models::remove(err.model);
+                                auto [to_remove, dep_removes] = dep_graph->deep_remove(err.model);
+                                for (const auto& gid : to_remove) {
+                                    std::visit(
+                                        [&](auto&& gid) {
+                                            using T = std::decay_t<decltype(gid)>;
+
+                                            if constexpr (std::is_same_v<T, engine::models::gid>) {
+                                                engine::models::remove(gid);
+                                            } else if constexpr (std::is_same_v<T, engine::Textures::gid>) {
+                                                texs->remove(gid);
+                                            } else {
+                                                static_assert("unhandled");
+                                            }
+                                        },
+                                        gid);
+                                }
+
                                 for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
                                     auto selected_instance = scene::selected_instance();
                                     engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
@@ -216,7 +234,7 @@ int main(int argc, char** argv) {
                     fn = [err, dep_graph, texs]() -> bool {
                         ImGui::Text("Model at gid{%d, %d} couldn't be retrived from disk", err.model.gen(),
                                     err.model.id());
-                        if (ImGui::Button("Remove model from project")) {
+                        if (ImGui::Button("Remove model and all it's dependencies from project")) {
                             auto [to_remove, dep_removes] = dep_graph->deep_remove(err.model);
                             for (const auto& gid : to_remove) {
                                 std::visit(
@@ -246,6 +264,18 @@ int main(int argc, char** argv) {
                             }
                             return true;
                         }
+
+                        if (ImGui::Button("Remove just the model")) {
+                            engine::models::remove(err.model);
+
+                            for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
+                                auto selected_instance = scene::selected_instance();
+                                engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
+                                scene::select_instance(selected_instance);
+                            }
+                            return true;
+                        }
+
                         if (ImGui::Button("Ignore")) {
                             return true;
                         }
@@ -292,17 +322,13 @@ int main(int argc, char** argv) {
     auto tex_reg_json = engine::util::read_json(project::textures_registry);
     if (!tex_reg_json.has_value() && tex_reg_json.error() == engine::util::ReadJsonErr::FileErr &&
         !std::filesystem::exists(project::textures_registry)) {
-        tex_reg_json = nlohmann::json{
-            {"textures", nlohmann::json::array()},
-            {"samplers", nlohmann::json::array()},
-        };
+        tex_reg_json = nlohmann::json::array();
     } else if (!tex_reg_json.has_value()) {
         printf("Texture registry file is corrupted\n");
         return 0;
     }
 
-    engine::samplers::load((*tex_reg_json)["samplers"]);
-    game_textures->load((*tex_reg_json)["textures"]);
+    game_textures->load((*tex_reg_json));
 
     auto mats_json = engine::util::read_json(project::materials);
     if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -695,10 +721,7 @@ int main(int argc, char** argv) {
 
             if (game_textures->want_to_save()) {
                 std::ofstream o{project::textures_registry};
-                o << nlohmann::json{
-                    {"textures", game_textures->save()},
-                    {"samplers", engine::samplers::save()},
-                };
+                o << game_textures->save();
             }
 
             if (engine::scenes::want_to_save()) {

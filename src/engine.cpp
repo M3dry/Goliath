@@ -418,7 +418,6 @@ namespace engine {
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         VK_CHECK(vkCreateFence(device(), &fence_info, nullptr, &state->barriers_cmd_buf_fence));
 
-        samplers::init();
         transport2::init();
         imgui::init();
         event::register_glfw_callbacks();
