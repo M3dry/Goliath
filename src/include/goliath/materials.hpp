@@ -4,10 +4,11 @@
 #include "goliath/material.hpp"
 #include "goliath/util.hpp"
 
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 namespace engine {
-    class MaterialSchemas {
+    class Materials {
       public:
         struct gid {
             uint64_t value;
@@ -19,8 +20,8 @@ namespace engine {
             static constexpr uint64_t dim_shift = 56;
 
             gid() : value(-1) {}
-            gid(uint32_t dimension, uint32_t generation, uint32_t id)
-                : value((id & id_mask) | (((uint64_t)generation & 0xFFFF'FFFFu) << gen_shift) |
+            gid(uint64_t dimension, uint64_t generation, uint64_t id)
+                : value((id & id_mask) | ((generation & 0xFFFF'FFFFu) << gen_shift) |
                         (((uint64_t)dimension & 0xFF) << dim_shift)) {}
 
             uint32_t id() const {
@@ -40,39 +41,57 @@ namespace engine {
             }
         };
 
-        std::expected<MaterialSchemas, util::ReadJsonErr> init(const nlohmann::json& j);
-        MaterialSchemas() = default;
-        MaterialSchemas(MaterialSchemas&& other) noexcept
-            : update(other.update), want_save(other.want_save), current_buffer(other.current_buffer),
-              gpu_buffers(std::move(other.gpu_buffers)), next_buffer_ticket(std::move(other.next_buffer_ticket)),
-              names(std::move(other.names)), schemas(std::move(other.schemas)),
-              offsets(std::move(other.offsets)),
-              deleted(std::move(other.deleted)), instances(std::move(other.instances)) {
-        }
+        static void to_json(nlohmann::json& j, const gid& gid);
+        static void from_json(const nlohmann::json& j, gid& gid);
 
-        MaterialSchemas& operator=(MaterialSchemas&&) = delete;
-        MaterialSchemas(const MaterialSchemas&) = delete;
-        MaterialSchemas& operator=(const MaterialSchemas&) = delete;
-
-        ~MaterialSchemas();
+        static std::expected<Materials*, util::ReadJsonErr> init(const nlohmann::json& j);
+        ~Materials();
 
         nlohmann::json save();
-        nlohmann::json default_json();
+        static nlohmann::json default_json();
+
+        void process();
 
         uint32_t add_schema(Material schema, std::string name);
         bool remove_schema(uint32_t mat_id);
-        std::optional<std::reference_wrapper<const Material>>  get_schema(uint32_t mat_id);
+        std::optional<Material> get_schema(uint32_t mat_id);
 
-        std::span<uint8_t> get_instance_data(gid gid);
+        std::vector<uint8_t> get_instance_data(gid gid);
         void update_instance_data(gid gid, uint8_t* new_data);
         gid add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data);
         bool remove_instance(gid gid);
         void acquire_instance(gid gid);
         void release_instance(gid gid);
 
+        // thread unsafe, call from one thread only
         Buffer get_buffer();
 
+        bool want_to_save() {
+            std::lock_guard lock{mutex};
+            auto res = want_save;
+            want_save = false;
+            return res;
+        }
+
+        template <typename F> void with_textures(F&& f, gid gid) {
+            std::lock_guard lock{mutex};
+
+            auto schema = get_schema(gid.dim());
+            if (!schema) return;
+
+            auto& insts = instances[gid.dim()];
+            if (insts.generations.size() <= gid.id()) return;
+            if (insts.generations[gid.id()] != gid.gen()) return;
+
+            auto* data = insts.data.data() + schema->total_size * gid.id();
+            for (const auto off : schema->texture_gid_offsets) {
+                f(*(Textures::gid*)(data + off));
+            }
+        }
+
       private:
+        Materials() = default;
+
         struct Instance {
             std::vector<std::string> names{};
             std::vector<uint32_t> generations{};
@@ -85,7 +104,7 @@ namespace engine {
         bool update = false;
         bool want_save = false;
 
-        std::mutex mutex{};
+        std::recursive_mutex mutex{};
 
         uint32_t current_buffer = 0;
         std::array<Buffer, 2> gpu_buffers{};

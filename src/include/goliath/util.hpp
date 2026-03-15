@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cctype>
 #include <cmath>
 #include <expected>
 #include <filesystem>
@@ -95,6 +96,98 @@ namespace engine::util {
         using Component = T;
         static constexpr std::array<size_t, 2> dimension = {N, M};
     };
+
+    template <typename GID> constexpr GID parse_gid2(std::string_view str, std::string_view file_ext) {
+        using value_t = std::decay_t<decltype(GID::id_mask)>;
+        static constexpr auto hex_digits = [](value_t mask) {
+            value_t bits = 0;
+            while (mask) {
+                bits++;
+                mask >>= 1;
+            }
+            return (bits + 3) / 4;
+        };
+
+        constexpr auto id_digits = hex_digits(GID::id_mask);
+        constexpr auto gen_digits = hex_digits(GID::gen_mask >> GID::gen_shift);
+
+        constexpr bool has_dim = requires {
+            GID::dim_mask;
+            GID::dim_shift;
+        };
+        auto dim_digits = 0;
+        if constexpr (has_dim) {
+            dim_digits = hex_digits(GID::dim_mask >> GID::dim_shift);
+        }
+
+        auto total_digits = id_digits + gen_digits + dim_digits;
+
+        if (str.size() != total_digits + file_ext.size()) return {};
+        if (str.substr(total_digits) != file_ext) return {};
+
+        for (size_t i = 0; i < total_digits; i++) {
+            if (!std::isxdigit(str[i])) return {};
+        }
+
+        const char* p = str.data();
+
+        value_t dim = 0;
+        value_t gen = 0;
+        value_t id = 0;
+
+        if constexpr (has_dim) {
+            auto r = std::from_chars(p, p + dim_digits, dim, 16);
+            if (r.ec != std::errc()) return {};
+            p += dim_digits;
+        }
+
+        {
+            auto r = std::from_chars(p, p + gen_digits, gen, 16);
+            if (r.ec != std::errc()) return {};
+            p += gen_digits;
+        }
+
+        {
+            auto r = std::from_chars(p, p + id_digits, id, 16);
+            if (r.ec != std::errc()) return {};
+        }
+
+        if constexpr (has_dim) {
+            return GID{dim, gen, id};
+        } else {
+            return GID{gen, id};
+        }
+    }
+
+    template <typename GID> constexpr std::string format_gid(GID gid, std::string_view file_ext) {
+        using value_t = std::decay_t<decltype(GID::id_mask)>;
+        static constexpr auto hex_digits = [](value_t mask) {
+            value_t bits = 0;
+            while (mask) {
+                bits++;
+                mask >>= 1;
+            }
+            return (bits + 3) / 4;
+        };
+
+        constexpr auto id_digits = hex_digits(GID::id_mask);
+        constexpr auto gen_digits = hex_digits(GID::gen_mask >> GID::gen_shift);
+
+        constexpr bool has_dim = requires {
+            GID::dim_mask;
+            GID::dim_shift;
+        };
+
+        std::string out{};
+
+        if constexpr (has_dim) {
+            constexpr auto dim_digits = hex_digits(GID::dim_mask >> GID::dim_shift);
+            std::format_to(std::back_inserter(out), "{:0{}X}", gid.gen(), dim_digits);
+        }
+        std::format_to(std::back_inserter(out), "{:0{}X}{:0{}X}{}", gid.gen(), gen_digits, gid.id(), id_digits, file_ext);
+
+        return out;
+    }
 
     constexpr std::pair<uint32_t, uint32_t> parse_gid(std::string_view str, std::string_view file_ext) {
         if (str.size() != file_ext.size() + 9 || str.substr(9) != file_ext) return {-1, -1};

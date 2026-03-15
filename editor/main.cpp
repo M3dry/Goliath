@@ -1,6 +1,7 @@
 #include "error_stack.hpp"
 #include "exvars.hpp"
 #include "game.hpp"
+#include "gltf.hpp"
 #include "goliath/buffer.hpp"
 #include "goliath/camera.hpp"
 #include "goliath/compute.hpp"
@@ -12,7 +13,6 @@
 #include "goliath/event.hpp"
 #include "goliath/exvar.hpp"
 #include "goliath/game_interface2.hpp"
-#include "goliath/gltf.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/materials.hpp"
 #include "goliath/models.hpp"
@@ -181,26 +181,25 @@ int main(int argc, char** argv) {
                 ErrType err = *(const ErrType*)err_data;
                 error_stack::Fn fn;
 
-                if constexpr (std::is_same_v<ErrType, engine::models::AddError>) {
-                    auto dep_graph = state::dependency_graph;
-                    auto texs = game_textures;
-                    fn = [err, dep_graph, texs]() -> bool {
-                        if (err.loader == engine::gltf::Ok) {
+                if constexpr (std::is_same_v<ErrType, void*>) {
+                    auto err_ = (gltf::AddError*)err;
+                    fn = [err = err_]() -> bool {
+                        if (err->loader == gltf::Ok) {
                             ImGui::Text("When loading model `%s` at path `%s` gotten a tinygltf warning: %s",
-                                        err.model_name.c_str(), err.model_src_file.c_str(),
-                                        err.tinygltf_warning.c_str());
+                                        err->model_name.c_str(), err->model_src_file.c_str(),
+                                        err->tinygltf_warning.c_str());
                             return ImGui::Button("Ok");
                         } else {
                             ImGui::Text("Model `%s` at path `%s` couldn't be added to the asset database.",
-                                        err.model_name.c_str(), err.model_src_file.c_str());
-                            if (err.loader == engine::gltf::TinyGLTFErr) {
-                                ImGui::Text("Tinygltf error: %s", err.tinygltf_error.c_str());
+                                        err->model_name.c_str(), err->model_src_file.c_str());
+                            if (err->loader == gltf::TinyGLTFErr) {
+                                ImGui::Text("Tinygltf error: %s", err->tinygltf_error.c_str());
                             } else {
-                                ImGui::Text("Tinygltf error: %s", err.tinygltf_error.c_str());
+                                ImGui::Text("Tinygltf error: %s", err->tinygltf_error.c_str());
                             }
 
                             if (ImGui::Button("Ok")) {
-                                auto [to_remove, dep_removes] = dep_graph->deep_remove(err.model);
+                                auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err->model);
                                 for (const auto& gid : to_remove) {
                                     std::visit(
                                         [&](auto&& gid) {
@@ -209,7 +208,9 @@ int main(int argc, char** argv) {
                                             if constexpr (std::is_same_v<T, engine::models::gid>) {
                                                 engine::models::remove(gid);
                                             } else if constexpr (std::is_same_v<T, engine::Textures::gid>) {
-                                                texs->remove(gid);
+                                                game_textures->remove(gid);
+                                            } else if constexpr (std::is_same_v<T, engine::Materials::gid>) {
+                                                state::materials->remove_instance(gid);
                                             } else {
                                                 static_assert("unhandled");
                                             }
@@ -219,7 +220,7 @@ int main(int argc, char** argv) {
 
                                 for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
                                     auto selected_instance = scene::selected_instance();
-                                    engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
+                                    engine::scenes::remove_all_instances_of_model(i, err->model, selected_instance);
                                     scene::select_instance(selected_instance);
                                 }
                                 return true;
@@ -229,13 +230,11 @@ int main(int argc, char** argv) {
                         return false;
                     };
                 } else if constexpr (std::is_same_v<ErrType, engine::models::LoadError>) {
-                    auto dep_graph = state::dependency_graph;
-                    auto texs = game_textures;
-                    fn = [err, dep_graph, texs]() -> bool {
+                    fn = [err]() -> bool {
                         ImGui::Text("Model at gid{%d, %d} couldn't be retrived from disk", err.model.gen(),
                                     err.model.id());
                         if (ImGui::Button("Remove model and all it's dependencies from project")) {
-                            auto [to_remove, dep_removes] = dep_graph->deep_remove(err.model);
+                            auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err.model);
                             for (const auto& gid : to_remove) {
                                 std::visit(
                                     [&](auto&& gid) {
@@ -244,7 +243,9 @@ int main(int argc, char** argv) {
                                         if constexpr (std::is_same_v<T, engine::models::gid>) {
                                             engine::models::remove(gid);
                                         } else if constexpr (std::is_same_v<T, engine::Textures::gid>) {
-                                            texs->remove(gid);
+                                            game_textures->remove(gid);
+                                        } else if constexpr (std::is_same_v<T, engine::Materials::gid>) {
+                                            state::materials->remove_instance(gid);
                                         } else {
                                             static_assert("unhandled");
                                         }
@@ -295,8 +296,23 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
     game_textures = engine::Textures::make(project::textures_directory.c_str());
-    engine::materials::init();
-    engine::models::init(project::models_directory, game_textures, state::dependency_graph);
+
+    auto mats_json = engine::util::read_json(project::materials);
+    if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
+        !std::filesystem::exists(project::materials)) {
+        mats_json = engine::Materials::default_json();
+    } else if (!mats_json.has_value()) {
+        printf("materials.json file is corrupted\n");
+        return 0;
+    }
+
+    auto mats = engine::Materials::init(*mats_json);
+    if (!mats) {
+        return 0;
+    }
+    state::materials = *mats;
+
+    engine::models::init(project::models_directory, game_textures, state::materials);
     GameView::init();
 
     std::optional<LoadedGame> game{};
@@ -329,17 +345,6 @@ int main(int argc, char** argv) {
     }
 
     game_textures->load((*tex_reg_json));
-
-    auto mats_json = engine::util::read_json(project::materials);
-    if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&
-        !std::filesystem::exists(project::materials)) {
-        mats_json = engine::materials::default_json();
-    } else if (!mats_json.has_value()) {
-        printf("materials.json file is corrupted\n");
-        return 0;
-    }
-
-    engine::materials::load(*mats_json);
 
     auto models_registry_json = engine::util::read_json(project::models_registry);
     if (!models_registry_json.has_value() && models_registry_json.error() == engine::util::ReadJsonErr::FileErr &&
@@ -574,7 +579,7 @@ int main(int argc, char** argv) {
                             std::size_t i = 0;
 
                             while (NFD_PathSet_EnumNext(&enumerator, &path) && path) {
-                                engine::models::add(path, std::filesystem::path{path}.stem().string());
+                                gltf::add_model(path, std::filesystem::path{path}.stem().string());
                                 NFD_PathSet_FreePath(path);
                             }
 
@@ -714,9 +719,9 @@ int main(int argc, char** argv) {
                 o << engine::models::save();
             }
 
-            if (engine::materials_to_save()) {
+            if (state::materials->want_to_save()) {
                 std::ofstream o{project::materials};
-                o << engine::materials::save();
+                o << state::materials->save();
             }
 
             if (game_textures->want_to_save()) {
@@ -746,6 +751,7 @@ int main(int argc, char** argv) {
         }
 
         game_textures->process_uploads();
+        state::materials->process();
         if (engine::prepare_frame()) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);
@@ -839,7 +845,7 @@ int main(int argc, char** argv) {
             engine::rendering::mark("Editor: visbuffer shading");
             auto shading = engine::visbuffer::shade(visbuffer, target_image_views[engine::get_current_frame()],
                                                     engine::get_current_frame());
-            auto mats_buffer = engine::materials::get_buffer().address();
+            auto mats_buffer = state::materials->get_buffer().address();
             if (mats_buffer != 0) {
                 for (uint16_t mat_id = 0; mat_id < shading.material_id_count; mat_id++) {
                     uint8_t pbr_pc[PBRPC::size]{};
@@ -1033,7 +1039,7 @@ int main(int argc, char** argv) {
 
     engine::culling::destroy();
     engine::models::destroy();
-    engine::materials::destroy();
+    delete state::materials;
     delete game_textures;
     delete state::dependency_graph;
     engine::destroy();

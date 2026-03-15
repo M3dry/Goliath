@@ -1,35 +1,186 @@
 #include "goliath/materials.hpp"
 #include "goliath/buffer.hpp"
+#include "goliath/transport2.hpp"
 
 #include <vulkan/vulkan_core.h>
 
 #include <expected>
 
 namespace engine {
-    std::expected<MaterialSchemas, util::ReadJsonErr> MaterialSchemas::init(const nlohmann::json& j) {
-        MaterialSchemas ms{};
 
+    void Materials::to_json(nlohmann::json& j, const gid& gid) {
+        j = gid.value;
+    }
+
+    void Materials::from_json(const nlohmann::json& j, gid& gid) {
+        gid.value = j;
+    }
+
+    std::expected<Materials*, util::ReadJsonErr> Materials::init(const nlohmann::json& j) {
+        auto* ms = new Materials{};
+
+        {
+            std::vector<uint32_t> deleted = j["deleted"];
+            ms->deleted = std::move(deleted);
+        }
+        std::vector<nlohmann::json> arr = j["materials"];
+
+        for (const auto& j : arr) {
+            auto mat_ix = j["ix"];
+            while (ms->names.size() <= mat_ix) {
+                ms->names.emplace_back();
+                ms->schemas.emplace_back();
+                ms->offsets.emplace_back();
+                ms->instances.emplace_back();
+            }
+
+            ms->names[mat_ix] = j["name"];
+            ms->schemas[mat_ix] = j["schema"];
+            ms->offsets[mat_ix] = j["offset"];
+
+            auto& insts = ms->instances[mat_ix];
+            auto schema_size = ms->schemas[mat_ix].total_size;
+            for (const auto& j : j["instances"]) {
+                uint32_t inst_ix = j["ix"];
+                while (insts.names.size() <= inst_ix) {
+                    insts.names.emplace_back();
+                    insts.generations.emplace_back();
+                    insts.ref_counts.emplace_back();
+                    insts.deleted.emplace_back();
+                    insts.data.resize(insts.data.size() + schema_size);
+                }
+
+                insts.generations[inst_ix] = j["gen"];
+                if (j.contains("deleted")) {
+                    insts.deleted[inst_ix] = true;
+                } else {
+                    insts.names[inst_ix] = j["name"];
+                    insts.ref_counts[inst_ix] = j["ref_count"];
+
+                    std::vector<uint8_t> blob = j["data"];
+                    assert(blob.size() == schema_size);
+                    std::memcpy(insts.data.data() + schema_size * inst_ix, blob.data(), schema_size);
+                }
+            }
+        }
+
+        ms->update = true;
         return ms;
     }
 
-    MaterialSchemas::~MaterialSchemas() {
+    Materials::~Materials() {
         for (auto buf : gpu_buffers) {
             buf.destroy();
         }
     }
 
-    nlohmann::json MaterialSchemas::save() {
-
-    }
-
-    nlohmann::json MaterialSchemas::default_json() {
-
-    }
-
-    uint32_t MaterialSchemas::add_schema(Material schema, std::string name) {
+    nlohmann::json Materials::save() {
         std::lock_guard lock{mutex};
 
-        // TODO: find empty
+        auto arr = nlohmann::json::array();
+
+        for (size_t i = 0; i < offsets.size(); i++) {
+            auto& insts = instances[i];
+            auto insts_j = nlohmann::json::array();
+
+            auto schema_size = schemas[i].total_size;
+            for (size_t j = 0; j < insts.names.size(); j++) {
+                if (std::find(insts.deleted.begin(), insts.deleted.end(), j) != insts.deleted.end()) {
+                    insts_j.emplace_back(nlohmann::json{
+                        {"ix", j},
+                        {"gen", insts.generations[j]},
+                        {"deleted", true},
+                    });
+                }
+
+                insts_j.emplace_back(nlohmann::json{
+                    {"ix", j},
+                    {"gen", insts.generations[j]},
+                    {"name", insts.names[j]},
+                    {"ref_count", insts.ref_counts[j]},
+                    {"data", std::span{(insts.data.data() + schema_size * j), schema_size}},
+                });
+            }
+
+            arr.emplace_back(nlohmann::json{
+                {"ix", i},
+                {"name", names[i]},
+                {"schema", schemas[i]},
+                {"instances", insts_j},
+                {"offset", offsets[i]},
+            });
+        }
+
+        return {
+            {"materials", arr},
+            {"deleted", deleted},
+        };
+    }
+
+    nlohmann::json Materials::default_json() {
+        return nlohmann::json{
+            {"materials",
+             {nlohmann::json{
+                 {"ix", 0},
+                 {"name", "PBR - Metallic Roughness"},
+                 {"schema", material::pbr::schema},
+                 {"instances", nlohmann::json::array()},
+                 {"offset", 0},
+             }}},
+            {"deleted", nlohmann::json::array()},
+        };
+    }
+
+    void Materials::process() {
+        std::lock_guard lock{mutex};
+
+        if (transport2::is_ready(next_buffer_ticket)) {
+            current_buffer = (current_buffer + 1) % 2;
+            next_buffer_ticket = {};
+        }
+
+        if (!update) {
+            return;
+        }
+
+        uint32_t instances_size = 0;
+        for (size_t i = 0; i < instances.size(); i++) {
+            instances_size += schemas[i].total_size * instances[i].names.size();
+        }
+
+        auto upload_size = sizeof(uint32_t) + offsets.size() * sizeof(uint32_t) + instances_size;
+        auto upload = (uint8_t*)malloc(upload_size);
+
+        uint32_t off = 0;
+        auto offsets_size = offsets.size();
+        std::memcpy(upload, &offsets_size, sizeof(uint32_t));
+        off += sizeof(uint32_t);
+
+        std::memcpy(upload + off, offsets.data(), offsets_size * sizeof(uint32_t));
+        off += offsets_size * sizeof(uint32_t);
+
+        for (size_t i = 0; i < instances.size(); i++) {
+            std::memcpy(upload + off + offsets[i], instances[i].data.data(), instances[i].data.size());
+        }
+
+        auto& buf = gpu_buffers[(current_buffer + 1) % 2];
+        if (buf.size() < upload_size) {
+            buf.destroy();
+            buf =
+                Buffer::create("Material buffer", upload_size,
+                               VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT, std::nullopt);
+        }
+
+        next_buffer_ticket =
+            transport2::upload(true, upload, free, upload_size, gpu_buffers[(current_buffer + 1) % 2], 0,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+
+        update = false;
+    }
+
+    uint32_t Materials::add_schema(Material schema, std::string name) {
+        std::lock_guard lock{mutex};
+
         uint32_t mat_id;
         if (deleted.empty()) {
             names.emplace_back(name);
@@ -54,7 +205,7 @@ namespace engine {
         return mat_id;
     }
 
-    bool MaterialSchemas::remove_schema(uint32_t mat_id) {
+    bool Materials::remove_schema(uint32_t mat_id) {
         std::lock_guard lock{mutex};
 
         if (names.size() <= mat_id) return false;
@@ -79,429 +230,134 @@ namespace engine {
         return true;
     }
 
-    std::optional<std::reference_wrapper<const Material>> MaterialSchemas::get_schema(uint32_t mat_id) {
+    std::optional<Material> Materials::get_schema(uint32_t mat_id) {
+        std::lock_guard lock{mutex};
+
+        if (schemas.size() <= mat_id) return {};
         if (is_deleted(mat_id)) return {};
         return schemas[mat_id];
     }
 
-    std::span<uint8_t> MaterialSchemas::get_instance_data(gid gid) {
+    std::vector<uint8_t> Materials::get_instance_data(gid gid) {
+        std::lock_guard lock{mutex};
+
         const auto& schema = get_schema(gid.dim());
         if (!schema) return {};
 
-        auto size = schema->get().total_size;
+        auto size = schema->total_size;
         auto& insts = instances[gid.dim()];
 
         if (insts.deleted[gid.id()]) return {};
-        return {insts.data.data() + size * gid.id(), size};
+
+        auto* begin = insts.data.data() + size * gid.id();
+        return {begin, begin + size};
     }
 
-    void MaterialSchemas::update_instance_data(gid gid, uint8_t* new_data) {
+    void Materials::update_instance_data(gid gid, uint8_t* new_data) {
+        std::lock_guard lock{mutex};
+
         const auto& schema = get_schema(gid.dim());
         if (!schema) return;
 
-        auto size = schema->get().total_size;
+        auto size = schema->total_size;
         auto& insts = instances[gid.dim()];
 
         if (insts.names.size() <= gid.id()) return;
         if (insts.deleted[gid.id()]) return;
         if (insts.generations[gid.id()] != gid.gen()) return;
-        std::memcpy(insts.data.data() + size*gid.id(), new_data, size);
+        std::memcpy(insts.data.data() + size * gid.id(), new_data, size);
     }
 
-    MaterialSchemas::gid MaterialSchemas::add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data) {
+    Materials::gid Materials::add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data) {
+        std::lock_guard lock{mutex};
 
+        const auto& schema = get_schema(mat_id);
+        if (!schema) return {};
+
+        auto& insts = instances[mat_id];
+
+        uint32_t id = -1;
+        for (uint32_t i = 0; i < insts.deleted.size(); i++) {
+            if (insts.deleted[i]) id = i;
+        }
+
+        if (id == -1) {
+            insts.deleted.emplace_back(false);
+            insts.generations.emplace_back(0);
+            insts.names.emplace_back(name);
+            insts.ref_counts.emplace_back(0);
+            insts.data.insert(insts.data.end(), data.begin(), data.end());
+
+            id = insts.names.size() - 1;
+        } else {
+            insts.deleted[id] = false;
+            insts.generations[id]++;
+            insts.names[id] = name;
+            insts.ref_counts[id] = 0;
+
+            std::memcpy(insts.data.data() + id*schemas[mat_id].total_size, data.data(), data.size());
+        }
+
+
+        for (uint32_t i = mat_id + 1; i < schemas.size(); i++) {
+            offsets[i] += schema->total_size;
+        }
+
+        want_save = true;
+        update = true;
+        return {mat_id, insts.generations[id], id};
     }
 
-    bool MaterialSchemas::remove_instance(gid gid) {
+    bool Materials::remove_instance(gid gid) {
+        std::lock_guard lock{mutex};
 
+        auto schema = get_schema(gid.dim());
+        if (!schema) return false;
+
+        auto& insts = instances[gid.dim()];
+        if (insts.generations.size() <= gid.id()) return false;
+        if (insts.generations[gid.id()] != gid.gen()) return false;
+
+        auto begin = insts.data.begin() + schema->total_size * gid.id();
+        insts.data.erase(begin, begin + schema->total_size);
+
+        insts.generations[gid.id()]++;
+        insts.deleted[gid.id()] = true;
+        insts.names[gid.id()] = "";
+        insts.ref_counts[gid.id()] = 0;
+
+        want_save = true;
+        return true;
     }
 
-    void MaterialSchemas::acquire_instance(gid gid) {
+    void Materials::acquire_instance(gid gid) {
+        std::lock_guard lock{mutex};
 
+        auto schema = get_schema(gid.dim());
+        if (!schema) return;
+
+        auto& insts = instances[gid.dim()];
+        if (insts.generations.size() <= gid.id()) return;
+        if (insts.generations[gid.id()] != gid.gen()) return;
+
+        insts.ref_counts[gid.id()]++;
     }
 
-    void MaterialSchemas::release_instance(gid gid) {
+    void Materials::release_instance(gid gid) {
+        std::lock_guard lock{mutex};
 
+        auto schema = get_schema(gid.dim());
+        if (!schema) return;
+
+        auto& insts = instances[gid.dim()];
+        if (insts.generations.size() <= gid.id()) return;
+        if (insts.generations[gid.id()] != gid.gen()) return;
+
+        if (insts.ref_counts[gid.id()] == 0) return;
+        insts.ref_counts[gid.id()]--;
     }
 
-    Buffer MaterialSchemas::get_buffer() {
-
+    Buffer Materials::get_buffer() {
+        return gpu_buffers[current_buffer];
     }
 }
-
-// namespace engine::materials {
-//     bool init_called = false;
-//     bool update = false;
-//     bool want_save = false;
-//
-//     std::mutex mutex{};
-//
-//     struct Instances {
-//         uint32_t count = 0;
-//         std::vector<std::string> names{};
-//         std::vector<uint8_t> data{};
-//         std::vector<uint32_t> ref_counts{};
-//
-//         std::vector<uint32_t> deleted{};
-//     };
-//
-//     std::vector<std::string> names{};
-//     std::vector<uint32_t> offsets{};
-//     std::vector<Instances> instances{};
-//     std::vector<Material> schemas{};
-//
-//     std::vector<uint32_t> deleted{};
-//
-//     uint32_t current_buffer = 0;
-//     std::array<Buffer, 2> gpu_buffers{};
-//     transport2::ticket next_buffer_ticket{};
-//
-//     void init() {
-//         init_called = true;
-//         update = true;
-//     }
-//
-//     void destroy() {
-//         if (!init_called) return;
-//
-//         for (auto& buf : gpu_buffers) {
-//             buf.destroy();
-//         }
-//     }
-//
-//     bool update_gpu_buffer() {
-//         if (!init_called) return false;
-//         std::lock_guard lock{mutex};
-//
-//         if (transport2::is_ready(next_buffer_ticket)) {
-//             current_buffer = (current_buffer + 1) % 2;
-//             next_buffer_ticket = {};
-//         }
-//
-//         if (!update) {
-//             auto res = want_save;
-//             want_save = false;
-//             return res;
-//         }
-//
-//         uint32_t instances_size = 0;
-//         for (size_t i = 0; i < instances.size(); i++) {
-//             instances_size += schemas[i].total_size * instances[i].count;
-//         }
-//
-//         auto upload_size = sizeof(uint32_t) + offsets.size() * sizeof(uint32_t) + instances_size;
-//         auto upload = (uint8_t*)malloc(upload_size);
-//
-//         uint32_t off = 0;
-//         auto offsets_size = offsets.size();
-//         std::memcpy(upload, &offsets_size, sizeof(uint32_t));
-//         off += sizeof(uint32_t);
-//
-//         std::memcpy(upload + off, offsets.data(), offsets_size * sizeof(uint32_t));
-//         off += offsets_size * sizeof(uint32_t);
-//
-//         for (size_t i = 0; i < instances.size(); i++) {
-//             std::memcpy(upload + off + offsets[i], instances[i].data.data(), instances[i].data.size());
-//         }
-//
-//         auto& buf = gpu_buffers[(current_buffer + 1) % 2];
-//         if (buf.size() < upload_size) {
-//             buf.destroy();
-//             buf =
-//                 Buffer::create("Material buffer", upload_size,
-//                                VK_BUFFER_USAGE_2_TRANSFER_DST_BIT | VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
-//                                std::nullopt);
-//         }
-//
-//         next_buffer_ticket = transport2::upload(false, upload, free, upload_size, gpu_buffers[(current_buffer + 1) %
-//         2],
-//                                                 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-//                                                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-//
-//         update = false;
-//         auto res = want_save;
-//         want_save = false;
-//         return res;
-//     }
-//
-//     struct JsonInstanceEntry {
-//         uint32_t ix;
-//         std::vector<uint32_t> data;
-//         std::string name;
-//         uint32_t ref_count;
-//     };
-//
-//     struct JsonEntry {
-//         uint32_t ix;
-//         std::string name;
-//         Material schema;
-//         std::vector<JsonInstanceEntry> instances;
-//     };
-//
-//     void from_json(const nlohmann::json& j, JsonInstanceEntry& inst) {
-//         j["ix"].get_to(inst.ix);
-//         j["data"].get_to(inst.data);
-//         j["name"].get_to(inst.name);
-//         j["ref_count"].get_to(inst.ref_count);
-//     }
-//
-//     void from_json(const nlohmann::json& j, JsonEntry& e) {
-//         j["ix"].get_to(e.ix);
-//         j["name"].get_to(e.name);
-//         j["schema"].get_to(e.schema);
-//         j["instances"].get_to(e.instances);
-//     }
-//
-//     void load(const nlohmann::json& j) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         std::vector<JsonEntry> entries = j;
-//
-//         offsets.clear();
-//         names.clear();
-//         instances.clear();
-//         schemas.clear();
-//
-//         deleted.clear();
-//
-//         uint32_t mat_ix = 0;
-//         for (auto&& entry : entries) {
-//             while (entry.ix > mat_ix) {
-//                 offsets.emplace_back(offsets.empty() ? 0 : offsets.back());
-//                 instances.emplace_back();
-//                 schemas.emplace_back();
-//
-//                 deleted.emplace_back(mat_ix);
-//
-//                 mat_ix++;
-//             }
-//
-//             auto schema_size = entry.schema.total_size;
-//             schemas.emplace_back(entry.schema);
-//             names.emplace_back(entry.name);
-//             instances.emplace_back(Instances{});
-//
-//             auto& insts = instances[entry.ix];
-//
-//             for (auto&& inst_entry : entry.instances) {
-//                 while (inst_entry.ix > insts.count) {
-//                     insts.data.resize(insts.data.size() + schema_size);
-//                     insts.deleted.emplace_back(insts.count);
-//                     insts.names.emplace_back();
-//                     insts.ref_counts.emplace_back(0);
-//                     insts.count++;
-//                 }
-//
-//                 auto write_off = insts.data.size();
-//                 insts.data.resize(write_off + schema_size);
-//                 std::memcpy(insts.data.data() + write_off, inst_entry.data.data(), schema_size);
-//                 insts.names.emplace_back(inst_entry.name);
-//                 insts.ref_counts.emplace_back(inst_entry.ref_count);
-//                 insts.count++;
-//             }
-//
-//             offsets.emplace_back(
-//                 mat_ix == 0 ? 0 : instances[mat_ix - 1].count * schemas[mat_ix - 1].total_size + offsets.back());
-//
-//             mat_ix++;
-//         }
-//
-//         update = true;
-//     }
-//
-//     nlohmann::json save() {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         auto arr = nlohmann::json::array();
-//
-//         for (size_t i = 0; i < offsets.size(); i++) {
-//             auto insts = instances[i];
-//             auto insts_j = nlohmann::json::array();
-//
-//             auto schema_size = schemas[i].total_size;
-//             for (size_t j = 0; j < insts.count; j++) {
-//                 if (std::find(insts.deleted.begin(), insts.deleted.end(), j) != insts.deleted.end()) continue;
-//
-//                 insts_j.emplace_back(nlohmann::json{
-//                     {"ix", j},
-//                     {"data", std::span{(uint32_t*)(insts.data.data() + schema_size * j), schema_size}},
-//                     {"name", insts.names[j]},
-//                     {"ref_count", insts.ref_counts[j]},
-//                 });
-//             }
-//
-//             arr.emplace_back(nlohmann::json{
-//                 {"ix", i},
-//                 {"name", names[i]},
-//                 {"schema", schemas[i]},
-//                 {"instances", insts_j},
-//             });
-//         }
-//
-//         return arr;
-//     }
-//
-//     nlohmann::json default_json() {
-//         return nlohmann::json{{
-//             {"ix", 0},
-//             {"name", "PBR - Metallic Roughness"},
-//             {"schema", material::pbr::schema},
-//             {"instances", nlohmann::json::array()},
-//         }};
-//     }
-//
-//     const Material& get_schema(uint32_t mat_id) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         return schemas[mat_id];
-//     }
-//
-//     uint32_t add_schema(Material schema, std::string name) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         std::optional<uint32_t> free_ix{};
-//         if (deleted.size() != 0) {
-//             free_ix = deleted.back();
-//             deleted.pop_back();
-//         }
-//
-//         if (free_ix) {
-//             names[*free_ix] = name;
-//             schemas[*free_ix] = schema;
-//
-//             return *free_ix;
-//         }
-//
-//         names.emplace_back(name);
-//         if (offsets.size() == 0) {
-//             offsets.emplace_back(0);
-//         } else {
-//             offsets.emplace_back(offsets.back() + instances.back().data.size());
-//         }
-//         schemas.emplace_back(schema);
-//         instances.emplace_back();
-//
-//         auto mat_id = instances.size() - 1;
-//
-//         update = true;
-//         want_save = true;
-//         return mat_id;
-//     }
-//
-//     bool remove_schema(uint32_t mat_id) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         bool no_refs = true;
-//         for (const auto& ref_count : instances[mat_id].ref_counts) {
-//             no_refs &= ref_count == 0;
-//         }
-//         if (no_refs) return false;
-//
-//         if (offsets.size() != mat_id + 1) {
-//             offsets[mat_id + 1] = offsets[mat_id];
-//         }
-//         names[mat_id] = "";
-//         instances[mat_id] = {0, {}};
-//         schemas[mat_id] = Material{};
-//
-//         deleted.emplace_back(mat_id);
-//
-//         want_save = true;
-//         return true;
-//     }
-//
-//     std::span<uint8_t> get_instance_data(uint32_t mat_id, uint32_t instance_ix) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         auto schema_size = schemas[mat_id].total_size;
-//         return {instances[mat_id].data.data() + schema_size * instance_ix, schema_size};
-//     }
-//
-//     void update_instance_data(uint32_t mat_id, uint32_t instance_ix, uint8_t* new_data) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         auto schema_size = schemas[mat_id].total_size;
-//         auto mat_data = instances[mat_id].data.data() + schema_size * instance_ix;
-//
-//         std::memmove(mat_data, new_data, schema_size);
-//
-//         update = true;
-//         want_save = true;
-//     }
-//
-//     uint32_t add_instance(uint32_t mat_id, std::string name, uint8_t* data) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         auto schema_size = schemas[mat_id].total_size;
-//
-//         auto& insts = instances[mat_id];
-//         if (!insts.deleted.empty()) {
-//             auto instance_ix = insts.deleted.back();
-//             insts.deleted.pop_back();
-//             insts.names[instance_ix] = name;
-//
-//             update_instance_data(mat_id, instance_ix, data);
-//
-//             return instance_ix;
-//         }
-//
-//         auto write_off = insts.data.size();
-//         insts.data.resize(insts.data.size() + schema_size);
-//         std::memcpy(insts.data.data() + write_off, data, schema_size);
-//
-//         insts.names.emplace_back(name);
-//         insts.ref_counts.emplace_back(0);
-//
-//         for (size_t i = mat_id + 1; i < offsets.size(); i++) {
-//             offsets[i] += schema_size;
-//         }
-//
-//         auto instance_ix = insts.count++;
-//
-//         update = true;
-//         want_save = true;
-//         return instance_ix;
-//     }
-//
-//     bool remove_instance(uint32_t mat_id, uint32_t instance_ix) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         auto& insts = instances[mat_id];
-//         if (insts.ref_counts[instance_ix] != 0) {
-//             return false;
-//         }
-//
-//         insts.deleted.emplace_back(instance_ix);
-//
-//         want_save = true;
-//         return true;
-//     }
-//
-//     void acquire_instance(uint32_t mat_id, uint32_t instance_ix) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         instances[mat_id].ref_counts[instance_ix]++;
-//     }
-//
-//     void release_instance(uint32_t mat_id, uint32_t instance_ix) {
-//         assert(init_called);
-//         std::lock_guard lock{mutex};
-//
-//         instances[mat_id].ref_counts[instance_ix]--;
-//     }
-//
-//     Buffer get_buffer() {
-//         std::lock_guard lock{mutex};
-//         return gpu_buffers[current_buffer];
-//     }
-// }

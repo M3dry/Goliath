@@ -1,7 +1,11 @@
-#include "goliath/gltf.hpp"
-#include "goliath/materials.hpp"
-#include "goliath/textures.hpp"
+#include "gltf.hpp"
+#include "goliath/errors.hpp"
 #include "goliath/material.hpp"
+#include "goliath/materials.hpp"
+#include "goliath/models.hpp"
+#include "goliath/textures.hpp"
+#include "state.hpp"
+#include "textures.hpp"
 
 #define TINYGLTF_IMPLEMENTATION
 #define NO_STB_IMAGE_IMPLEMENTATION
@@ -99,18 +103,19 @@ void* copy_buffer(uint32_t* size, uint32_t* element_size, const tinygltf::Model&
     return arr;
 }
 
-engine::Textures::gid parse_texture(engine::gltf::ImageFn image_fn, const std::string& tex_name, const tinygltf::Model& model, int tex_id, bool srgb, Handled& handled) {
+engine::Textures::gid parse_texture(const std::string& tex_name, const tinygltf::Model& model,
+                                    int tex_id, bool srgb, Handled& handled) {
     if (tex_id == -1) return {0, 0};
     for (const auto& [id, gid] : handled.textures) {
         if (tex_id == id) return gid;
     }
 
     const auto& texture = model.textures[tex_id];
-    if (texture.source == -1) return {0,0};
+    if (texture.source == -1) return {0, 0};
 
     const auto& image = model.images[texture.source];
 
-bool resize = false;
+    bool resize = false;
     VkFormat format;
     if (srgb) {
         format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -195,23 +200,28 @@ bool resize = false;
         std::memcpy(image_data, image.image.data(), image_size);
     }
 
-    auto gid = image_fn({(uint8_t*)image_data, image_size}, image.width, image.height, format, tex_name, sampler);
-    handled.textures.emplace_back(tex_id, gid);
-    return gid;
+    auto tgid = game_textures->add({(uint8_t*)image_data, image_size}, image.width, image.height, format, tex_name, sampler);
+    handled.textures.emplace_back(tex_id, tgid);
+    return tgid;
 }
 
-void parse_material(engine::gltf::ImageFn image_fn, const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model, const tinygltf::Material& material,
-                    Handled& handled) {
-    out->material_id = 0;
-    // uint8_t* material_data = (uint8_t*)malloc(engine::materials::get_schema(0).total_size);
+void parse_material(engine::models::gid mgid, const std::string& prim_name, engine::Mesh* out,
+                    const tinygltf::Model& model, const tinygltf::Material& material, Handled& handled) {
+    auto schema_size = state::materials->get_schema(0)->total_size;
+    uint8_t* material_data = (uint8_t*)malloc(schema_size);
 
     engine::material::pbr::Data pbr_data{
-        .albedo_map = parse_texture(image_fn, prim_name + ": Albedo", model, material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
+        .albedo_map = parse_texture(prim_name + ": Albedo", model,
+                                    material.pbrMetallicRoughness.baseColorTexture.index, true, handled),
         .metallic_roughness_map =
-            parse_texture(image_fn, prim_name + ": Metallic Roughness", model, material.pbrMetallicRoughness.metallicRoughnessTexture.index, false, handled),
-        .normal_map = parse_texture(image_fn, prim_name + ": Normal", model, material.normalTexture.index, false, handled),
-        .occlusion_map = parse_texture(image_fn, prim_name + ": Occlusion", model, material.occlusionTexture.index, false, handled),
-        .emissive_map = parse_texture(image_fn, prim_name + ": Emissive", model, material.emissiveTexture.index, true, handled),
+            parse_texture(prim_name + ": Metallic Roughness", model,
+                          material.pbrMetallicRoughness.metallicRoughnessTexture.index, false, handled),
+        .normal_map =
+            parse_texture(prim_name + ": Normal", model, material.normalTexture.index, false, handled),
+        .occlusion_map =
+            parse_texture(prim_name + ": Occlusion", model, material.occlusionTexture.index, false, handled),
+        .emissive_map =
+            parse_texture(prim_name + ": Emissive", model, material.emissiveTexture.index, true, handled),
 
         .albedo_texcoord = (uint32_t)material.pbrMetallicRoughness.baseColorTexture.texCoord,
         .metallic_roughness_texcoord = (uint32_t)material.pbrMetallicRoughness.metallicRoughnessTexture.texCoord,
@@ -226,19 +236,27 @@ void parse_material(engine::gltf::ImageFn image_fn, const std::string& prim_name
         .occlusion_factor = (float)material.occlusionTexture.strength,
         .emissive_factor = glm::make_vec3(material.emissiveFactor.data()),
     };
-    // engine::material::pbr::write_data_blob(pbr_data, material_data);
+    engine::material::pbr::write_data_blob(pbr_data, material_data);
 
-    // out->material_instance = engine::materials::add_instance(0, prim_name.c_str(), material_data);
-    // engine::materials::acquire_instance(0, out->material_instance);
+    out->material_instance = state::materials->add_instance(0, prim_name.c_str(), {material_data, schema_size});
+    state::materials->acquire_instance(out->material_instance);
 
-    // free(material_data);
+    state::dependency_graph->add_dep(out->material_instance, pbr_data.albedo_map);
+    state::dependency_graph->add_dep(out->material_instance, pbr_data.metallic_roughness_map);
+    state::dependency_graph->add_dep(out->material_instance, pbr_data.normal_map);
+    state::dependency_graph->add_dep(out->material_instance, pbr_data.occlusion_map);
+    state::dependency_graph->add_dep(out->material_instance, pbr_data.emissive_map);
+
+    state::dependency_graph->add_dep(mgid, out->material_instance);
+
+    free(material_data);
 }
 
-engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::string& prim_name, engine::Mesh* out, const tinygltf::Model& model,
-                                   const tinygltf::Primitive& primitive, engine::collisions::AABB& model_aabb,
-                                   Handled& handled) {
+gltf::Err parse_primitive(engine::models::gid mgid, const std::string& prim_name, engine::Mesh* out,
+                          const tinygltf::Model& model, const tinygltf::Primitive& primitive,
+                          engine::collisions::AABB& model_aabb, Handled& handled) {
     auto it = primitive.attributes.find("POSITION");
-    if (it == primitive.attributes.end()) return engine::gltf::PositionAttributeMissing;
+    if (it == primitive.attributes.end()) return gltf::PositionAttributeMissing;
 
     auto position_accesor_id = it->second;
     auto normal_accessor_id = -1;
@@ -264,7 +282,7 @@ engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::str
         case TINYGLTF_MODE_TRIANGLES: out->vertex_topology = engine::Topology::TriangleList; break;
         case TINYGLTF_MODE_TRIANGLE_STRIP: out->vertex_topology = engine::Topology::TriangleStrip; break;
         case TINYGLTF_MODE_TRIANGLE_FAN: out->vertex_topology = engine::Topology::TriangleFan; break;
-        default: return engine::gltf::UnsupportedMeshTopology;
+        default: return gltf::UnsupportedMeshTopology;
     }
 
     if (primitive.indices != -1) {
@@ -281,7 +299,7 @@ engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::str
                 } else if (index_size == sizeof(uint8_t)) {
                     tmp_buf[i] = ((uint8_t*)out->indices)[i];
                 } else {
-                    return engine::gltf::UnsupportedIndexSize;
+                    return gltf::UnsupportedIndexSize;
                 }
             }
 
@@ -297,20 +315,20 @@ engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::str
 
     out->positions =
         (glm::vec3*)copy_buffer(&out->vertex_count, &elem_size, model, model.accessors[(uint64_t)position_accesor_id]);
-    if (elem_size != sizeof(glm::vec3)) return engine::gltf::InvalidPositionElementSize;
+    if (elem_size != sizeof(glm::vec3)) return gltf::InvalidPositionElementSize;
 
     if (normal_accessor_id != -1) {
         out->normals =
             (glm::vec3*)copy_buffer(&vertex_count, &elem_size, model, model.accessors[(uint64_t)normal_accessor_id]);
-        if (elem_size != sizeof(glm::vec3)) return engine::gltf::InvalidNormalElementSize;
-        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec3)) return gltf::InvalidNormalElementSize;
+        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
     }
 
     if (tangent_accessor_id != -1) {
         out->tangents =
             (glm::vec4*)copy_buffer(&vertex_count, &elem_size, model, model.accessors[(uint64_t)tangent_accessor_id]);
-        if (elem_size != sizeof(glm::vec4)) return engine::gltf::InvalidNormalElementSize;
-        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec4)) return gltf::InvalidNormalElementSize;
+        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
     }
 
     for (std::size_t i = 0; i < out->texcoords.size(); i++) {
@@ -318,8 +336,8 @@ engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::str
 
         out->texcoords[i] = (glm::vec2*)copy_buffer(&vertex_count, &elem_size, model,
                                                     model.accessors[(uint64_t)texcoord_accessor_ids[i]], true);
-        if (elem_size != sizeof(glm::vec2)) return engine::gltf::InvalidTexcoordElementSize;
-        if (vertex_count != out->vertex_count) return engine::gltf::VertexCountDiffersBetweenAttributes;
+        if (elem_size != sizeof(glm::vec2)) return gltf::InvalidTexcoordElementSize;
+        if (vertex_count != out->vertex_count) return gltf::VertexCountDiffersBetweenAttributes;
     }
 
     auto& accessor = model.accessors[(uint64_t)position_accesor_id];
@@ -332,14 +350,15 @@ engine::gltf::Err parse_primitive(engine::gltf::ImageFn image_fn, const std::str
     model_aabb.extend(aabb);
 
     assert(primitive.material >= 0 && "NOTE: if this asserts add default material creation");
-    parse_material(image_fn, prim_name, out, model, model.materials[primitive.material], handled);
+    parse_material(mgid, prim_name, out, model, model.materials[primitive.material], handled);
 
-    return engine::gltf::Ok;
+    return gltf::Ok;
 }
 
-engine::gltf::Err parse_node(engine::gltf::ImageFn image_fn, const tinygltf::Model& model, int node_id, std::vector<engine::Mesh>& meshes,
-                              std::vector<glm::mat4>& mesh_transforms, std::vector<uint32_t>& mesh_indices,
-                              glm::mat4 current_transform, engine::collisions::AABB& model_aabb, Handled& handled) {
+gltf::Err parse_node(engine::models::gid mgid, const tinygltf::Model& model, int node_id,
+                     std::vector<engine::Mesh>& meshes, std::vector<glm::mat4>& mesh_transforms,
+                     std::vector<uint32_t>& mesh_indices, glm::mat4 current_transform,
+                     engine::collisions::AABB& model_aabb, Handled& handled) {
     auto& node = model.nodes[(uint64_t)node_id];
 
     glm::mat4 mat;
@@ -350,7 +369,8 @@ engine::gltf::Err parse_node(engine::gltf::ImageFn image_fn, const tinygltf::Mod
         if (node.scale.size() != 0) scale = glm::make_vec3(node.scale.data());
 
         glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
-        if (node.rotation.size() != 0) rotation = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+        if (node.rotation.size() != 0)
+            rotation = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
 
         glm::vec3 translate{0.0f};
         if (node.translation.size() != 0) translate = glm::make_vec3(node.translation.data());
@@ -380,8 +400,9 @@ engine::gltf::Err parse_node(engine::gltf::ImageFn image_fn, const tinygltf::Mod
         for (const auto& [i, primitive] : mesh.primitives | std::ranges::views::enumerate) {
             meshes.emplace_back();
 
-            auto res = parse_primitive(image_fn, i == 0 ? mesh.name : std::format("{} #{}", mesh.name, i), &meshes.back(), model, primitive, model_aabb, handled);
-            if (res != engine::gltf::Ok) return res;
+            auto res = parse_primitive(mgid, i == 0 ? mesh.name : std::format("{} #{}", mesh.name, i),
+                                       &meshes.back(), model, primitive, model_aabb, handled);
+            if (res != gltf::Ok) return res;
 
             mesh_indices.emplace_back(meshes.size() - 1);
             mesh_transforms.emplace_back(mat);
@@ -392,21 +413,22 @@ engine::gltf::Err parse_node(engine::gltf::ImageFn image_fn, const tinygltf::Mod
 
 mesh_loaded:
     for (auto children_id : node.children) {
-        auto res = parse_node(image_fn, model, children_id, meshes, mesh_transforms, mesh_indices, mat, model_aabb, handled);
-        if (res != engine::gltf::Ok) return res;
+        auto res =
+            parse_node(mgid, model, children_id, meshes, mesh_transforms, mesh_indices, mat, model_aabb, handled);
+        if (res != gltf::Ok) return res;
     }
 
-    return engine::gltf::Ok;
+    return gltf::Ok;
 }
 
-engine::gltf::Err parse_model(engine::gltf::ImageFn image_fn, engine::Model* out, const tinygltf::Model& model) {
+gltf::Err parse_model(engine::models::gid mgid, engine::Model* out, const tinygltf::Model& model) {
     auto scene_id = model.defaultScene;
     if (scene_id == -1 && model.scenes.size() > 0) {
         scene_id = 0;
     }
 
     if (scene_id == -1) {
-        return engine::gltf::NoRootScene;
+        return gltf::NoRootScene;
     }
 
     engine::collisions::AABB model_aabb{};
@@ -422,9 +444,9 @@ engine::gltf::Err parse_model(engine::gltf::ImageFn image_fn, engine::Model* out
     for (auto node_id : scene.nodes) {
         if (node_id == -1) continue;
 
-        auto err = parse_node(image_fn, model, node_id, meshes, mesh_transforms, mesh_indices, glm::identity<glm::mat4>(),
-                              model_aabb, handled);
-        if (err != engine::gltf::Ok) return err;
+        auto err = parse_node(mgid, model, node_id, meshes, mesh_transforms, mesh_indices,
+                              glm::identity<glm::mat4>(), model_aabb, handled);
+        if (err != gltf::Ok) return err;
     }
     assert(mesh_indices.size() == mesh_transforms.size());
     assert(meshes.size() <= mesh_indices.size());
@@ -449,13 +471,13 @@ engine::gltf::Err parse_model(engine::gltf::ImageFn image_fn, engine::Model* out
 
     out->bounding_box = model_aabb;
 
-    return engine::gltf::Ok;
+    return gltf::Ok;
 }
 
-namespace engine::gltf {
+namespace gltf {
     tinygltf::TinyGLTF loader{};
 
-    Err load_json(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
+    Err load_json(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, engine::models::gid mgid,
                   std::string* tinygltf_error, std::string* tinygltf_warning) {
         tinygltf::Model model;
 
@@ -464,12 +486,12 @@ namespace engine::gltf {
             return TinyGLTFErr;
         }
 
-        auto parse_res = parse_model(image_fn, out, model);
+        auto parse_res = parse_model(mgid, out, model);
 
         return parse_res;
     }
 
-    Err load_bin(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, ImageFn image_fn,
+    Err load_bin(engine::Model* out, std::span<uint8_t> data, const std::string& base_dir, engine::models::gid mgid,
                  std::string* tinygltf_error, std::string* tinygltf_warning) {
         tinygltf::Model model;
 
@@ -478,6 +500,93 @@ namespace engine::gltf {
             return TinyGLTFErr;
         }
 
-        return parse_model(image_fn, out, model);
+        return parse_model(mgid, out, model);
+    }
+
+    engine::models::gid add_model(const std::filesystem::path& path, const std::string& name) {
+        return engine::models::add(
+            [path, name](auto gid, const auto& out_path) {
+                if (engine::models::get_generation(gid.id()) != gid.gen()) return false;
+
+                uint32_t model_size;
+                auto* model_data = engine::util::read_file(path, &model_size);
+
+                engine::Model model{};
+
+                bool success = false;
+                if (engine::models::get_generation(gid.id()) != gid.gen()) goto cleanup;
+
+                {
+                    const auto& ext = path.extension();
+
+                    bool thrown = false;
+                    auto error = AddError{
+                        .model = gid,
+                        .model_name = name,
+                        .model_src_file = path,
+                    };
+
+                    if (ext == ".glb") {
+                        std::string warning_str{};
+                        std::string error_str{};
+                        auto err = gltf::load_bin(&model, {model_data, model_size}, path.parent_path().string(),
+                                                  gid, &warning_str, &error_str);
+
+                        if ((thrown = err != gltf::Err::Ok) || !warning_str.empty()) {
+                            error.loader = err;
+                            error.tinygltf_warning = std::move(warning_str);
+                            error.tinygltf_error = std::move(error_str);
+                            engine::errors::throw_err(engine::errors::Custom, &error);
+                        }
+                    } else if (ext == ".gltf") {
+                        std::string warning_str{};
+                        std::string error_str{};
+                        auto err = gltf::load_json(&model, {model_data, model_size}, path.parent_path().string(),
+                                                   gid, &error_str, &warning_str);
+
+                        if ((thrown = err != gltf::Err::Ok) || !warning_str.empty()) {
+                            error.loader = err;
+                            error.tinygltf_warning = std::move(warning_str);
+                            error.tinygltf_error = std::move(error_str);
+                            engine::errors::throw_err(engine::errors::Custom, &error);
+                        }
+                    } else {
+                        std::filesystem::copy(path, out_path);
+                        return true;
+                    }
+
+                    if (thrown) {
+                        free(model_data);
+                        remove(gid);
+                        return false;
+                    }
+
+                    if (engine::models::get_generation(gid.id()) != gid.gen()) goto cleanup;
+
+                    auto save_size = model.get_save_size();
+                    uint8_t* save_data = (uint8_t*)malloc(save_size);
+
+                    model.save({save_data, save_size});
+
+                    engine::util::save_file(out_path, save_data, save_size);
+
+                    free(save_data);
+                }
+
+                if (engine::models::get_generation(gid.id()) != gid.gen()) {
+                    std::filesystem::remove(out_path);
+                    goto cleanup;
+                }
+
+                success = true;
+            cleanup:
+                model.destroy();
+                free(model_data);
+
+                return success;
+
+                return true;
+            },
+            name);
     }
 }

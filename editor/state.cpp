@@ -1,5 +1,6 @@
 #include "state.hpp"
 #include "goliath/dependency_graph.hpp"
+#include "goliath/materials.hpp"
 
 namespace state {
     bool want_to_save_ = false;
@@ -9,6 +10,7 @@ namespace state {
     bool assets_scene_only_scope;
 
     engine::DependencyGraph* dependency_graph{};
+    engine::Materials* materials{};
 
     nlohmann::json default_json() {
         return nlohmann::json{

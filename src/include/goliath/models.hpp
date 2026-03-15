@@ -1,13 +1,8 @@
 #pragma once
 
-#include "goliath/gltf.hpp"
 #include "goliath/gpu_group.hpp"
 #include "goliath/model.hpp"
 #include <nlohmann/json.hpp>
-
-namespace engine {
-    class DependencyGraph;
-}
 
 namespace engine::models {
     enum struct Err {
@@ -32,26 +27,20 @@ namespace engine::models {
             return (value & gen_mask) >> gen_shift;
         }
 
+        uint32_t dim() const {
+            return 0;
+        }
+
         bool operator==(gid other) const {
             return value == other.value;
         }
-    };
-
-    struct AddError {
-        gid model;
-        gltf::Err loader;
-        std::string tinygltf_warning;
-        std::string tinygltf_error;
-
-        std::string model_name;
-        std::string model_src_file;
     };
 
     struct LoadError {
         gid model;
     };
 
-    void init(std::filesystem::path models_dir, Textures* textures, DependencyGraph* dep_graph = nullptr);
+    void init(std::filesystem::path models_dir, Textures* textures, Materials* materials);
     void destroy();
 
     void to_json(nlohmann::json& j, const gid& gid);
@@ -60,7 +49,9 @@ namespace engine::models {
     void load(const nlohmann::json& j);
     nlohmann::json save();
 
-    gid add(std::filesystem::path path, std::string name);
+    using AddFn = std::function<bool(gid, const std::filesystem::path& path)>;
+    gid add(AddFn&& add_fn, std::string name);
+    gid add(Model model, std::string name);
     bool remove(gid gid);
 
     std::expected<std::string*, Err> get_name(gid gid);

@@ -72,7 +72,6 @@ namespace engine {
         uint32_t swapchain_ix;
 
         bool models_to_save_{false};
-        bool materials_to_save_{false};
         bool textures_to_save_{false};
 
         uint64_t timeline_value = 0;

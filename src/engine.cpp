@@ -4,7 +4,6 @@
 #include "goliath/samplers.hpp"
 #include "goliath/visbuffer.hpp"
 #include "goliath/vma_ptrs.hpp"
-#include "materials_.hpp"
 #include "models_.hpp"
 #include "vma_ptrs_.hpp"
 #include <GLFW/glfw3.h>
@@ -599,9 +598,6 @@ namespace engine {
 
         state->models_to_save_ |= models::process_uploads();
 
-        VkBufferMemoryBarrier2 material_barrier{};
-        state->materials_to_save_ |= materials::update_gpu_buffer();
-
         state->_drawing_prepared = true;
     }
 
@@ -714,13 +710,6 @@ namespace engine {
         assert(!shared_state);
         auto res = state->models_to_save_;
         state->models_to_save_ = false;
-        return res;
-    }
-
-    bool materials_to_save() {
-        assert(!shared_state);
-        auto res = state->materials_to_save_;
-        state->materials_to_save_ = false;
         return res;
     }
 

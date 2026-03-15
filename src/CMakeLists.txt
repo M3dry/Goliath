@@ -49,9 +49,9 @@ add_subdirectory(xxHash/cmake_unofficial)
 
 add_subdirectory(./json)
 
-set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
-set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
-add_subdirectory(./tinygltf)
+# set(TINYGLTF_HEADER_ONLY ON CACHE INTERNAL "" FORCE)
+# set(TINYGLTF_INSTALL OFF CACHE INTERNAL "" FORCE)
+# add_subdirectory(./tinygltf)
 
 set(IMGUI_SOURCES
     imgui/imgui.cpp
@@ -82,7 +82,6 @@ SET(ENGINE_SOURCES
     camera.cpp
     model.cpp
     models.cpp
-    gltf.cpp
     util.cpp
     gpu_group.cpp
     visbuffer.cpp

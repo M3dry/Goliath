@@ -1,10 +1,7 @@
-#include "goliath/dependency_graph.hpp"
 #include "goliath/models.hpp"
 #include "goliath/culling.hpp"
 #include "goliath/errors.hpp"
-#include "goliath/gltf.hpp"
 #include "goliath/gpu_group.hpp"
-#include "goliath/materials.hpp"
 #include "goliath/mspc_queue.hpp"
 #include "goliath/thread_pool.hpp"
 #include "goliath/util.hpp"
@@ -21,8 +18,6 @@ namespace engine::models {
     bool want_save = false;
     bool init_called = false;
     std::filesystem::path models_directory;
-
-    DependencyGraph* dep_graph;
 
     std::filesystem::path make_model_path(gid gid) {
         return std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff);
@@ -48,6 +43,7 @@ namespace engine::models {
     };
 
     Textures* texs;
+    Materials* mats;
 
     std::vector<std::string> names{};
     std::vector<uint32_t> ref_counts{};
@@ -62,11 +58,12 @@ namespace engine::models {
         enum Type {
             Acquire,
             Add,
+            AddCustom,
         };
 
         Type type;
         gid gid;
-        std::filesystem::path orig_path{};
+        std::optional<std::variant<AddFn, Model>> add{};
     };
 
     static constexpr std::size_t gpu_queue_size = 64;
@@ -103,93 +100,25 @@ namespace engine::models {
         return true;
     }
 
-    bool add_model(gid gid, std::filesystem::path orig_path) {
+    bool add_model(gid gid, Model model) {
         std::lock_guard lock{gid_read};
 
         if (generations[gid.id()] != gid.gen()) return false;
 
-        uint32_t model_size;
-        auto* model_data = engine::util::read_file(orig_path, &model_size);
-
-        engine::Model model{};
-
-        bool success = false;
-        if (generations[gid.id()] != gid.gen()) goto cleanup;
-
-        {
-            const auto& ext = orig_path.extension();
-            auto path = models_directory / make_model_path(gid);
-            auto image_fn = [&](std::span<uint8_t> data, int width, int height, VkFormat format,
-                                         const std::string& name, Sampler sampler) {
-                auto tex_gid = texs->add(data, width, height, format, name, sampler);
-                dep_graph->add_dep(gid, tex_gid);
-                return tex_gid;
-            };
-
-            bool thrown = false;
-            auto error = AddError{
-                .model = gid,
-                .model_name = names[gid.id()],
-                .model_src_file = orig_path,
-            };
-            
-            if (ext == ".glb") {
-                std::string warning_str{};
-                std::string error_str{};
-                auto err = engine::gltf::load_bin(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn, &warning_str, &error_str);
-
-                if ((thrown = err != engine::gltf::Err::Ok) || !warning_str.empty()) {
-                    error.loader = err;
-                    error.tinygltf_warning = std::move(warning_str);
-                    error.tinygltf_error = std::move(error_str);
-                    errors::throw_err(errors::Models_Add, &error);
-                }
-            } else if (ext == ".gltf") {
-                std::string warning_str{};
-                std::string error_str{};
-                auto err = engine::gltf::load_json(&model, {model_data, model_size}, orig_path.parent_path().string(), image_fn, &error_str, &warning_str);
-
-                if ((thrown = err != engine::gltf::Err::Ok) || !warning_str.empty()) {
-                    error.loader = err;
-                    error.tinygltf_warning = std::move(warning_str);
-                    error.tinygltf_error = std::move(error_str);
-                    errors::throw_err(errors::Models_Add, &error);
-                }
-            } else {
-                std::filesystem::copy(orig_path, path);
-                return true;
-            }
-
-            if (thrown) {
-                free(model_data);
-                remove(gid);
-                return false;
-            }
-
-            if (generations[gid.id()] != gid.gen()) goto cleanup;
-
-            auto save_size = model.get_save_size();
-            uint8_t* save_data = (uint8_t*)malloc(save_size);
-
-            model.save({save_data, save_size});
-
-            engine::util::save_file(path, save_data, save_size);
-
-            free(save_data);
-        }
+        auto model_size = model.get_save_size();
+        auto* data = (uint8_t*)malloc(model_size);
+        model.save({data, model_size});
 
         if (generations[gid.id()] != gid.gen()) {
-            std::filesystem::remove(models_directory /
-                                    std::format("{:02X}{:06X}.gom", (uint8_t)gid.gen(), gid.id() & 0x00ffffff));
-            goto cleanup;
+            free(data);
+            return false;
         }
 
-        success = true;
-    cleanup:
-        model.destroy();
-        free(model_data);
+        engine::util::save_file(models_directory / make_model_path(gid), data, model_size);
 
-        return success;
+        free(data);
+
+        return true;
     }
 
     auto io_pool = engine::make_thread_pool([](task&& task) {
@@ -204,10 +133,20 @@ namespace engine::models {
                 }
                 break;
             case task::Add:
-                if (add_model(task.gid, task.orig_path)) {
+                if (add_model(task.gid, std::get<Model>(*task.add))) {
                     initialized_queue.enqueue(task.gid);
                 }
                 break;
+            case task::AddCustom:
+                bool res = false;
+                {
+                    std::lock_guard lock{gid_read};
+                    res = std::get<AddFn>(*task.add)(task.gid, models_directory / make_model_path(task.gid));
+                }
+
+                if (res) {
+                    initialized_queue.enqueue(task.gid);
+                }
         }
     });
 
@@ -223,7 +162,9 @@ namespace engine::models {
         if (upload_gids.size() != 0) {
             for (const auto& gid : upload_gids) {
                 if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
-                    cpu_datas[gid.id()]->acquire_textures(texs);
+                    for (const auto& mesh : std::span{cpu_datas[gid.id()]->meshes, cpu_datas[gid.id()]->mesh_count}) {
+                        mats->with_textures([](auto tex_gid) { texs->acquire({&tex_gid, 1}); }, mesh.material_instance);
+                    }
 
                     auto& cpu_data = *cpu_datas[gid.id()];
                     engine::gpu_group::begin();
@@ -245,7 +186,7 @@ namespace engine::models {
         std::erase_if(initializing_models, [&](auto gid) {
             auto found = std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initialized_gids.end();
             initialized |= found;
-            return found;
+            return found || generations[gid.id()] != gid.gen();
         });
 
         initialized |= want_save;
@@ -263,11 +204,11 @@ namespace engine::models {
         return std::nullopt;
     }
 
-    void init(std::filesystem::path models_dir, Textures* textures, DependencyGraph* dependency_graph) {
+    void init(std::filesystem::path models_dir, Textures* textures, Materials* materials) {
         texs = textures;
+        mats = materials;
         init_called = true;
         models_directory = models_dir;
-        dep_graph = dependency_graph;
     }
 
     void destroy() {
@@ -346,7 +287,7 @@ namespace engine::models {
         return j;
     }
 
-    gid add(std::filesystem::path path, std::string name) {
+    gid add(Model model, std::string name) {
         assert(init_called);
 
         gid gid;
@@ -382,7 +323,48 @@ namespace engine::models {
         }
 
         initializing_models.emplace_back(gid);
-        io_pool.enqueue({task::Add, gid, path});
+        io_pool.enqueue({task::Add, gid, model});
+
+        return gid;
+    }
+
+    gid add(AddFn&& add_fn, std::string name) {
+        assert(init_called);
+
+        gid gid;
+        if (auto gid_ = find_empty_gid(); gid_) {
+            gid = *gid_;
+            uint8_t gid_gen = gid.gen();
+
+            names[gid.id()] = std::move(name);
+
+            ref_counts[gid.id()] = 0;
+
+            cpu_datas[gid.id()] = std::nullopt;
+            gpu_datas[gid.id()] = UploadedModelData{};
+
+            generations[gid.id()] += 1;
+            deleted[gid.id()] = false;
+
+            gid = models::gid{generations[gid.id()], gid.id()};
+        } else {
+            std::lock_guard lock{gid_read};
+
+            gid = {0, (uint32_t)names.size()};
+
+            names.emplace_back(std::move(name));
+
+            ref_counts.emplace_back(0);
+
+            cpu_datas.emplace_back(std::nullopt);
+            gpu_datas.emplace_back(UploadedModelData{});
+
+            generations.emplace_back(0);
+            deleted.emplace_back(false);
+        }
+
+        initializing_models.emplace_back(gid);
+        io_pool.enqueue({task::AddCustom, gid, add_fn});
 
         return gid;
     }
@@ -396,8 +378,6 @@ namespace engine::models {
         deleted[gid.id()] = true;
         generations[gid.id()] += 1;
 
-        dep_graph->remove_asset(gid);
-
         auto model_path = models_directory / make_model_path(gid);
         if (std::filesystem::exists(model_path)) {
             uint32_t model_size;
@@ -409,10 +389,9 @@ namespace engine::models {
             for (size_t i = 0; i < model.mesh_count; i++) {
                 auto& mesh = model.meshes[i];
 
-                auto mat_id = mesh.material_id;
-                auto instance_ix = mesh.material_instance;
+                auto mat_gid = mesh.material_instance;
 
-                // materials::release_instance(mat_id, instance_ix);
+                mats->release_instance(mat_gid);
             }
 
             model.destroy();
@@ -427,6 +406,9 @@ namespace engine::models {
 
         cpu_datas[gid.id()] = std::nullopt;
         gpu_datas[gid.id()] = UploadedModelData{};
+
+        std::erase_if(initializing_models,
+                      [&gid](auto igid) { return gid == igid || generations[igid.id()] != igid.gen(); });
 
         modified();
 
@@ -524,7 +506,9 @@ namespace engine::models {
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;
 
             if (cpu_datas[gid.id()]) {
-                cpu_datas[gid.id()]->release_textures(texs);
+                for (const auto& mesh : std::span{cpu_datas[gid.id()]->meshes, cpu_datas[gid.id()]->mesh_count}) {
+                    mats->with_textures([](auto tex_gid) { texs->release({&tex_gid, 1}); }, mesh.material_instance);
+                }
                 cpu_datas[gid.id()]->destroy();
             }
             cpu_datas[gid.id()] = std::nullopt;

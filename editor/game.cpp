@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "project.hpp"
+#include "state.hpp"
 #include "textures.hpp"
 #include <vulkan/vulkan_core.h>
 
@@ -216,7 +217,7 @@ Game Game::make(engine::game_interface2::GameConfig config) {
         rebuild_target(game.targets, game.target_views, game.target_dimensions, game.config);
     }
 
-    game.es = engine::game_interface2::make_engine_service(&game.assets, game_textures);
+    game.es = engine::game_interface2::make_engine_service(&game.assets, game_textures, state::materials);
     game.fs = engine::game_interface2::make_frame_service(&game.assets);
     game.ts = engine::game_interface2::make_tick_service();
     return game;

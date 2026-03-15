@@ -28,3 +28,6 @@
 [submodule "editor/ImViewGuizmo"]
 	path = editor/ImViewGuizmo
 	url = https://github.com/M3dry/ImViewGuizmo
+[submodule "editor/tinygltf"]
+	path = editor/tinygltf
+	url = https://github.com/syoyo/tinygltf.git

@@ -17,7 +17,7 @@
 #include <vulkan/vulkan_core.h>
 
 namespace engine::game_interface2 {
-    EngineService make_engine_service(Assets* assets, Textures* texs) {
+    EngineService make_engine_service(Assets* assets, Textures* texs, Materials* materials) {
         return EngineService{.assets = EngineService::AssetsServicePtrs{
                                  .assets = assets,
                                  .acquire_scene = [](auto* a, auto handle) { ((Assets*)a)->acquire(handle); },
@@ -62,18 +62,8 @@ namespace engine::game_interface2 {
                                  .texture_pool = [](auto* t) { return &((Textures*)t)->get_texture_pool(); },
                              },
                              .materials = EngineService::MaterialsServicePtrs{
-                                 .instance_data =
-                                     [](auto mat_id, auto instance_ix, auto* size) {
-                                         auto ret = materials::get_instance_data(mat_id, instance_ix);
-
-                                         *size = ret.size();
-                                         return ret.data();
-                                     },
-                                 .buffer = []() { return materials::get_buffer(); },
-                                 .set_instance_data =
-                                     [](auto mat_id, auto instance_ix, auto* new_data) {
-                                         materials::update_instance_data(mat_id, instance_ix, new_data);
-                                     },
+                                 .materials = materials,
+                                 .buffer = [](void* materials) { return ((Materials*)materials)->get_buffer(); },
                              },
                              .models = EngineService::ModelsServicePtrs{
                                  .name = [](auto gid, auto* err, auto* erred) -> std::string* {
@@ -205,9 +195,27 @@ namespace engine::game_interface2 {
         auto* textures = asset_paths.textures_dir != nullptr ? Textures::make(asset_paths.textures_dir) : nullptr;
         auto assets = Assets::init(config.asset_inputs, textures);
 
+        nlohmann::json mats_json_ = Materials::default_json();
+        if (asset_paths.materials != nullptr) {
+            auto mats_json = util::read_json(asset_paths.materials);
+            if (!mats_json.has_value() && mats_json.error() == util::ReadJsonErr::FileErr &&
+                !std::filesystem::exists(asset_paths.materials)) {
+            } else if (!mats_json.has_value()) {
+                printf("materials.json file is corrupted\n");
+                exit(-1);
+            } else {
+                mats_json_ = *mats_json;
+            }
+        }
+        auto materials_ = Materials::init(mats_json_);
+        if (!materials_) {
+            printf("Couldn't initialize the materials asset system\n");
+            exit(-1);
+        }
+        auto* materials = *materials_;
+
         if (asset_paths.models_dir) {
-            models::init(asset_paths.models_dir, textures);
-            materials::init();
+            models::init(asset_paths.models_dir, textures, materials);
         }
 
         if (asset_paths.asset_inputs != nullptr) {
@@ -237,19 +245,6 @@ namespace engine::game_interface2 {
             textures->load((*tex_reg_json));
         }
 
-        if (asset_paths.materials != nullptr) {
-            auto mats_json = util::read_json(asset_paths.materials);
-            if (!mats_json.has_value() && mats_json.error() == util::ReadJsonErr::FileErr &&
-                !std::filesystem::exists(asset_paths.materials)) {
-                mats_json = materials::default_json();
-            } else if (!mats_json.has_value()) {
-                printf("materials.json file is corrupted\n");
-                exit(-1);
-            }
-
-            materials::load(*mats_json);
-        }
-
         if (asset_paths.models_reg != nullptr) {
             auto models_registry_json = util::read_json(asset_paths.models_reg);
             if (!models_registry_json.has_value() && models_registry_json.error() == util::ReadJsonErr::FileErr &&
@@ -276,7 +271,7 @@ namespace engine::game_interface2 {
             scenes::load(*scenes_json);
         }
 
-        auto es = make_engine_service(&assets, textures);
+        auto es = make_engine_service(&assets, textures, materials);
         auto fs = make_frame_service(&assets);
         auto ts = make_tick_service();
 
@@ -341,6 +336,8 @@ namespace engine::game_interface2 {
                     event::update_tick();
                 }
 
+                textures->process_uploads();
+                materials->process();
                 if (prepare_frame()) {
                     if (config.target_dimensions == glm::uvec2{0, 0})
                         update_targets(targets.data(), target_views.data(), target_dimension);
@@ -592,7 +589,7 @@ namespace engine::game_interface2 {
         }
 
         models::destroy();
-        materials::destroy();
+        delete materials;
         delete textures;
 
         destroy();

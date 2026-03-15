@@ -1,9 +1,9 @@
 #pragma once
 
 #include "goliath/buffer.hpp"
+#include "goliath/materials.hpp"
 #include "goliath/collisions.hpp"
 #include "goliath/rendering.hpp"
-#include "goliath/textures.hpp"
 #include <cstdint>
 #include <cstring>
 #include <glm/ext/matrix_float4x4.hpp>
@@ -46,11 +46,8 @@ namespace engine::model {
 }
 
 namespace engine {
-    using material_id = uint16_t;
-
     struct Mesh {
-        material_id material_id = (uint16_t)-1;
-        uint32_t material_instance;
+        Materials::gid material_instance;
 
         engine::Topology vertex_topology;
 
@@ -75,7 +72,6 @@ namespace engine {
         uint32_t upload_data(uint8_t* buf) const;
 
         void clone(Mesh* out) {
-            out->material_id = material_id;
             out->material_instance = material_instance;
 
             out->vertex_topology = vertex_topology;
@@ -125,9 +121,6 @@ namespace engine {
 
         static void load(Model& out, std::span<uint8_t> data);
 
-        void acquire_textures(Textures* texs) const;
-        void release_textures(Textures* texs) const;
-
         void destroy() {
             for (std::size_t i = 0; i < mesh_count; i++) {
                 meshes[i].destroy();
@@ -154,7 +147,7 @@ namespace engine::model {
     struct GPUMeshData {
         GPUOffset offset;
         uint16_t _padding{};
-        material_id mat_id;
+        uint16_t mat_id;
         uint32_t vertex_count;
         glm::mat4 transform;
         collisions::AABB bounding_box;

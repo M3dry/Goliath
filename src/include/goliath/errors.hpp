@@ -8,13 +8,15 @@
 namespace engine::errors {
     enum ErrType {
         Models_Load,
-        Models_Add,
+        // Models_Add,
+        Custom
     };
 
-    template <typename F> decltype(auto) visit(F&& f, ErrType type) {
+    template <typename F, typename Custom_T = void*> decltype(auto) visit(F&& f, ErrType type) {
         switch (type) {
             case Models_Load: return f.template operator()<models::LoadError>();
-            case Models_Add: return f.template operator()<models::AddError>();
+            case Custom: return f.template operator()<Custom_T>();
+            // case Models_Add: return f.template operator()<models::AddError>();
         }
     }
 

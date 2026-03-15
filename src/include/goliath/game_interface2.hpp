@@ -119,10 +119,8 @@ namespace engine::game_interface2 {
         };
 
         struct MaterialsServicePtrs {
-            // const Material* (*schema)(uint32_t mat_id); TODO: Material not ABI safe, probably just make custom std::vector
-            uint8_t* (*instance_data)(uint32_t mat_id, uint32_t instance_ix, uint32_t* size);
-            Buffer (*buffer)();
-            void (*set_instance_data)(uint32_t mat_id, uint32_t instance_ix, uint8_t* new_data);
+            void* materials;
+            Buffer (*buffer)(void* materials);
         };
 
         class MaterialsService {
@@ -137,21 +135,7 @@ namespace engine::game_interface2 {
             }
 
             Buffer buffer() const {
-                return ptrs.buffer();
-            }
-
-            // const Material& schema(uint32_t mat_id) const {
-            //     return *_ptrs.schema(mat_id);
-            // }
-
-            std::span<uint8_t> instance_data(uint32_t mat_id, uint32_t instance_ix) const {
-                uint32_t size;
-                auto data = ptrs.instance_data(mat_id, instance_ix, &size);
-                return {data, size};
-            }
-
-            void set_instance_data(uint32_t mat_id, uint32_t instance_ix, uint8_t* new_data) const {
-                ptrs.set_instance_data(mat_id, instance_ix, new_data);
+                return ptrs.buffer(ptrs.materials);
             }
         };
 
@@ -361,7 +345,7 @@ namespace engine::game_interface2 {
         }
     };
 
-    EngineService make_engine_service(Assets* assets, Textures* texs);
+    EngineService make_engine_service(Assets* assets, Textures* texs, Materials* materials);
     FrameService make_frame_service(Assets* assets);
     TickService make_tick_service();
 

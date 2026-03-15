@@ -571,14 +571,16 @@ namespace ui {
         for (size_t m = 0; m < model.mesh_count; m++) {
             const auto& mesh = model.meshes[m];
 
-            const auto& schema = engine::materials::get_schema(mesh.material_id);
-            auto material_data = engine::materials::get_instance_data(mesh.material_id, mesh.material_instance);
+            const auto& schema = state::materials->get_schema(mesh.material_instance.dim());
+            if (!schema) continue;
+
+            auto material_data = state::materials->get_instance_data(mesh.material_instance);
 
             if (ImGui::CollapsingHeader(std::format("Mesh #{}", m).c_str())) {
-                modified |= material_inputs(schema, material_data);
+                modified |= material_inputs(*schema, material_data);
             }
 
-            engine::materials::update_instance_data(mesh.material_id, mesh.material_instance, material_data.data());
+            state::materials->update_instance_data(mesh.material_instance, material_data.data());
         }
     }
 

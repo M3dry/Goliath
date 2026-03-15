@@ -2,8 +2,8 @@
 #include "goliath/buffer.hpp"
 #include "goliath/collisions.hpp"
 #include "goliath/gpu_group.hpp"
-#include "goliath/material.hpp"
 #include "goliath/materials.hpp"
+#include "goliath/models.hpp"
 #include "goliath/rendering.hpp"
 
 #include <utility>
@@ -11,7 +11,7 @@
 
 namespace engine {
     uint32_t Mesh::get_optimized_size() const {
-        uint32_t total_size = sizeof(material_id) + sizeof(uint32_t) + sizeof(engine::Topology) + sizeof(uint32_t) +
+        uint32_t total_size = sizeof(Materials::gid) + sizeof(engine::Topology) + sizeof(uint32_t) +
                               sizeof(uint32_t) + sizeof(bool) + sizeof(collisions::AABB) +
                               (2 + texcoords.size()) * sizeof(bool);
 
@@ -29,12 +29,8 @@ namespace engine {
     void Mesh::save_optimized(std::span<uint8_t> data) const {
         uint32_t off = 0;
 
-        std::memcpy(data.data() + off, &material_id, sizeof(material_id));
-        off += sizeof(material_id);
-        assert(off < data.size());
-
-        std::memcpy(data.data() + off, &material_instance, sizeof(uint32_t));
-        off += sizeof(uint32_t);
+        std::memcpy(data.data() + off, &material_instance, sizeof(Materials::gid));
+        off += sizeof(Materials::gid);
         assert(off < data.size());
 
         std::memcpy(data.data() + off, &vertex_topology, sizeof(Topology));
@@ -106,12 +102,8 @@ namespace engine {
 
         uint32_t off = 0;
 
-        std::memcpy(&out.material_id, data.data() + off, sizeof(material_id));
-        off += sizeof(material_id);
-        assert(off < data.size());
-
-        std::memcpy(&out.material_instance, data.data() + off, sizeof(uint32_t));
-        off += sizeof(uint32_t);
+        std::memcpy(&out.material_instance, data.data() + off, sizeof(Materials::gid));
+        off += sizeof(Materials::gid);
         assert(off < data.size());
 
         std::memcpy(&out.vertex_topology, data.data() + off, sizeof(Topology));
@@ -191,7 +183,7 @@ namespace engine {
 
         model::GPUOffset offset{
             .start = start_offset,
-            .material_offset = material_instance,
+            .material_offset = models::gid{material_instance.gen(), material_instance.id()}.value, // TODO: fix shader code to use the proper Materials::gid
         };
         offset.set_indexed_tangetns(indexed_tangents);
 
@@ -378,28 +370,6 @@ namespace engine {
             Mesh::load_optimized(out.meshes[mesh_ix], {data.data() + mesh_offset, data.size() - mesh_offset});
         }
     }
-
-    void Model::acquire_textures(Textures* texs) const {
-        for (size_t i = 0; i < mesh_count; i++) {
-            auto& mesh = meshes[i];
-            // auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
-            //
-            // for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-            //     texs->acquire({(Textures::gid*)(data.data() + off), 1});
-            // }
-        }
-    }
-
-    void Model::release_textures(Textures* texs) const {
-        for (size_t i = 0; i < mesh_count; i++) {
-            auto& mesh = meshes[i];
-            // auto data = materials::get_instance_data(mesh.material_id, mesh.material_instance);
-            //
-            // for (const auto off : materials::get_schema(mesh.material_id).texture_gid_offsets) {
-            //     texs->release({(Textures::gid*)(data.data() + off), 1});
-            // }
-        }
-    }
 }
 
 namespace engine::model {
@@ -416,7 +386,7 @@ namespace engine::model {
 
             GPUMeshData m{};
 
-            m.mat_id = mesh.material_id;
+            m.mat_id = mesh.material_instance.dim();
             m.offset = offsets[mesh_ix];
             m.transform = model->mesh_transforms[mesh_ix];
             m.vertex_count = mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;

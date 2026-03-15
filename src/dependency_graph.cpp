@@ -10,18 +10,21 @@ namespace engine {
             [&j](auto&& gid) {
                 using T = std::decay_t<decltype(gid)>;
 
-                const char* str;
-                if constexpr (std::is_same_v<T, models::gid>) {
-                    str = "model";
-                } else if constexpr (std::is_same_v<T, Textures::gid>) {
-                    str = "texture";
-                }
-
                 j = {
-                    {"type", str},
                     {"gen", gid.gen()},
                     {"id", gid.id()},
                 };
+
+                if constexpr (std::is_same_v<T, models::gid>) {
+                    j["type"] = "model";
+                } else if constexpr (std::is_same_v<T, Textures::gid>) {
+                    j["type"] = "texture";
+                } else if constexpr (std::is_same_v<T, Materials::gid>) {
+                    j["type"] = "material";
+                    j["dim"] = gid.dim();
+                } else {
+                    static_assert("Add the extra GID type to json parsing");
+                }
             },
             gid);
     }
@@ -30,10 +33,13 @@ namespace engine {
         std::string type = j["type"];
         uint32_t gen = j["gen"];
         uint32_t id = j["id"];
+
         if (type == "model") {
             gid = models::gid{gen, id};
         } else if (type == "texture") {
             gid = Textures::gid{gen, id};
+        } else if (type == "material") {
+            gid = Materials::gid{j["dim"], gen, id};
         } else {
             assert(false &&
                    "figure out a good way to report this error such that it conveys which asset metadata is corrupted");
@@ -61,47 +67,58 @@ namespace engine {
         add_dep(asset, dep, false);
     }
 
-    std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>> DependencyGraph::init(std::filesystem::path metadata_dir) {
+    std::expected<DependencyGraph*, std::pair<std::filesystem::path, util::ReadJsonErr>>
+    DependencyGraph::init(std::filesystem::path metadata_dir) {
         auto graph = new DependencyGraph{metadata_dir};
 
-        auto err = visit_gids([&]<typename GID>() -> std::optional<std::pair<std::filesystem::path, util::ReadJsonErr>> {
-            std::filesystem::path entries_path = metadata_dir;
-            const char* file_ext;
+        auto err =
+            visit_gids([&]<typename GID>() -> std::optional<std::pair<std::filesystem::path, util::ReadJsonErr>> {
+                std::filesystem::path entries_path = metadata_dir;
+                const char* file_ext;
 
-            if constexpr (std::is_same_v<GID, models::gid>) {
-                entries_path /= "models";
-                file_ext = "gom";
-            } else if constexpr (std::is_same_v<GID, Textures::gid>) {
-                entries_path /= "textures";
-                file_ext = "goi";
-            } else if constexpr (std::is_same_v<GID, Textures::gid>) {
-            } else static_assert("impossible");
+                if constexpr (std::is_same_v<GID, models::gid>) {
+                    entries_path /= "models";
+                    file_ext = ".gom";
+                } else if constexpr (std::is_same_v<GID, Textures::gid>) {
+                    entries_path /= "textures";
+                    file_ext = ".goi";
+                } else if constexpr (std::is_same_v<GID, Materials::gid>) {
+                    entries_path /= "material";
+                    file_ext = ".gomat";
+                } else static_assert("impossible");
 
-            auto& assets = graph->get_assets<GID>();
-            for (const auto& entry : std::filesystem::directory_iterator{entries_path}) {
-                if (!entry.is_regular_file()) continue;
+                // auto assets = graph->get_assets<GID>();
+                if (!std::filesystem::exists(entries_path)) return std::nullopt;
+                for (const auto& entry : std::filesystem::directory_iterator{entries_path}) {
+                    if (!entry.is_regular_file()) continue;
 
-                auto [gen, id] = util::parse_gid(entry.path().filename().string(), file_ext);
-                while (assets.size() <= id) {
-                    assets.emplace_back();
+                    auto gid = util::parse_gid2<GID>(entry.path().filename().string(), file_ext);
+
+                    auto dim = gid.dim();
+                    auto gen = gid.gen();
+                    auto id = gid.id();
+
+                    auto& assets = graph->get_assets<true>(gid);
+                    while (assets.size() <= id) {
+                        assets.emplace_back();
+                    }
+
+                    if (assets[id].generation != -1) {
+                        fprintf(stderr, "multiple dependency metadata files with same id");
+                        if (assets[id].generation > gen) continue;
+                    }
+
+                    auto j = util::read_json(entry.path());
+                    if (!j) return std::pair{entry.path(), j.error()};
+
+                    assets[id] = Asset{
+                        .generation = gen,
+                        .deps = *j,
+                    };
                 }
 
-                if (assets[id].generation != -1) {
-                    fprintf(stderr, "multiple dependency metadata files with same id");
-                    if (assets[id].generation > gen) continue;
-                }
-
-                auto j = util::read_json(entry.path());
-                if (!j) return std::pair{entry.path(), j.error()};
-
-                assets[id] = Asset{
-                    .generation = gen,
-                    .deps = *j,
-                };
-            }
-
-            return std::nullopt;
-        });
+                return std::nullopt;
+            });
         if (err) return std::unexpected(*err);
 
         graph->build_r_deps();
@@ -119,43 +136,58 @@ namespace engine {
 
             if constexpr (std::is_same_v<GID, models::gid>) {
                 entries_path /= "models";
-                file_ext = "gom";
+                file_ext = ".gom";
             } else if constexpr (std::is_same_v<GID, Textures::gid>) {
                 entries_path /= "textures";
-                file_ext = "goi";
+                file_ext = ".goi";
+            } else if constexpr (std::is_same_v<GID, Materials::gid>) {
+                entries_path /= "material";
+                file_ext = ".gomat";
             } else static_assert("impossible");
 
-            auto& assets = get_assets<GID>();
+            auto assetss = get_assets<GID>();
 
             std::filesystem::remove_all(entries_path);
             std::filesystem::create_directory(entries_path);
-            for (uint32_t i = 0; i < assets.size(); i++) {
-                auto path = entries_path / std::format("{:02X}{:06X}.{}", assets[i].generation, i, file_ext);
-                if (assets[i].generation == -1) continue;
 
-                nlohmann::json j = assets[i].deps;
-                std::ofstream o{path};
-                o << j;
+            for (uint32_t dim = 0; dim < assetss.size(); dim++) {
+                auto& assets = assetss[dim];
+
+                for (uint32_t i = 0; i < assets.size(); i++) {
+                    auto path =
+                        entries_path / util::format_gid(construct_gid<GID>(dim, assets[i].generation, i), file_ext);
+                    if (assets[i].generation == -1) continue;
+
+                    nlohmann::json j = assets[i].deps;
+                    std::ofstream o{path};
+                    o << j;
+                }
             }
         });
     }
 
     void DependencyGraph::build_r_deps() {
         visit_gids([&]<typename GID>() {
-            auto& assets = get_assets<GID>();
-            for (uint32_t i = 0; i < assets.size(); i++) {
-                for (const auto& dep : assets[i].deps) {
-                    auto r_dep = get_asset(dep);
-                    if (!r_dep) continue;
+            auto assetss = get_assets<GID>();
 
-                    r_dep->get().deps.emplace_back(GID{assets[i].generation, i});
+            for (uint32_t dim = 0; dim < assetss.size(); dim++) {
+                auto& assets = assetss[dim];
+
+                for (uint32_t i = 0; i < assets.size(); i++) {
+                    for (const auto& dep : assets[i].deps) {
+                        auto r_dep = get_asset(dep);
+                        if (!r_dep) continue;
+
+                        r_dep->get().deps.emplace_back(construct_gid<GID>(dim, assets[i].generation, i));
+                    }
                 }
             }
         });
     }
 
     void DependencyGraph::add_dep(AssetGID target, AssetGID dep, bool reverse) {
-        auto& assets = get_assets(target);
+        auto& assets = get_assets<true>(target);
+
         while (assets.size() <= get_id(target)) {
             assets.emplace_back();
         }

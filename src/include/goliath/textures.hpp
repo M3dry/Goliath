@@ -38,6 +38,10 @@ namespace engine {
                 return (value & gen_mask) >> gen_shift;
             }
 
+            uint32_t dim() const {
+                return 0;
+            }
+
             bool operator==(gid other) const {
                 return value == other.value;
             }

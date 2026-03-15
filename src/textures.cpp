@@ -439,6 +439,8 @@ namespace engine {
     }
 
     bool Textures::remove(gid gid) {
+        if (gid == Textures::gid{0, 0}) return false;
+
         if (generations[gid.id()] != gid.gen()) return false;
         if (deleted[gid.id()]) return false;
 
