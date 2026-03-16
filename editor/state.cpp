@@ -12,6 +12,8 @@ namespace state {
     engine::DependencyGraph* dependency_graph{};
     engine::Materials* materials{};
 
+    std::vector<engine::Materials::gid> opened_material_instances{};
+
     nlohmann::json default_json() {
         return nlohmann::json{
             {"models_query", ""},

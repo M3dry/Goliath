@@ -14,6 +14,8 @@ namespace state {
     extern engine::DependencyGraph* dependency_graph;
     extern engine::Materials* materials;
 
+    extern std::vector<engine::Materials::gid> opened_material_instances;
+
     nlohmann::json default_json();
 
     void load(const nlohmann::json& j);

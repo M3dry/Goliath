@@ -56,7 +56,7 @@ namespace engine {
         bool remove_schema(uint32_t mat_id);
         std::optional<Material> get_schema(uint32_t mat_id);
 
-        std::vector<uint8_t> get_instance_data(gid gid);
+        std::optional<std::vector<uint8_t>> get_instance_data(gid gid);
         void update_instance_data(gid gid, uint8_t* new_data);
         gid add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data);
         bool remove_instance(gid gid);
@@ -89,6 +89,22 @@ namespace engine {
             }
         }
 
+        std::optional<std::reference_wrapper<std::string>> get_name(gid gid);
+
+        void modified();
+
+        template <typename F>
+        void get_names(F&& f) const {
+            for (size_t d = 0; d < instances.size(); d++) {
+                if (is_deleted(d)) continue;
+
+                for (size_t i = 0; i < instances[d].names.size(); i++) {
+                    if (instances[d].deleted[i]) continue;
+                    f(instances[d].names[i], gid{d, instances[d].generations[i], i});
+                }
+            }
+        }
+
       private:
         Materials() = default;
 
@@ -96,7 +112,7 @@ namespace engine {
             std::vector<std::string> names{};
             std::vector<uint32_t> generations{};
             std::vector<uint32_t> ref_counts{};
-            std::vector<uint32_t> deleted{};
+            std::vector<bool> deleted{};
 
             std::vector<uint8_t> data{};
         };
@@ -117,7 +133,7 @@ namespace engine {
 
         std::vector<uint32_t> deleted{};
 
-        bool is_deleted(uint32_t mat_id) {
+        bool is_deleted(uint32_t mat_id) const {
             return std::find(deleted.begin(), deleted.end(), mat_id) != deleted.end();
         }
     };

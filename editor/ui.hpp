@@ -16,10 +16,13 @@ namespace ui {
 
     void assets_pane();
     void assets_entry_pre(engine::models::gid gid, uint32_t ix);
+    void assets_entry_pre(engine::Materials::gid gid, uint32_t ix);
     void assets_entry_pre(engine::Textures::gid gid, uint32_t ix);
     void assets_entry_post(engine::models::gid gid, uint32_t ix);
+    void assets_entry_post(engine::Materials::gid gid, uint32_t ix);
     void assets_entry_post(engine::Textures::gid gid, uint32_t ix);
     void assets_entry_drag_preview(engine::models::gid gid);
+    void assets_entry_drag_preview(engine::Materials::gid gid);
     void assets_entry_drag_preview(engine::Textures::gid gid);
 
     void instances_pane();
@@ -28,6 +31,8 @@ namespace ui {
     void transform_pane();
 
     void selected_model_materials_pane();
+
+    void material_windows();
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data);
 
     void rename_popup();

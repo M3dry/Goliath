@@ -2,6 +2,7 @@
 
 #include "ImGuizmo/ImGuizmo.h"
 #include "goliath/assets.hpp"
+#include "goliath/dependency_graph.hpp"
 #include "goliath/materials.hpp"
 #include "goliath/scenes.hpp"
 #include "goliath/textures.hpp"
@@ -226,7 +227,7 @@ namespace ui {
         ImGui::PopStyleVar();
     }
 
-    using scored_entry = std::pair<std::variant<engine::models::gid, engine::Textures::gid>, int32_t>;
+    using scored_entry = std::pair<engine::DependencyGraph::AssetGID, int32_t>;
 
     void score_models(bool current_scene, const std::string& query, std::vector<scored_entry>& out) {
         if (current_scene) {
@@ -247,6 +248,19 @@ namespace ui {
                     out.emplace_back(gid, score);
                 }
             }
+        }
+    }
+
+    void score_materials(bool current_scene, const std::string& query, std::vector<scored_entry>& out) {
+        if (current_scene) {
+
+        } else {
+            state::materials->get_names([&](const auto& name, auto gid) {
+                auto score = score_search(query, name);
+                if (score > std::numeric_limits<int32_t>::min()) {
+                    out.emplace_back(gid, score);
+                }
+            });
         }
     }
 
@@ -274,7 +288,7 @@ namespace ui {
 
         ImGui::SameLine();
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x);
-        std::array<const char*, 3> combo_values = {"All assets", "Models", "Textues"};
+        std::array<const char*, 4> combo_values = {"All assets", "Models", "Materials", "Textues"};
         if (ImGui::BeginCombo("##scope", combo_values[state::assets_scope], ImGuiComboFlags_NoPreview)) {
             for (size_t i = 0; i < combo_values.size(); i++) {
                 if (ImGui::Selectable(combo_values[i], state::assets_scope == i)) {
@@ -297,6 +311,9 @@ namespace ui {
             score_models(state::assets_scene_only_scope, state::models_query, matches);
         }
         if (state::assets_scope == 0 || state::assets_scope == 2) {
+            score_materials(state::assets_scene_only_scope, state::models_query, matches);
+        }
+        if (state::assets_scope == 0 || state::assets_scope == 3) {
             score_textures(state::assets_scene_only_scope, state::models_query, matches);
         }
 
@@ -354,19 +371,10 @@ namespace ui {
     void assets_entry_pre(engine::models::gid gid, uint32_t ix) {
         const auto& name = **engine::models::get_name(gid);
         ImGui::TextWrapped("%s", name.c_str());
-        if (ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
-            if (ImGui::MenuItem("Rename")) {
-                rename_tmp = name;
-                rename_dst = [gid](const auto& str) {
-                    if (auto name = engine::models::get_name(gid); name) {
-                        **name = str;
-                        engine::models::modified();
-                    }
-                };
-            }
+    }
 
-            ImGui::EndPopup();
-        }
+    void assets_entry_pre(engine::Materials::gid gid, uint32_t ix) {
+        ImGui::TextWrapped("%s", state::materials->get_name(gid)->get().c_str());
     }
 
     void assets_entry_pre(engine::Textures::gid gid, uint32_t ix) {
@@ -405,6 +413,30 @@ namespace ui {
         }
     }
 
+    void assets_entry_post(engine::Materials::gid gid, uint32_t ix) {
+        const auto& name = state::materials->get_name(gid)->get().c_str();
+
+        if (ImGui::BeginPopupContextItem("MaterialEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = name;
+                rename_dst = [gid](const auto& str) {
+                    if (auto name = state::materials->get_name(gid); name) {
+                        name->get() = str;
+                        state::materials->modified();
+                    }
+                };
+            }
+
+            if (ImGui::MenuItem("Modify")) {
+                if (std::find(state::opened_material_instances.begin(), state::opened_material_instances.end(), gid) == state::opened_material_instances.end()) {
+                    state::opened_material_instances.emplace_back(gid);
+                }
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+
     void assets_entry_post(engine::Textures::gid gid, uint32_t ix) {
         const auto& name = **game_textures->get_name(gid);
 
@@ -425,6 +457,10 @@ namespace ui {
 
     void assets_entry_drag_preview(engine::models::gid gid) {
         ImGui::SetDragDropPayload("model", &gid, sizeof(gid));
+    }
+
+    void assets_entry_drag_preview(engine::Materials::gid gid) {
+        ImGui::SetDragDropPayload("material", &gid, sizeof(gid));
     }
 
     void assets_entry_drag_preview(engine::Textures::gid gid) {
@@ -567,21 +603,65 @@ namespace ui {
         if (!model_.has_value() || model_.value() == nullptr) return;
         const auto& model = **model_;
 
-        bool modified = false;
         for (size_t m = 0; m < model.mesh_count; m++) {
-            const auto& mesh = model.meshes[m];
+            auto mat_gid = model.meshes[m].material_instance;
 
-            const auto& schema = state::materials->get_schema(mesh.material_instance.dim());
-            if (!schema) continue;
-
-            auto material_data = state::materials->get_instance_data(mesh.material_instance);
-
-            if (ImGui::CollapsingHeader(std::format("Mesh #{}", m).c_str())) {
-                modified |= material_inputs(*schema, material_data);
+            auto name_ = state::materials->get_name(mat_gid);
+            std::string name{};
+            if (name_) {
+                name = name_->get();
             }
 
-            state::materials->update_instance_data(mesh.material_instance, material_data.data());
+            ImGui::InputText(std::format("Mesh #{}", m).c_str(), &name, ImGuiInputTextFlags_ReadOnly);
+
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+                state::opened_material_instances.emplace_back(mat_gid);
+            }
+
+            if (ImGui::BeginDragDropTarget()) {
+                if (auto payload = ImGui::AcceptDragDropPayload("material");
+                    payload != nullptr && payload->IsDelivery()) {
+                    auto gid = *(engine::Materials::gid*)payload->Data;
+
+                    if (gid != mat_gid) {
+                        state::materials->acquire_instance(gid);
+                        state::materials->release_instance(model.meshes[m].material_instance);
+                        model.meshes[m].material_instance = gid;
+                    }
+                }
+
+                ImGui::EndDragDropTarget();
+            }
         }
+    }
+
+    void material_windows() {
+        bool modified = false;
+        std::erase_if(state::opened_material_instances, [&](auto mat_gid) -> bool {
+            auto name_ = state::materials->get_name(mat_gid);
+            if (!name_) return true;
+            std::string name = name_->get();
+
+            bool opened = true;
+            if (ImGui::Begin(name.c_str(), &opened)) {
+                auto schema = state::materials->get_schema(mat_gid.dim());
+                auto data = state::materials->get_instance_data(mat_gid);
+                if (!schema || !data) {
+                    ImGui::End();
+                    return true;
+                }
+                
+                if (material_inputs(*schema, *data)) {
+                    modified = true;
+                    state::materials->update_instance_data(mat_gid, data->data());
+                }
+            }
+            ImGui::End();
+
+            return !opened;
+        });
+
+        if (modified) state::materials->modified();
     }
 
     bool material_inputs(const engine::Material& schema, std::span<uint8_t> data) {
@@ -606,12 +686,12 @@ namespace ui {
                         if constexpr (engine::util::is_vec_v<Attr>) {
                             using VecData = engine::util::vec_data<Attr>;
 
-                            engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
+                            modified |= engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
                                                             {VecData::dimension, 1});
                         } else if constexpr (engine::util::is_mat_v<Attr>) {
                             using MatData = engine::util::mat_data<Attr>;
 
-                            engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
+                            modified |= engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
                                                             MatData::dimension);
                         } else if constexpr (std::same_as<engine::Textures::gid, Attr>) {
                             ImGui::InputText(name.c_str(), *game_textures->get_name(*data_ptr),
@@ -625,12 +705,13 @@ namespace ui {
                                     *data_ptr = gid;
                                     game_textures->acquire({data_ptr, 1});
 
+                                    modified = true;
                                 }
 
                                 ImGui::EndDragDropTarget();
                             }
                         } else {
-                            engine::imgui_reflection::input(name.c_str(), im, data_ptr);
+                            modified |= engine::imgui_reflection::input(name.c_str(), im, data_ptr);
                         }
 
                         offset += sizeof(Attr);

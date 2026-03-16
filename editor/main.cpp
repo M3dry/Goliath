@@ -652,6 +652,7 @@ int main(int argc, char** argv) {
             }
             if (game) ImGui::End();
 
+            ui::material_windows();
             ui::rename_popup();
             ui::scenes_settings_pane();
 

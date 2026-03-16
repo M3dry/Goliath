@@ -2,12 +2,12 @@
 #include "goliath/buffer.hpp"
 #include "goliath/transport2.hpp"
 
+#include <optional>
 #include <vulkan/vulkan_core.h>
 
 #include <expected>
 
 namespace engine {
-
     void Materials::to_json(nlohmann::json& j, const gid& gid) {
         j = gid.value;
     }
@@ -19,14 +19,15 @@ namespace engine {
     std::expected<Materials*, util::ReadJsonErr> Materials::init(const nlohmann::json& j) {
         auto* ms = new Materials{};
 
-        {
-            std::vector<uint32_t> deleted = j["deleted"];
-            ms->deleted = std::move(deleted);
-        }
-        std::vector<nlohmann::json> arr = j["materials"];
+        std::vector<nlohmann::json> arr = j;
 
         for (const auto& j : arr) {
             auto mat_ix = j["ix"];
+            if (j.contains("deleted")) {
+                ms->deleted.emplace_back(mat_ix);
+                continue;
+            }
+
             while (ms->names.size() <= mat_ix) {
                 ms->names.emplace_back();
                 ms->schemas.emplace_back();
@@ -65,6 +66,7 @@ namespace engine {
         }
 
         ms->update = true;
+
         return ms;
     }
 
@@ -80,12 +82,20 @@ namespace engine {
         auto arr = nlohmann::json::array();
 
         for (size_t i = 0; i < offsets.size(); i++) {
+            if (is_deleted(i)) {
+                arr.emplace_back(nlohmann::json{
+                    {"ix", i},
+                    {"deleted", true},
+                });
+                continue;
+            }
+
             auto& insts = instances[i];
             auto insts_j = nlohmann::json::array();
 
             auto schema_size = schemas[i].total_size;
             for (size_t j = 0; j < insts.names.size(); j++) {
-                if (std::find(insts.deleted.begin(), insts.deleted.end(), j) != insts.deleted.end()) {
+                if (insts.deleted[j]) {
                     insts_j.emplace_back(nlohmann::json{
                         {"ix", j},
                         {"gen", insts.generations[j]},
@@ -111,24 +121,19 @@ namespace engine {
             });
         }
 
-        return {
-            {"materials", arr},
-            {"deleted", deleted},
-        };
+        return arr;
     }
 
     nlohmann::json Materials::default_json() {
-        return nlohmann::json{
-            {"materials",
-             {nlohmann::json{
-                 {"ix", 0},
-                 {"name", "PBR - Metallic Roughness"},
-                 {"schema", material::pbr::schema},
-                 {"instances", nlohmann::json::array()},
-                 {"offset", 0},
-             }}},
-            {"deleted", nlohmann::json::array()},
-        };
+        auto arr = nlohmann::json::array();
+        arr.emplace_back(nlohmann::json{
+            {"ix", 0},
+            {"name", "PBR - Metallic Roughness"},
+            {"schema", material::pbr::schema},
+            {"instances", nlohmann::json::array()},
+            {"offset", 0},
+        });
+        return arr;
     }
 
     void Materials::process() {
@@ -238,7 +243,7 @@ namespace engine {
         return schemas[mat_id];
     }
 
-    std::vector<uint8_t> Materials::get_instance_data(gid gid) {
+    std::optional<std::vector<uint8_t>> Materials::get_instance_data(gid gid) {
         std::lock_guard lock{mutex};
 
         const auto& schema = get_schema(gid.dim());
@@ -250,7 +255,7 @@ namespace engine {
         if (insts.deleted[gid.id()]) return {};
 
         auto* begin = insts.data.data() + size * gid.id();
-        return {begin, begin + size};
+        return std::vector<uint8_t>{begin, begin + size};
     }
 
     void Materials::update_instance_data(gid gid, uint8_t* new_data) {
@@ -266,6 +271,8 @@ namespace engine {
         if (insts.deleted[gid.id()]) return;
         if (insts.generations[gid.id()] != gid.gen()) return;
         std::memcpy(insts.data.data() + size * gid.id(), new_data, size);
+
+        update = true;
     }
 
     Materials::gid Materials::add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data) {
@@ -295,9 +302,8 @@ namespace engine {
             insts.names[id] = name;
             insts.ref_counts[id] = 0;
 
-            std::memcpy(insts.data.data() + id*schemas[mat_id].total_size, data.data(), data.size());
+            std::memcpy(insts.data.data() + id * schemas[mat_id].total_size, data.data(), data.size());
         }
-
 
         for (uint32_t i = mat_id + 1; i < schemas.size(); i++) {
             offsets[i] += schema->total_size;
@@ -359,5 +365,20 @@ namespace engine {
 
     Buffer Materials::get_buffer() {
         return gpu_buffers[current_buffer];
+    }
+
+    std::optional<std::reference_wrapper<std::string>> Materials::get_name(gid gid) {
+        auto schema = get_schema(gid.dim());
+        if (!schema) return {};
+
+        if (instances[gid.dim()].deleted.size() <= gid.id()) return {};
+        if (instances[gid.dim()].deleted[gid.id()]) return {};
+        if (instances[gid.dim()].generations[gid.id()] != gid.gen()) return {};
+
+        return instances[gid.dim()].names[gid.id()];
+    }
+
+    void Materials::modified() {
+        want_save = true;
     }
 }
