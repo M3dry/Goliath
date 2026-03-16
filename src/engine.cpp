@@ -682,19 +682,35 @@ namespace engine {
     }
 
     void destroy_buffer(VkBuffer buf, VmaAllocation alloc) {
-        get_current_frame_data().destroy_buffer(buf, alloc);
+        if (state->_drawing_prepared) {
+            get_current_frame_data().destroy_buffer(buf, alloc);
+        } else {
+            state->frames[(get_current_frame() + 1) % frames_in_flight].destroy_buffer(buf, alloc);
+        }
     }
 
     void destroy_image(VkImage img, VmaAllocation alloc) {
-        get_current_frame_data().destroy_image(img, alloc);
+        if (state->_drawing_prepared) {
+            get_current_frame_data().destroy_image(img, alloc);
+        } else {
+            state->frames[(get_current_frame() + 1) % frames_in_flight].destroy_image(img, alloc);
+        }
     }
 
     void destroy_view(VkImageView view) {
-        get_current_frame_data().destroy_view(view);
+        if (state->_drawing_prepared) {
+            get_current_frame_data().destroy_view(view);
+        } else {
+            state->frames[(get_current_frame() + 1) % frames_in_flight].destroy_view(view);
+        }
     }
 
     void destroy_sampler(VkSampler sampler) {
-        get_current_frame_data().destroy_sampler(sampler);
+        if (state->_drawing_prepared) {
+            get_current_frame_data().destroy_sampler(sampler);
+        } else {
+            state->frames[(get_current_frame() + 1) % frames_in_flight].destroy_sampler(sampler);
+        }
     }
 
     void new_window_size(uint32_t width, uint32_t height) {
