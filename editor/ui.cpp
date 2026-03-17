@@ -82,11 +82,9 @@ namespace ui {
         };
     }
 
-    void init() {
-    }
+    void init() {}
 
-    void destroy() {
-    }
+    void destroy() {}
 
     void tick(float dt) {
         if (transform_value_changed) {
@@ -147,8 +145,8 @@ namespace ui {
                 avail.y -= cursor.y;
                 auto scale = ImViewGuizmo::GetStyle().scale;
 
-                // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and forward =
-                // +Z
+                // ImViewGuizmo uses some weird coordinate scheme, so I have to change from OpenGL to up = -Y, and
+                // forward = +Z
                 static const glm::mat4 GL_TO_GIZMO = glm::mat4{1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
 
                 static const glm::mat4 GIZMO_TO_GL = glm::inverse(GL_TO_GIZMO);
@@ -183,17 +181,17 @@ namespace ui {
                     changed = false;
                     ImGuizmo::SetOrthographic(false);
                     ImGuizmo::AllowAxisFlip(false);
-                    ImGuizmo::SetRect(win_pos.x + cursor.x,
-                                      win_pos.y + cursor.y, image_size.x, image_size.y);
+                    ImGuizmo::SetRect(win_pos.x + cursor.x, win_pos.y + cursor.y, image_size.x, image_size.y);
                     ImGuizmo::SetDrawlist();
 
                     auto proj = cam_info.cam._projection;
                     proj[1][1] *= -1;
-                    changed |= ImGuizmo::Manipulate(
-                        glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj),
-                        ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y | ImGuizmo::ROTATE_Z, ImGuizmo::WORLD,
-                        glm::value_ptr(
-                            engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()]));
+                    changed |= ImGuizmo::Manipulate(glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj),
+                                                    ImGuizmo::TRANSLATE | ImGuizmo::ROTATE_X | ImGuizmo::ROTATE_Y |
+                                                        ImGuizmo::ROTATE_Z,
+                                                    ImGuizmo::WORLD,
+                                                    glm::value_ptr(engine::scenes::get_instance_transforms(
+                                                        scene::selected_scene())[scene::selected_instance()]));
 
                     if (changed) {
                         engine::scenes::update_transforms_buffer(scene::selected_scene());
@@ -204,7 +202,7 @@ namespace ui {
 
                 ImGui::EndTabItem();
             } else {
-                scene_viewport.process_pane(ImVec2{0,0});
+                scene_viewport.process_pane(ImVec2{0, 0});
             }
 
             if (game_viewport && ImGui::BeginTabItem("Game")) {
@@ -214,13 +212,13 @@ namespace ui {
 
                 ImGui::EndTabItem();
             } else if (game_viewport) {
-                game_viewport->process_pane(ImVec2{0,0});
+                game_viewport->process_pane(ImVec2{0, 0});
             }
 
             ImGui::EndTabBar();
         } else {
-            scene_viewport.process_pane(ImVec2{0,0});
-            if (game_viewport) game_viewport->process_pane(ImVec2{0,0});
+            scene_viewport.process_pane(ImVec2{0, 0});
+            if (game_viewport) game_viewport->process_pane(ImVec2{0, 0});
         }
 
         ImGui::End();
@@ -428,7 +426,8 @@ namespace ui {
             }
 
             if (ImGui::MenuItem("Modify")) {
-                if (std::find(state::opened_material_instances.begin(), state::opened_material_instances.end(), gid) == state::opened_material_instances.end()) {
+                if (std::find(state::opened_material_instances.begin(), state::opened_material_instances.end(), gid) ==
+                    state::opened_material_instances.end()) {
                     state::opened_material_instances.emplace_back(gid);
                 }
             }
@@ -598,8 +597,8 @@ namespace ui {
     void selected_model_materials_pane() {
         if (scene::selected_instance() == -1) return;
 
-        const auto model_ = engine::models::get_cpu_model(
-            engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance()]);
+        auto mgid = engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance()];
+        const auto model_ = engine::models::get_cpu_model(mgid);
         if (!model_.has_value() || model_.value() == nullptr) return;
         const auto& model = **model_;
 
@@ -626,7 +625,15 @@ namespace ui {
                     if (gid != mat_gid) {
                         state::materials->acquire_instance(gid);
                         state::materials->release_instance(model.meshes[m].material_instance);
+
+                        state::materials->with_textures([](auto t_gid) { game_textures->acquire({&t_gid, 1}); }, gid);
+                        state::materials->with_textures([](auto t_gid) { game_textures->release({&t_gid, 1}); },
+                                                        model.meshes[m].material_instance);
+
                         model.meshes[m].material_instance = gid;
+
+                        engine::models::reupload(mgid);
+                        engine::models::modified();
                     }
                 }
 
@@ -650,7 +657,7 @@ namespace ui {
                     ImGui::End();
                     return true;
                 }
-                
+
                 if (material_inputs(*schema, *data)) {
                     modified = true;
                     state::materials->update_instance_data(mat_gid, data->data());
@@ -686,13 +693,13 @@ namespace ui {
                         if constexpr (engine::util::is_vec_v<Attr>) {
                             using VecData = engine::util::vec_data<Attr>;
 
-                            modified |= engine::imgui_reflection::input(name.c_str(), im, (typename VecData::Component*)data_ptr,
-                                                            {VecData::dimension, 1});
+                            modified |= engine::imgui_reflection::input(
+                                name.c_str(), im, (typename VecData::Component*)data_ptr, {VecData::dimension, 1});
                         } else if constexpr (engine::util::is_mat_v<Attr>) {
                             using MatData = engine::util::mat_data<Attr>;
 
-                            modified |= engine::imgui_reflection::input(name.c_str(), im, (typename MatData::Component*)data_ptr,
-                                                            MatData::dimension);
+                            modified |= engine::imgui_reflection::input(
+                                name.c_str(), im, (typename MatData::Component*)data_ptr, MatData::dimension);
                         } else if constexpr (std::same_as<engine::Textures::gid, Attr>) {
                             ImGui::InputText(name.c_str(), *game_textures->get_name(*data_ptr),
                                              ImGuiInputTextFlags_ReadOnly);
@@ -887,4 +894,56 @@ namespace ui {
             }
         }
     }
+
+    struct InstanceCreation {
+        uint32_t mat_id;
+        std::string name;
+    };
+
+    std::vector<InstanceCreation> instance_creations{};
+
+    void new_material_instance_creation() {
+        instance_creations.emplace_back(InstanceCreation{
+            .mat_id = 0,
+            .name = "New material",
+        });
+    }
+
+    void material_instance_creation() {
+        std::erase_if(instance_creations, [](auto& ic) -> bool {
+            auto selected_name = state::materials->get_schema_name(ic.mat_id);
+            if (!selected_name) {
+                ic.mat_id = 0;
+                return false;
+            }
+
+            bool opened = true;
+            if (ImGui::Begin("Material creation", &opened)) {
+                if (ImGui::BeginCombo("Schema", selected_name->get().c_str())) {
+                    state::materials->get_schema_names([&](const auto& name, uint32_t mat_id) {
+                        if (ImGui::Selectable(name.c_str(), mat_id == ic.mat_id)) {
+                            ic.mat_id = mat_id;
+                        }
+
+                        if (mat_id == ic.mat_id) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    });
+                    ImGui::EndCombo();
+                }
+
+                ImGui::InputText("Instance name", &ic.name);
+
+                if (ImGui::Button("Create")) {
+                    state::opened_material_instances.emplace_back(state::materials->add_instance(ic.mat_id, ic.name));
+                    opened = false;
+                }
+            }
+            ImGui::End();
+
+            return !opened;
+        });
+    }
+
+    void material_schema_creation();
 }

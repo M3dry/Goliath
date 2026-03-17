@@ -56,6 +56,7 @@ namespace engine::models {
 
     struct task {
         enum Type {
+            ReLoad,
             Acquire,
             Add,
             AddCustom,
@@ -65,6 +66,9 @@ namespace engine::models {
         gid gid;
         std::optional<std::variant<AddFn, Model>> add{};
     };
+
+    static constexpr std::size_t reload_queue_size = 16;
+    engine::MSPCQueue<gid, reload_queue_size> reload_queue{};
 
     static constexpr std::size_t gpu_queue_size = 64;
     engine::MSPCQueue<gid, gpu_queue_size> gpu_queue{};
@@ -123,6 +127,9 @@ namespace engine::models {
 
     auto io_pool = engine::make_thread_pool([](task&& task) {
         switch (task.type) {
+            case task::ReLoad:
+                reload_queue.enqueue(task.gid);
+                break;
             case task::Acquire:
                 while (is_initializing(task.gid)) {
                     _mm_pause();
@@ -153,32 +160,51 @@ namespace engine::models {
     bool process_uploads() {
         if (!init_called) return false;
 
+        std::vector<gid> reload_gids{};
+        reload_queue.drain(reload_gids);
+
         std::vector<gid> upload_gids{};
         gpu_queue.drain(upload_gids);
 
         std::vector<gid> initialized_gids{};
         initialized_queue.drain(initialized_gids);
 
-        if (upload_gids.size() != 0) {
-            for (const auto& gid : upload_gids) {
-                if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
-                    for (const auto& mesh : std::span{cpu_datas[gid.id()]->meshes, cpu_datas[gid.id()]->mesh_count}) {
-                        mats->with_textures([](auto tex_gid) { texs->acquire({&tex_gid, 1}); }, mesh.material_instance);
-                    }
+        for (const auto& gid : reload_gids) {
+            if (generations.size() <= gid.id() || generations[gid.id()] != gid.gen() || ref_counts[gid.id()] == 0 || deleted[gid.id()]) {
+                continue;
+            }
 
-                    auto& cpu_data = *cpu_datas[gid.id()];
-                    engine::gpu_group::begin();
-                    auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
+            auto& cpu_data = *cpu_datas[gid.id()];
+            engine::gpu_group::begin();
+            auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
+            auto& gpu_data = gpu_datas[gid.id()];
+            gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+            gpu_data.draw_buffer = draw_buffer;
+            gpu_data.gpu = gpu;
+        }
 
-                    auto& gpu_data = gpu_datas[gid.id()];
-                    gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
-                                                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                                                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                                                            VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
-                    gpu_data.draw_buffer = draw_buffer;
-                    gpu_data.gpu = gpu;
+        for (const auto& gid : upload_gids) {
+            if (generations[gid.id()] == gid.gen() && ref_counts[gid.id()] != 0 && !deleted[gid.id()]) {
+                for (const auto& mesh : std::span{cpu_datas[gid.id()]->meshes, cpu_datas[gid.id()]->mesh_count}) {
+                    mats->with_textures([](auto tex_gid) { texs->acquire({&tex_gid, 1}); }, mesh.material_instance);
                 }
+
+                auto& cpu_data = *cpu_datas[gid.id()];
+                engine::gpu_group::begin();
+                auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
+
+                auto& gpu_data = gpu_datas[gid.id()];
+                gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+                gpu_data.draw_buffer = draw_buffer;
+                gpu_data.gpu = gpu;
             }
         }
 
@@ -529,6 +555,18 @@ namespace engine::models {
     bool is_deleted(gid gid) {
         if (generations[gid.id()] > gid.gen()) return true;
         return deleted[gid.id()];
+    }
+
+    void reupload(gid gid) {
+        assert(init_called);
+
+        if (names.size() <= gid.id()) return;
+        if (generations[gid.id()] != gid.gen()) return;
+
+        gpu_datas[gid.id()].destroy();
+        gpu_datas[gid.id()] = UploadedModelData{};
+
+        io_pool.enqueue({task::ReLoad, gid});
     }
 }
 

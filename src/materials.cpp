@@ -273,6 +273,7 @@ namespace engine {
         std::memcpy(insts.data.data() + size * gid.id(), new_data, size);
 
         update = true;
+        want_save = true;
     }
 
     Materials::gid Materials::add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data) {
@@ -293,7 +294,13 @@ namespace engine {
             insts.generations.emplace_back(0);
             insts.names.emplace_back(name);
             insts.ref_counts.emplace_back(0);
-            insts.data.insert(insts.data.end(), data.begin(), data.end());
+
+            if (data.empty()) {
+                insts.data.resize(insts.data.size() + schema->total_size);
+            } else {
+                assert(schema->total_size == data.size());
+                insts.data.insert(insts.data.end(), data.begin(), data.end());
+            }
 
             id = insts.names.size() - 1;
         } else {
@@ -302,7 +309,12 @@ namespace engine {
             insts.names[id] = name;
             insts.ref_counts[id] = 0;
 
-            std::memcpy(insts.data.data() + id * schemas[mat_id].total_size, data.data(), data.size());
+            if (data.empty()) {
+                std::memset(insts.data.data() + id * schema->total_size, 0, schema->total_size);
+            } else {
+                assert(schema->total_size == data.size());
+                std::memcpy(insts.data.data() + id * schemas[mat_id].total_size, data.data(), schema->total_size);
+            }
         }
 
         for (uint32_t i = mat_id + 1; i < schemas.size(); i++) {
@@ -376,6 +388,11 @@ namespace engine {
         if (instances[gid.dim()].generations[gid.id()] != gid.gen()) return {};
 
         return instances[gid.dim()].names[gid.id()];
+    }
+
+    std::optional<std::reference_wrapper<std::string>> Materials::get_schema_name(uint32_t dim) {
+        if (names.size() <= dim) return {};
+        return names[dim];
     }
 
     void Materials::modified() {

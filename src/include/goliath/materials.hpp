@@ -4,6 +4,7 @@
 #include "goliath/material.hpp"
 #include "goliath/util.hpp"
 
+#include <functional>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -58,7 +59,7 @@ namespace engine {
 
         std::optional<std::vector<uint8_t>> get_instance_data(gid gid);
         void update_instance_data(gid gid, uint8_t* new_data);
-        gid add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data);
+        gid add_instance(uint32_t mat_id, std::string name, std::span<uint8_t> data = {});
         bool remove_instance(gid gid);
         void acquire_instance(gid gid);
         void release_instance(gid gid);
@@ -90,8 +91,18 @@ namespace engine {
         }
 
         std::optional<std::reference_wrapper<std::string>> get_name(gid gid);
+        std::optional<std::reference_wrapper<std::string>> get_schema_name(uint32_t dim);
 
         void modified();
+
+        template <typename F>
+        void get_schema_names(F&& f) const {
+            for (size_t d = 0; d < names.size(); d++) {
+                if (is_deleted(d)) continue;
+
+                f(names[d], d);
+            }
+        }
 
         template <typename F>
         void get_names(F&& f) const {

@@ -41,4 +41,9 @@ namespace ui {
     void scene_settings_pane(size_t scene_ix);
 
     void assets_inputs_pane(engine::Assets& assets);
+
+    void new_material_instance_creation();
+    void material_instance_creation();
+
+    void material_schema_creation();
 }

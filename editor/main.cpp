@@ -621,7 +621,22 @@ int main(int argc, char** argv) {
                 }
 
                 if (ImGui::BeginMenu("View")) {
-                    if (ImGui::MenuItem("Default layout")) {}
+                    if (ImGui::MenuItem("Default layout")) {
+                        layouts::set_to_default();
+                    }
+                    if (ImGui::MenuItem("Save current layout")) {
+
+                    }
+                    ImGui::EndMenu();
+                }
+
+                if (ImGui::BeginMenu("Material")) {
+                    if (ImGui::MenuItem("New schema")) {
+
+                    }
+                    if (ImGui::MenuItem("New instance")) {
+                        ui::new_material_instance_creation();
+                    }
                     ImGui::EndMenu();
                 }
             }
@@ -652,6 +667,7 @@ int main(int argc, char** argv) {
             }
             if (game) ImGui::End();
 
+            ui::material_instance_creation();
             ui::material_windows();
             ui::rename_popup();
             ui::scenes_settings_pane();

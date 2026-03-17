@@ -79,6 +79,8 @@ namespace engine::models {
     void modified();
 
     bool is_deleted(gid gid);
+
+    void reupload(gid gid);
 }
 
 namespace engine::culling {
