@@ -600,8 +600,9 @@ namespace ui {
         auto mgid = engine::scenes::get_instance_models(scene::selected_scene())[scene::selected_instance()];
         const auto model_ = engine::models::get_cpu_model(mgid);
         if (!model_.has_value() || model_.value() == nullptr) return;
-        const auto& model = **model_;
+        auto& model = **model_;
 
+        bool modified = false;
         for (size_t m = 0; m < model.mesh_count; m++) {
             auto mat_gid = model.meshes[m].material_instance;
 
@@ -632,14 +633,15 @@ namespace ui {
 
                         model.meshes[m].material_instance = gid;
 
+                        modified = true;
                         engine::models::reupload(mgid);
-                        engine::models::modified();
                     }
                 }
 
                 ImGui::EndDragDropTarget();
             }
         }
+        if (modified) engine::models::modified_cpu_data(mgid);
     }
 
     void material_windows() {

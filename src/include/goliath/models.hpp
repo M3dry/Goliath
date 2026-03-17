@@ -81,6 +81,7 @@ namespace engine::models {
     bool is_deleted(gid gid);
 
     void reupload(gid gid);
+    void modified_cpu_data(gid gid);
 }
 
 namespace engine::culling {

@@ -60,6 +60,7 @@ namespace engine::models {
             Acquire,
             Add,
             AddCustom,
+            Save,
         };
 
         Type type;
@@ -127,9 +128,7 @@ namespace engine::models {
 
     auto io_pool = engine::make_thread_pool([](task&& task) {
         switch (task.type) {
-            case task::ReLoad:
-                reload_queue.enqueue(task.gid);
-                break;
+            case task::ReLoad: reload_queue.enqueue(task.gid); break;
             case task::Acquire:
                 while (is_initializing(task.gid)) {
                     _mm_pause();
@@ -144,7 +143,7 @@ namespace engine::models {
                     initialized_queue.enqueue(task.gid);
                 }
                 break;
-            case task::AddCustom:
+            case task::AddCustom: {
                 bool res = false;
                 {
                     std::lock_guard lock{gid_read};
@@ -154,6 +153,12 @@ namespace engine::models {
                 if (res) {
                     initialized_queue.enqueue(task.gid);
                 }
+                break;
+            }
+            case task::Save: {
+                if (cpu_datas[task.gid.id()]) add_model(task.gid, *cpu_datas[task.gid.id()]);
+                break;
+            }
         }
     });
 
@@ -170,7 +175,8 @@ namespace engine::models {
         initialized_queue.drain(initialized_gids);
 
         for (const auto& gid : reload_gids) {
-            if (generations.size() <= gid.id() || generations[gid.id()] != gid.gen() || ref_counts[gid.id()] == 0 || deleted[gid.id()]) {
+            if (generations.size() <= gid.id() || generations[gid.id()] != gid.gen() || ref_counts[gid.id()] == 0 ||
+                deleted[gid.id()]) {
                 continue;
             }
 
@@ -179,10 +185,10 @@ namespace engine::models {
             auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
             auto& gpu_data = gpu_datas[gid.id()];
             gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
-                                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                                            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                                            VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
-                                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
             gpu_data.draw_buffer = draw_buffer;
             gpu_data.gpu = gpu;
         }
@@ -567,6 +573,10 @@ namespace engine::models {
         gpu_datas[gid.id()] = UploadedModelData{};
 
         io_pool.enqueue({task::ReLoad, gid});
+    }
+
+    void modified_cpu_data(gid gid) {
+        io_pool.enqueue({task::Save, gid});
     }
 }
 

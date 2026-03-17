@@ -240,8 +240,6 @@ namespace engine {
         }
 
         if (!indexed_tangents && offset.tangent_offset != (uint32_t)-1) {
-            printf("indexed tangents: %d\n", indexed_tangents);
-            printf("tangent offset: %d\n", offset.tangent_offset);
             std::memcpy(buf + offset.tangent_offset, tangents, index_count * sizeof(glm::vec4));
         }
 
@@ -399,7 +397,6 @@ namespace engine::model {
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             data += model->meshes[i].upload_data(data);
         }
-        printf("written: %ld, size: %d\n", data - data_start, size);
 
         free(ctx);
     };
