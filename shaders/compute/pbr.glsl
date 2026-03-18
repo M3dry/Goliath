@@ -200,7 +200,7 @@ void main() {
     uint primitive_id = vis.primitive_id;
 
     mat4 model_transform = read_draw_id_transform(draw_id) * mesh_data.transform;
-    mat3 normal_transform = mat3(model_transform); // assumes model_transform is uniform
+    mat3 normal_transform = transpose(inverse(mat3(model_transform)));
 
     PBR pbr = load_material(verts, mesh_data.offsets);
 
@@ -211,7 +211,7 @@ void main() {
     InterpolatedVertex interpolated = interpolate_vertex(screen, frag, model_transform, view_proj_matrix, v1, v2, v3);
     interpolated.normal.value = normalize(normal_transform * interpolated.normal.value);
 
-    vec3 world_pos = (view_proj_matrix * vec4(interpolated.pos.value, 1.0)).xyz;
+    vec3 world_pos = interpolated.pos.value;
 
     vec3 albedo = (pbr.albedo * textureGrad(get_texture(pbr.albedo_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy)).rgb;
     float metallic = pbr.metallic_factor * textureGrad(get_texture(pbr.metallic_roughness_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).b;
