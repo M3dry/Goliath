@@ -31,6 +31,7 @@
 #include "state.hpp"
 #include "textures.hpp"
 #include "ui.hpp"
+#include "util.hpp"
 #include <GLFW/glfw3.h>
 #include <cctype>
 #include <cstring>
@@ -38,7 +39,6 @@
 #include <fstream>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <variant>
 #include <volk.h>
 #include <vulkan/vulkan_core.h>
 
@@ -201,28 +201,9 @@ int main(int argc, char** argv) {
                             if (ImGui::Button("Ok")) {
                                 auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err->model);
                                 for (const auto& gid : to_remove) {
-                                    std::visit(
-                                        [&](auto&& gid) {
-                                            using T = std::decay_t<decltype(gid)>;
-
-                                            if constexpr (std::is_same_v<T, engine::models::gid>) {
-                                                engine::models::remove(gid);
-                                            } else if constexpr (std::is_same_v<T, engine::Textures::gid>) {
-                                                game_textures->remove(gid);
-                                            } else if constexpr (std::is_same_v<T, engine::Materials::gid>) {
-                                                state::materials->remove_instance(gid);
-                                            } else {
-                                                static_assert("unhandled");
-                                            }
-                                        },
-                                        gid);
+                                    remove_asset(gid);
                                 }
 
-                                for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
-                                    auto selected_instance = scene::selected_instance();
-                                    engine::scenes::remove_all_instances_of_model(i, err->model, selected_instance);
-                                    scene::select_instance(selected_instance);
-                                }
                                 return true;
                             }
                         }
@@ -236,44 +217,18 @@ int main(int argc, char** argv) {
                         if (ImGui::Button("Remove model and all it's dependencies from project")) {
                             auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err.model);
                             for (const auto& gid : to_remove) {
-                                std::visit(
-                                    [&](auto&& gid) {
-                                        using T = std::decay_t<decltype(gid)>;
-
-                                        if constexpr (std::is_same_v<T, engine::models::gid>) {
-                                            engine::models::remove(gid);
-                                        } else if constexpr (std::is_same_v<T, engine::Textures::gid>) {
-                                            game_textures->remove(gid);
-                                        } else if constexpr (std::is_same_v<T, engine::Materials::gid>) {
-                                            state::materials->remove_instance(gid);
-                                        } else {
-                                            static_assert("unhandled");
-                                        }
-                                    },
-                                    gid);
+                                remove_asset(gid);
                             }
 
                             for (const auto& [gid, dgid] : dep_removes) {
                                 // TODO: once scenes have proper GID tracking, use this function instead of that for
                                 // loop below
                             }
-
-                            for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
-                                auto selected_instance = scene::selected_instance();
-                                engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
-                                scene::select_instance(selected_instance);
-                            }
                             return true;
                         }
 
                         if (ImGui::Button("Remove just the model")) {
-                            engine::models::remove(err.model);
-
-                            for (size_t i = 0; i < engine::scenes::get_names().size(); i++) {
-                                auto selected_instance = scene::selected_instance();
-                                engine::scenes::remove_all_instances_of_model(i, err.model, selected_instance);
-                                scene::select_instance(selected_instance);
-                            }
+                            remove_asset(err.model);
                             return true;
                         }
 
@@ -671,6 +626,7 @@ int main(int argc, char** argv) {
             ui::material_windows();
             ui::rename_popup();
             ui::scenes_settings_pane();
+            ui::remove_asset_popup();
 
             error_stack::draw_top();
 

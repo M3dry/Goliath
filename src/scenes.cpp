@@ -166,14 +166,18 @@ namespace engine::scenes {
         if (it == scene.used_models.end()) return;
         auto model_ix = std::distance(scene.used_models.begin(), it);
 
-        size_t i = 0;
-        while (i < scene.instances_of_used_models[model_ix].size()) {
-            auto instance_ix = scene.instances_of_used_models[model_ix][i];
+        while (scene.instances_of_used_models[model_ix].size() != 0) {
+            printf("hello\n");
+            auto instance_ix = scene.instances_of_used_models[model_ix][0];
             remove_instance(scene_ix, instance_ix);
-            i++;
 
-            if (instance_ix == selected_instance) {
-                selected_instance = -1;
+            if (instance_ix < selected_instance) {
+                selected_instance--;
+            } else if (instance_ix == selected_instance) {
+                selected_instance = instance_ix == 0 ? selected_instance + 1 : selected_instance - 1;
+                if (selected_instance >= scene.instance_transforms.size()) {
+                    selected_instance = -1;
+                }
             }
         }
     }

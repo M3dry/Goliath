@@ -22,6 +22,7 @@ SET(EDITOR_SOURCES
     layout.cpp
     error_stack.cpp
     gltf.cpp
+    util.cpp
 )
 
 add_executable(editor ${EDITOR_SOURCES} ${IMGUIZMO_SOURCES})

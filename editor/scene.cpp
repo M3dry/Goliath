@@ -92,12 +92,12 @@ namespace scene {
         want_save = true;
     }
 
-    size_t selected_instance() {
-        return selected_instances[selected_scene()];
+    size_t selected_instance(size_t scene_ix) {
+        return selected_instances[scene_ix];
     }
 
-    void select_instance(size_t instance_ix) {
-        selected_instances[selected_scene()] = instance_ix;
+    void select_instance(size_t instance_ix, size_t scene_ix) {
+        selected_instances[scene_ix] = instance_ix;
         want_save = true;
     }
 

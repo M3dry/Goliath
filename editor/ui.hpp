@@ -46,4 +46,6 @@ namespace ui {
     void material_instance_creation();
 
     void material_schema_creation();
+
+    void remove_asset_popup();
 }

@@ -37,8 +37,8 @@ namespace scene {
     size_t selected_scene();
     void select_scene(size_t scene_ix);
 
-    size_t selected_instance();
-    void select_instance(size_t instance_ix);
+    size_t selected_instance(size_t scene_ix = selected_scene());
+    void select_instance(size_t instance_ix, size_t scene_ix = selected_scene());
 
     void add(std::string name);
     void remove(size_t scene_ix);

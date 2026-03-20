@@ -8,6 +8,7 @@
 #include "goliath/textures.hpp"
 #include "state.hpp"
 #include "textures.hpp"
+#include "util.hpp"
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/quaternion_trigonometric.hpp>
 #define IMVIEWGUIZMO_IMPLEMENTATION
@@ -63,6 +64,8 @@ namespace ui {
     std::string rename_tmp{};
     using RenameDstFn = std::function<void(const std::string&)>;
     RenameDstFn rename_dst{};
+
+    std::optional<engine::DependencyGraph::AssetGID> asset_to_remove{};
 
     std::optional<size_t> open_scenes_settings{};
 
@@ -403,6 +406,10 @@ namespace ui {
                 add = true;
             }
 
+            if (ImGui::MenuItem("Remove")) {
+                asset_to_remove = gid;
+            }
+
             ImGui::EndPopup();
         }
 
@@ -432,6 +439,10 @@ namespace ui {
                 }
             }
 
+            if (ImGui::MenuItem("Remove")) {
+                asset_to_remove = gid;
+            }
+
             ImGui::EndPopup();
         }
     }
@@ -448,6 +459,10 @@ namespace ui {
                         game_textures->modified();
                     }
                 };
+            }
+
+            if (gid != engine::Textures::gid{0,0} && ImGui::MenuItem("Remove")) {
+                asset_to_remove = gid;
             }
 
             ImGui::EndPopup();
@@ -947,5 +962,43 @@ namespace ui {
         });
     }
 
-    void material_schema_creation();
+    void material_schema_creation() {
+
+    }
+
+    void remove_asset_popup() {
+        if (asset_to_remove) {
+            ImGui::OpenPopup("DeletePopup");
+        }
+
+        bool opened = asset_to_remove.has_value();
+        if (ImGui::BeginPopupModal("DeletePopup", &opened, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (state::dependency_graph->with_r_deps([](const auto& r_deps) {
+                    return !r_deps.empty();
+                },
+                                                     *asset_to_remove)) {
+                ImGui::Text("This asset is a dependency of other assets, can't remove it.");
+            } else {
+                if (ImGui::Button("Remove")) {
+                    state::dependency_graph->remove_asset(*asset_to_remove);
+                    remove_asset(*asset_to_remove);
+
+                    asset_to_remove = std::nullopt;
+                } else if (ImGui::Button("Remove, including unused dependencies")) {
+                    auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(*asset_to_remove);
+                    for (auto gid : to_remove) {
+                        remove_asset(gid);
+                    }
+
+                    asset_to_remove = std::nullopt;
+                }
+            }
+
+            ImGui::EndPopup();
+        }
+
+        if (!opened) {
+            asset_to_remove = std::nullopt;
+        }
+    }
 }

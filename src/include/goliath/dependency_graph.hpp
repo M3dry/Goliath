@@ -20,7 +20,7 @@ namespace engine {
 
         template <typename F> decltype(auto) with_r_deps(F&& f, AssetGID gid) {
             std::lock_guard lock{mutex};
-            return f(get_deps(gid));
+            return f(get_r_deps(gid));
         }
 
         void remove_asset(AssetGID gid) {

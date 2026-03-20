@@ -306,6 +306,7 @@ namespace engine {
                 id_counter++;
             }
 
+            printf("adding gid: %d %d, %s %d\n", gid.gen(), gid.id(), make_texture_path(gid).c_str(), gid.value);
             names.emplace_back(std::move(entry.name));
             generations.emplace_back((uint8_t)gid.gen());
             deleted.emplace_back(false);
@@ -354,6 +355,8 @@ namespace engine {
             gpu_image_views[gid.id()] = nullptr;
             sampler_prototypes[gid.id()] = sampler;
             samplers[gid.id()] = vk_sampler;
+
+            gid = {generations[gid.gen()], gid.id()};
         } else {
             std::lock_guard lock{impl->gid_read};
 
@@ -398,6 +401,8 @@ namespace engine {
             gpu_image_views[gid.id()] = nullptr;
             sampler_prototypes[gid.id()] = sampler;
             samplers[gid.id()] = vk_sampler;
+
+            gid = {generations[gid.id()], gid.id()};
         } else {
             std::lock_guard lock{impl->gid_read};
 
