@@ -523,7 +523,7 @@ namespace gltf {
                     auto error = AddError{
                         .model = gid,
                         .model_name = name,
-                        .model_src_file = path,
+                        .model_src_file = path.string(),
                     };
 
                     if (ext == ".glb") {

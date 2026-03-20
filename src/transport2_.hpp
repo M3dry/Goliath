@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <variant>
 
 namespace engine::transport2 {
     struct task {

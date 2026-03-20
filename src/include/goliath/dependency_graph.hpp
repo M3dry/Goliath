@@ -83,7 +83,7 @@ namespace engine {
         std::recursive_mutex mutex{};
 
         struct Asset {
-            uint32_t generation = -1;
+            uint32_t generation = (uint32_t)-1;
             std::vector<DependencyGraph::AssetGID> deps{};
             std::vector<DependencyGraph::AssetGID> r_deps{};
         };

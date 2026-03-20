@@ -250,7 +250,8 @@ int main(int argc, char** argv) {
     glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
     glfwSetWindowAttrib(engine::window(), GLFW_AUTO_ICONIFY, GLFW_TRUE);
-    game_textures = engine::Textures::make(project::textures_directory.c_str());
+
+    game_textures = engine::Textures::make(project::textures_directory.string().c_str());
 
     auto mats_json = engine::util::read_json(project::materials);
     if (!mats_json.has_value() && mats_json.error() == engine::util::ReadJsonErr::FileErr &&

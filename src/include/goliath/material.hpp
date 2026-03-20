@@ -51,6 +51,7 @@ namespace engine::material {
         }
 
         assert(false);
+        return 0;
     }
 
     template <typename F>

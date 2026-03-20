@@ -238,7 +238,7 @@ namespace engine {
         bool initialized = false;
         std::erase_if(impl->initializing_textures, [&](auto gid) {
             auto found =
-                std::find(initialized_gids.begin(), initialized_gids.end(), gid) != impl->initializing_textures.end();
+                std::find(initialized_gids.begin(), initialized_gids.end(), gid) != initialized_gids.end();
             initialized |= found;
             return found;
         });
@@ -262,7 +262,7 @@ namespace engine {
         Sampler sampler;
     };
 
-    void to_json(nlohmann::json& j, const JsonTextureEntry& entry) {
+    static void to_json(nlohmann::json& j, const JsonTextureEntry& entry) {
         j = nlohmann::json{
             {"name", entry.name},
             {"gid", entry.gid},
@@ -270,7 +270,7 @@ namespace engine {
         };
     }
 
-    void from_json(const nlohmann::json& j, JsonTextureEntry& entry) {
+    static void from_json(const nlohmann::json& j, JsonTextureEntry& entry) {
         j["name"].get_to(entry.name);
         j["gid"].get_to(entry.gid);
         j["sampler"].get_to(entry.sampler);
@@ -306,7 +306,7 @@ namespace engine {
                 id_counter++;
             }
 
-            printf("adding gid: %d %d, %s %d\n", gid.gen(), gid.id(), make_texture_path(gid).c_str(), gid.value);
+            printf("adding gid: %d %d, %s %d\n", gid.gen(), gid.id(), make_texture_path(gid).string().c_str(), gid.value);
             names.emplace_back(std::move(entry.name));
             generations.emplace_back((uint8_t)gid.gen());
             deleted.emplace_back(false);
