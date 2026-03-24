@@ -22,14 +22,16 @@ namespace engine::scenes {
     void remove(size_t scene_ix);
 
     struct Light {
-        glm::vec2 position;
+        glm::vec3 position{};
         float _1{};
-        glm::vec3 intensity;
+        glm::vec3 intensity{1.0f};
     };
 
-    uint32_t add_light(uint32_t scene_ix, Light light);
+    uint32_t add_light(uint32_t scene_ix, std::string name, Light light);
     void remove_light(uint32_t scene_ix, uint32_t light_ix);
     Light& get_light(uint32_t scene_ix, uint32_t light_ix);
+    std::pair<Buffer, transport2::ticket> get_light_buffer(uint32_t scene_ix);
+    uint32_t get_light_count(uint32_t scene_ix);
 
     std::string& get_name(size_t scene_ix);
     std::span<std::string> get_instance_names(size_t scene_ix);
@@ -37,6 +39,11 @@ namespace engine::scenes {
     std::span<glm::mat4> get_instance_transforms(size_t scene_ix);
     Buffer get_instance_transforms_buffer(size_t scene_ix, transport2::ticket& ticket);
     std::span<const models::gid> get_used_models(size_t scene_ix);
+
+    std::string& get_light_name(size_t scene_ix, uint32_t light_ix);
+    std::span<std::string> get_light_names(size_t scene_ix);
+    Light& get_light(size_t scene_ix, size_t light_ix);
+    std::span<Light> get_lights(size_t scene_ix);
 
     std::span<std::string> get_names();
 

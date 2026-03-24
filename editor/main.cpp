@@ -139,17 +139,13 @@ using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
 struct PBRShadingSet {
     glm::vec3 cam_pos;
     float _1;
-    glm::vec3 light_pos;
-    float _2;
-    glm::vec3 light_intensity;
-    float _3;
     glm::mat4 view_proj_matrix;
+    uint64_t lights_buffer;
+    uint32_t light_count;
 };
 
 int main(int argc, char** argv) {
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
-    EXVAR_DRAG(exvar_reg, "Editor/Light/intensity", glm::vec3, light_intensity, {1.0f});
-    EXVAR_DRAG(exvar_reg, "Editor/Light/position", glm::vec3, light_position, {5.0f});
 
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init();
@@ -275,7 +271,7 @@ int main(int argc, char** argv) {
 
     layouts::set_to_default();
 
-    bool scene_viewport_focused = false;
+        bool scene_viewport_focused = false;
     GameView scene_viewport{};
     GameView game_viewport{};
 
@@ -580,16 +576,12 @@ int main(int argc, char** argv) {
                     if (ImGui::MenuItem("Default layout")) {
                         layouts::set_to_default();
                     }
-                    if (ImGui::MenuItem("Save current layout")) {
-
-                    }
+                    if (ImGui::MenuItem("Save current layout")) {}
                     ImGui::EndMenu();
                 }
 
                 if (ImGui::BeginMenu("Material")) {
-                    if (ImGui::MenuItem("New schema")) {
-
-                    }
+                    if (ImGui::MenuItem("New schema")) {}
                     if (ImGui::MenuItem("New instance")) {
                         ui::new_material_instance_creation();
                     }
@@ -615,6 +607,11 @@ int main(int argc, char** argv) {
 
             if (ImGui::Begin("Materials")) {
                 ui::selected_model_materials_pane();
+            }
+            ImGui::End();
+
+            if (ImGui::Begin("Lights")) {
+                ui::lights_pane();
             }
             ImGui::End();
 
@@ -731,7 +728,7 @@ int main(int argc, char** argv) {
                     visbuffer, grid_pipeline);
         }
 
-        engine::transport2::ticket transform_buffer_ticket{};
+        engine::transport2::ticket tickets[2];
         {
             engine::prepare_draw();
             engine::rendering::begin_mark_block();
@@ -762,7 +759,7 @@ int main(int argc, char** argv) {
 
             engine::rendering::mark("Editor: scene flatten");
             engine::culling::bind_flatten();
-            transform_buffer_ticket =
+            tickets[0] =
                 engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
                     auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
                 });
@@ -830,11 +827,13 @@ int main(int argc, char** argv) {
                                  visbuffer.stages.address() + shading.fragment_id_buffer_offset,
                                  draw_id_buffer.address(), mat_id, mats_buffer);
 
+                    auto [buf, ticket] = engine::scenes::get_light_buffer(scene::selected_scene());
+                    tickets[1] = ticket;
                     PBRShadingSet shading_set_data{
                         .cam_pos = cam_info.cam.position,
-                        .light_pos = light_position,
-                        .light_intensity = light_intensity,
                         .view_proj_matrix = cam_info.cam.view_projection(),
+                        .lights_buffer = buf.address(),
+                        .light_count = engine::scenes::get_light_count(scene::selected_scene()),
                     };
 
                     auto pbr_shading_set = engine::descriptor::new_set(pbr_shading_set_layout);
@@ -953,7 +952,7 @@ int main(int argc, char** argv) {
         }
 
         std::array<VkSemaphoreSubmitInfo, 2> waits{};
-        waits[1] = engine::transport2::wait_on({&transform_buffer_ticket, 1});
+        waits[1] = engine::transport2::wait_on({tickets, 2});
         if (engine::next_frame(waits)) {
             rebuild(depth_images, depth_image_views, target_images, target_image_views, visbuffer_raster_pipeline,
                     visbuffer, grid_pipeline);

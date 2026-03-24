@@ -178,10 +178,10 @@ namespace ui {
                     scene::update_camera(cam_info);
                 }
 
+                changed = false;
                 if (scene::selected_instance() != -1) {
                     auto win_pos = ImGui::GetWindowPos();
 
-                    changed = false;
                     ImGuizmo::SetOrthographic(false);
                     ImGuizmo::AllowAxisFlip(false);
                     ImGuizmo::SetRect(win_pos.x + cursor.x, win_pos.y + cursor.y, image_size.x, image_size.y);
@@ -197,10 +197,34 @@ namespace ui {
                                                         scene::selected_scene())[scene::selected_instance()]));
 
                     if (changed) {
-                        engine::scenes::update_buffers(scene::selected_scene());
                         scene::update_camera(cam_info);
-                        update_instance_transform();
                     }
+                } else if (scene::selected_light() != -1) {
+                    auto win_pos = ImGui::GetWindowPos();
+
+                    ImGuizmo::SetOrthographic(false);
+                    ImGuizmo::AllowAxisFlip(false);
+                    ImGuizmo::SetRect(win_pos.x + cursor.x, win_pos.y + cursor.y, image_size.x, image_size.y);
+                    ImGuizmo::SetDrawlist();
+
+                    auto proj = cam_info.cam._projection;
+                    proj[1][1] *= -1;
+
+                    auto& light = engine::scenes::get_light(scene::selected_scene(), scene::selected_light());
+                    glm::mat4 mat = glm::translate(
+                        glm::identity<glm::mat4>(),
+                        light.position);
+                    changed |= ImGuizmo::Manipulate(glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj), ImGuizmo::TRANSLATE,
+                                         ImGuizmo::WORLD, glm::value_ptr(mat));
+
+                    if (changed) {
+                        light.position = mat[3];
+                    }
+                }
+
+                if (changed) {
+                    engine::scenes::update_buffers(scene::selected_scene());
+                    update_instance_transform();
                 }
 
                 ImGui::EndTabItem();
@@ -461,7 +485,7 @@ namespace ui {
                 };
             }
 
-            if (gid != engine::Textures::gid{0,0} && ImGui::MenuItem("Remove")) {
+            if (gid != engine::Textures::gid{0, 0} && ImGui::MenuItem("Remove")) {
                 asset_to_remove = gid;
             }
 
@@ -578,35 +602,45 @@ namespace ui {
     }
 
     void transform_pane() {
-        if (scene::selected_instance() == -1) return;
-        auto& inst_name = engine::scenes::get_instance_names(scene::selected_scene())[scene::selected_instance()];
-        auto& inst = engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()];
+        if (scene::selected_instance() != -1) {
+            auto& inst_name = engine::scenes::get_instance_names(scene::selected_scene())[scene::selected_instance()];
+            auto& inst = engine::scenes::get_instance_transforms(scene::selected_scene())[scene::selected_instance()];
 
-        glm::vec3 translate{};
-        glm::vec3 rotate{};
-        glm::vec3 scale{};
-        ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(inst), glm::value_ptr(translate), glm::value_ptr(rotate),
-                                              glm::value_ptr(scale));
+            glm::vec3 translate{};
+            glm::vec3 rotate{};
+            glm::vec3 scale{};
+            ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(inst), glm::value_ptr(translate),
+                                                  glm::value_ptr(rotate), glm::value_ptr(scale));
 
-        bool value_changed = false;
+            bool value_changed = false;
 
-        value_changed |= ImGui::InputText("name: ", &inst_name);
+            value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(translate), 0.1f, 0.0f, 0.0f, "%.2f");
 
-        value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(translate), 0.1f, 0.0f, 0.0f, "%.2f");
+            value_changed |= ImGui::DragFloat("yaw", &rotate.y, 0.1f, 0.0, 0.0, "%.2f");
+            value_changed |= ImGui::DragFloat("pitch", &rotate.x, 0.1f, 0.0, 0.0, "%.2f");
+            value_changed |= ImGui::DragFloat("roll", &rotate.z, 0.1f, 0.0, 0.0, "%.2f");
 
-        value_changed |= ImGui::DragFloat("yaw", &rotate.y, 0.1f, 0.0, 0.0, "%.2f");
-        value_changed |= ImGui::DragFloat("pitch", &rotate.x, 0.1f, 0.0, 0.0, "%.2f");
-        value_changed |= ImGui::DragFloat("roll", &rotate.z, 0.1f, 0.0, 0.0, "%.2f");
+            value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(scale), 0.1f, 0.0f, 0.0f, "%.2f");
 
-        value_changed |= ImGui::DragFloat3("scale", glm::value_ptr(scale), 0.1f, 0.0f, 0.0f, "%.2f");
+            ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate),
+                                                    glm::value_ptr(scale), glm::value_ptr(inst));
 
-        ImGuizmo::RecomposeMatrixFromComponents(glm::value_ptr(translate), glm::value_ptr(rotate),
-                                                glm::value_ptr(scale), glm::value_ptr(inst));
+            if (!value_changed) return;
 
-        if (!value_changed) return;
+            engine::scenes::update_buffers(scene::selected_scene());
+            update_instance_transform();
+        } else if (scene::selected_light() != -1) {
+            auto& light_name = engine::scenes::get_light_name(scene::selected_scene(), scene::selected_light());
+            auto& light = engine::scenes::get_light(scene::selected_scene(), scene::selected_light());
 
-        engine::scenes::update_buffers(scene::selected_scene());
-        update_instance_transform();
+            bool value_changed = false;
+            value_changed |= ImGui::DragFloat3("XYZ", glm::value_ptr(light.position), 0.1f, 0.0f, 0.0f, "%.2f");
+            value_changed |= ImGui::DragFloat3("intensity", glm::value_ptr(light.intensity), 0.1f, 0.0f, 0.0f, "%.2f");
+
+            if (!value_changed) return;
+            engine::scenes::update_buffers(scene::selected_scene());
+            update_instance_transform();
+        }
     }
 
     void selected_model_materials_pane() {
@@ -761,9 +795,11 @@ namespace ui {
             assert(rename_dst != nullptr);
 
             ImGui::Text("Rename:");
+            if (ImGui::IsWindowAppearing()) {
+                ImGui::SetKeyboardFocusHere();
+            }
             ImGui::InputText("##rename", &rename_tmp);
-
-            if (ImGui::Button("Rename")) {
+            if (ImGui::IsItemDeactivatedAfterEdit() || ImGui::Button("Rename")) {
                 rename_dst(rename_tmp);
                 rename_tmp = "";
                 rename_dst = nullptr;
@@ -937,7 +973,7 @@ namespace ui {
             }
 
             bool opened = true;
-            if (ImGui::Begin("Material creation", &opened)) {
+            if (ImGui::Begin("Material creation", &opened, ImGuiWindowFlags_AlwaysAutoResize)) {
                 if (ImGui::BeginCombo("Schema", selected_name->get().c_str())) {
                     state::materials->get_schema_names([&](const auto& name, uint32_t mat_id) {
                         if (ImGui::Selectable(name.c_str(), mat_id == ic.mat_id)) {
@@ -964,9 +1000,7 @@ namespace ui {
         });
     }
 
-    void material_schema_creation() {
-
-    }
+    void material_schema_creation() {}
 
     void remove_asset_popup() {
         if (asset_to_remove) {
@@ -975,9 +1009,7 @@ namespace ui {
 
         bool opened = asset_to_remove.has_value();
         if (ImGui::BeginPopupModal("DeletePopup", &opened, ImGuiWindowFlags_AlwaysAutoResize)) {
-            if (state::dependency_graph->with_r_deps([](const auto& r_deps) {
-                    return !r_deps.empty();
-                },
+            if (state::dependency_graph->with_r_deps([](const auto& r_deps) { return !r_deps.empty(); },
                                                      *asset_to_remove)) {
                 ImGui::Text("This asset is a dependency of other assets, can't remove it.");
             } else {
@@ -1001,6 +1033,49 @@ namespace ui {
 
         if (!opened) {
             asset_to_remove = std::nullopt;
+        }
+    }
+
+    size_t lights_entry(std::string& name, size_t i) {
+        if (ImGui::Selectable("", scene::selected_light() == i, ImGuiSelectableFlags_SpanAllColumns)) {
+        scene::select_light(scene::selected_light() == i ? -1 : i);
+        }
+
+        if (ImGui::BeginPopupContextItem("InstanceEntryContextMenu")) {
+            if (ImGui::MenuItem("Rename")) {
+                rename_tmp = name;
+                rename_dst = [scene_ix = scene::selected_scene(), i](const auto& str) {
+                    engine::scenes::get_light_name(scene_ix, i) = str;
+                    engine::scenes::modified(scene_ix);
+                };
+            }
+            if (ImGui::MenuItem("Delete")) {
+                scene::remove_light(i);
+
+                ImGui::EndPopup();
+                return i - 1;
+            }
+
+            ImGui::EndPopup();
+        }
+
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", name.c_str());
+
+        return i;
+    }
+
+    void lights_pane() {
+        auto names = engine::scenes::get_light_names(scene::selected_scene());
+
+        if (ImGui::Button("New light")) {
+            scene::add_light("New light", {});
+        }
+
+        for (size_t i = 0; i < names.size(); i++) {
+            ImGui::PushID(i);
+            i = lights_entry(names[i], i);
+            ImGui::PopID();
         }
     }
 }

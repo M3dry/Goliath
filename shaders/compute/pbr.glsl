@@ -24,6 +24,15 @@ layout(buffer_reference, std430) readonly buffer Materials {
     uint[] data;
 };
 
+struct Light {
+    vec3 position;
+    vec3 intensity;
+};
+
+layout(buffer_reference, std430) readonly buffer Lights {
+    Light[] light;
+};
+
 layout(push_constant, std430) uniform Push {
     uvec2 screen;
     DispatchCommand dispatch;
@@ -37,9 +46,9 @@ layout(set = 0, binding = 0, rgba32f) uniform image2D target;
 layout(set = 0, binding = 1, r32ui) readonly uniform uimage2D visbuffer;
 layout(set = 1, binding = 0) uniform ShadingData {
     vec3 cam_pos;
-    vec3 light_pos;
-    vec3 light_intensity;
     mat4 view_proj_matrix;
+    Lights lights;
+    uint light_count;
 };
 
 const float PI = 3.14159265359;
@@ -229,12 +238,14 @@ void main() {
     F0 = mix(F0, albedo, metallic);
 
     vec3 Lo = vec3(0.0);
-    // for (uint i = 0; i < 1; i++) {
-        vec3 L = normalize(light_pos - world_pos);
+    for (uint i = 0; i < light_count; i++) {
+        Light light = lights.light[i];
+
+        vec3 L = normalize(light.position - world_pos);
         vec3 H = normalize(view + L);
-        float distance = length(light_pos - world_pos);
+        float distance = length(light.position - world_pos);
         float attenuation = 1.0 / (distance * distance);
-        vec3 radiance = light_intensity * attenuation;
+        vec3 radiance = light.intensity * attenuation;
 
         float NDF = DistributionGGX(normal, H, roughness);
         float G = GeometrySmith(normal, view, L, roughness);
@@ -250,7 +261,7 @@ void main() {
         float NdotL = max(dot(normal, L), 0.0);
 
         Lo += (kD * albedo/PI + specular) * radiance * NdotL;
-    // }
+    }
 
     vec3 ambient = vec3(0.03) * albedo * occlusion;
     vec3 color = ambient + Lo + emissive;

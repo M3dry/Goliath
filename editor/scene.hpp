@@ -2,6 +2,7 @@
 
 #include "goliath/camera.hpp"
 #include "goliath/models.hpp"
+#include "goliath/scenes.hpp"
 #include <cstddef>
 #include <nlohmann/json.hpp>
 
@@ -40,11 +41,17 @@ namespace scene {
     size_t selected_instance(size_t scene_ix = selected_scene());
     void select_instance(size_t instance_ix, size_t scene_ix = selected_scene());
 
+    size_t selected_light(size_t scene_ix = selected_scene());
+    void select_light(size_t light_ix, size_t scene_ix = selected_scene());
+
     void add(std::string name);
     void remove(size_t scene_ix);
 
     void add_instance(engine::models::gid model);
     void remove_instance(size_t instance_ix);
+
+    void add_light(std::string name, engine::scenes::Light light);
+    void remove_light(size_t light_ix);
 
     CameraInfo camera();
     void update_camera(CameraInfo& cam);

@@ -101,6 +101,7 @@ namespace engine::scenes {
         j["names"].get_to(scene_names);
         j["instance_names"].get_to(instance_namess);
         j["scenes"].get_to(scenes);
+        j["lights_names"].get_to(lights_names);
         j["lights"].get_to(lights);
 
         light_buffers.resize(lights.size());
@@ -112,6 +113,7 @@ namespace engine::scenes {
             {"names", scene_names},
             {"instance_names", instance_namess},
             {"scenes", scenes},
+            {"lights_names", lights_names},
             {"lights", lights},
         };
     }
@@ -217,6 +219,7 @@ namespace engine::scenes {
         scene_ref_counts.emplace_back(0);
         scenes.emplace_back();
 
+        lights_names.emplace_back();
         lights.emplace_back();
         light_buffers.emplace_back();
 
@@ -233,28 +236,40 @@ namespace engine::scenes {
         scene_ref_counts.erase(scene_ref_counts.begin() + scene_ix);
         scenes.erase(scenes.begin() + scene_ix);
 
+        lights_names.erase(lights_names.begin() + scene_ix);
         lights.erase(lights.begin() + scene_ix);
         light_buffers.erase(light_buffers.begin() + scene_ix);
 
         want_save = true;
     }
 
-    uint32_t add_light(uint32_t scene_ix, Light light) {
+    uint32_t add_light(uint32_t scene_ix, std::string name, Light light) {
+        lights_names[scene_ix].emplace_back(name);
         lights[scene_ix].emplace_back(light);
         update_buffers(scene_ix);
 
+        want_save = true;
         return lights[scene_ix].size() - 1;
     }
 
     void remove_light(uint32_t scene_ix, uint32_t light_ix) {
-        auto& ls = lights[scene_ix];
-        ls.erase(ls.begin() + light_ix);
+        lights_names[scene_ix].erase(lights_names[scene_ix].begin() + light_ix);
+        lights[scene_ix].erase(lights[scene_ix].begin() + light_ix);
 
         update_buffers(scene_ix);
+        want_save = true;
     }
 
     Light& get_light(uint32_t scene_ix, uint32_t light_ix) {
         return lights[scene_ix][light_ix];
+    }
+
+    std::pair<Buffer, transport2::ticket> get_light_buffer(uint32_t scene_ix) {
+        return light_buffers[scene_ix];
+    }
+
+    uint32_t get_light_count(uint32_t scene_ix) {
+        return lights[scene_ix].size();
     }
 
     std::string& get_name(size_t scene_ix) {
@@ -284,6 +299,22 @@ namespace engine::scenes {
 
     std::span<std::string> get_names() {
         return scene_names;
+    }
+
+    std::string& get_light_name(size_t scene_ix, uint32_t light_ix) {
+        return lights_names[scene_ix][light_ix];
+    }
+
+    std::span<std::string> get_light_names(size_t scene_ix) {
+        return lights_names[scene_ix];
+    }
+
+    Light& get_light(size_t scene_ix, size_t light_ix) {
+        return lights[scene_ix][light_ix];
+    }
+
+    std::span<Light> get_lights(size_t scene_ix) {
+        return lights[scene_ix];
     }
 
     bool want_to_save() {
@@ -342,6 +373,7 @@ namespace engine::scenes {
             {"names", nlohmann::json::array()},
             {"instance_names", nlohmann::json::array()},
             {"scenes", nlohmann::json::array()},
+            {"lights_names", nlohmann::json::array()},
             {"lights", nlohmann::json::array()},
         };
     }

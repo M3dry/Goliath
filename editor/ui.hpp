@@ -48,4 +48,6 @@ namespace ui {
     void material_schema_creation();
 
     void remove_asset_popup();
+
+    void lights_pane();
 }

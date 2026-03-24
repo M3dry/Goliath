@@ -6,7 +6,7 @@
 namespace scene {
     bool want_save = false;
     size_t selected_scene_ix = 0;
-    std::vector<size_t> selected_instances{};
+    std::vector<std::pair<bool, size_t>> selected_instances{};
     std::vector<CameraInfo> camera_infos{};
 
     void to_json(nlohmann::json& j, const CameraInfo& info) {
@@ -93,18 +93,31 @@ namespace scene {
     }
 
     size_t selected_instance(size_t scene_ix) {
-        return selected_instances[scene_ix];
+        auto selected = selected_instances[scene_ix];
+        return selected.first == false ? selected.second : -1;
     }
 
     void select_instance(size_t instance_ix, size_t scene_ix) {
-        selected_instances[scene_ix] = instance_ix;
+        selected_instances[scene_ix].first = false;
+        selected_instances[scene_ix].second = instance_ix;
+        want_save = true;
+    }
+
+    size_t selected_light(size_t scene_ix) {
+        auto selected = selected_instances[scene_ix];
+        return selected.first == true ? selected.second : -1;
+    }
+
+    void select_light(size_t light_ix, size_t scene_ix) {
+        selected_instances[scene_ix].first = true;
+        selected_instances[scene_ix].second = light_ix;
         want_save = true;
     }
 
     void add(std::string name) {
         engine::scenes::add(name);
         select_scene(engine::scenes::get_names().size() - 1);
-        selected_instances.emplace_back(-1);
+        selected_instances.emplace_back(false,-1);
         camera_infos.emplace_back();
 
         want_save = true;
@@ -138,6 +151,26 @@ namespace scene {
             scene::select_instance(-1);
         } else if (scene::selected_instance() > instance_ix) {
             scene::select_instance(scene::selected_instance() - 1);
+        }
+
+        want_save = true;
+    }
+
+    void add_light(std::string name, engine::scenes::Light light) {
+        engine::scenes::add_light(scene::selected_scene(), name, light);
+        scene::select_light(engine::scenes::get_light_names(scene::selected_scene()).size() - 1);
+
+        want_save = true;
+    }
+
+    void remove_light(size_t light_ix) {
+        engine::scenes::remove_light(selected_scene(), light_ix);
+        if (scene::selected_light() == -1) {
+
+        } else if (scene::selected_light() == light_ix) {
+            scene::select_light(-1);
+        } else if (scene::selected_light() > light_ix) {
+            scene::select_light(scene::selected_light() - 1);
         }
 
         want_save = true;
