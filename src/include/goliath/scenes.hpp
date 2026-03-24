@@ -20,7 +20,16 @@ namespace engine::scenes {
 
     void add(std::string name);
     void remove(size_t scene_ix);
-    void move_to(size_t scene_ix, size_t dest_ix);
+
+    struct Light {
+        glm::vec2 position;
+        float _1{};
+        glm::vec3 intensity;
+    };
+
+    uint32_t add_light(uint32_t scene_ix, Light light);
+    void remove_light(uint32_t scene_ix, uint32_t light_ix);
+    Light& get_light(uint32_t scene_ix, uint32_t light_ix);
 
     std::string& get_name(size_t scene_ix);
     std::span<std::string> get_instance_names(size_t scene_ix);
@@ -33,7 +42,7 @@ namespace engine::scenes {
 
     bool want_to_save();
     void modified(size_t scene_ix);
-    void update_transforms_buffer(size_t scene_ix);
+    void update_buffers(size_t scene_ix);
 
     nlohmann::json default_json();
 

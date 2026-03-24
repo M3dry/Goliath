@@ -306,7 +306,6 @@ namespace engine {
                 id_counter++;
             }
 
-            printf("adding gid: %d %d, %s %d\n", gid.gen(), gid.id(), make_texture_path(gid).string().c_str(), gid.value);
             names.emplace_back(std::move(entry.name));
             generations.emplace_back((uint8_t)gid.gen());
             deleted.emplace_back(false);
@@ -511,6 +510,7 @@ namespace engine {
     void Textures::acquire(std::span<const gid> gids) {
         for (size_t i = 0; i < gids.size(); i++) {
             auto gid = gids[i];
+            if (gid.gen() == 0 && gid.id() == 0) continue;
             if (gid == Textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (++ref_counts[gid.id()] != 1) continue;
@@ -526,6 +526,7 @@ namespace engine {
     void Textures::release(std::span<const gid> gids) {
         for (std::size_t i = 0; i < gids.size(); i++) {
             auto gid = gids[i];
+            if (gid.gen() == 0 && gid.id() == 0) continue;
             if (gid == Textures::gid{}) continue;
             if (generations[gid.id()] != gid.gen()) continue;
             if (ref_counts[gid.id()] == 0 || --ref_counts[gid.id()] != 0) continue;

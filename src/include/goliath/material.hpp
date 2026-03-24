@@ -32,7 +32,7 @@ namespace engine::material {
     constexpr size_t size(const attribute& attr) {
         switch (attr) {
             using enum attribute;
-            case Texture: return sizeof(Textures::gid);
+            case Texture: return sizeof(uint32_t);
             case Float: return sizeof(float);
             case Uint: return sizeof(uint32_t);
             case Int: return sizeof(int32_t);

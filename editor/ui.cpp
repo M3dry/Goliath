@@ -197,7 +197,7 @@ namespace ui {
                                                         scene::selected_scene())[scene::selected_instance()]));
 
                     if (changed) {
-                        engine::scenes::update_transforms_buffer(scene::selected_scene());
+                        engine::scenes::update_buffers(scene::selected_scene());
                         scene::update_camera(cam_info);
                         update_instance_transform();
                     }
@@ -605,7 +605,7 @@ namespace ui {
 
         if (!value_changed) return;
 
-        engine::scenes::update_transforms_buffer(scene::selected_scene());
+        engine::scenes::update_buffers(scene::selected_scene());
         update_instance_transform();
     }
 
@@ -647,6 +647,8 @@ namespace ui {
                                                         model.meshes[m].material_instance);
 
                         model.meshes[m].material_instance = gid;
+                        state::dependency_graph->remove_dep(mgid, mat_gid);
+                        state::dependency_graph->add_dep(mgid, gid);
 
                         modified = true;
                         engine::models::reupload(mgid);
@@ -726,7 +728,7 @@ namespace ui {
                                     auto gid = *(engine::Textures::gid*)payload->Data;
 
                                     game_textures->release({data_ptr, 1});
-                                    *data_ptr = gid;
+                                    *(uint32_t*)data_ptr = gid.id();
                                     game_textures->acquire({data_ptr, 1});
 
                                     modified = true;

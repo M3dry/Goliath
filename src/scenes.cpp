@@ -1,6 +1,7 @@
 #include "goliath/scenes.hpp"
 #include "goliath/models.hpp"
 #include "goliath/transport2.hpp"
+#include "goliath/util.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <vulkan/vulkan_core.h>
 
@@ -32,13 +33,29 @@ namespace engine::scenes {
         j["instance_transforms"].get_to(scene.instance_transforms);
     }
 
+    void to_json(nlohmann::json& j, const Light& light) {
+        j = nlohmann::json{
+            {"position", light.position},
+            {"intensity", light.intensity},
+        };
+    }
+
+    void from_json(const nlohmann::json& j, Light& scene) {
+        j["position"].get_to(scene.position);
+        j["intensity"].get_to(scene.intensity);
+    }
+
     bool want_save = false;
 
     std::vector<std::string> scene_names{};
     std::vector<std::vector<std::string>> instance_namess{};
+    std::vector<std::vector<std::string>> lights_names{};
 
     std::vector<uint32_t> scene_ref_counts{};
     std::vector<Scene> scenes{};
+
+    std::vector<std::vector<Light>> lights{};
+    std::vector<std::pair<Buffer, transport2::ticket>> light_buffers{};
 
     size_t add_model(size_t scene_ix, models::gid gid) {
         auto& scene = scenes[scene_ix];
@@ -64,6 +81,8 @@ namespace engine::scenes {
         transport2::unqueue(scenes[scene_ix].instance_transforms_buffer_ticket);
         scenes[scene_ix].instance_transforms_buffer.destroy();
         scenes[scene_ix].instance_transforms_buffer = Buffer{};
+        light_buffers[scene_ix].first.destroy();
+        light_buffers[scene_ix].first = Buffer{};
 
         while (rc-- != 0) {
             engine::models::release(used_models.data(), used_models.size());
@@ -82,19 +101,25 @@ namespace engine::scenes {
         j["names"].get_to(scene_names);
         j["instance_names"].get_to(instance_namess);
         j["scenes"].get_to(scenes);
+        j["lights"].get_to(lights);
 
+        light_buffers.resize(lights.size());
         scene_ref_counts.resize(scenes.size(), 0);
-        std::memset(scene_ref_counts.data(), 0, sizeof(uint32_t) * scene_ref_counts.size());
     }
 
     nlohmann::json save() {
-        return nlohmann::json{{"names", scene_names}, {"instance_names", instance_namess}, {"scenes", scenes}};
+        return nlohmann::json{
+            {"names", scene_names},
+            {"instance_names", instance_namess},
+            {"scenes", scenes},
+            {"lights", lights},
+        };
     }
 
     void acquire(size_t scene_ix) {
         scene_ref_counts[scene_ix]++;
 
-        update_transforms_buffer(scene_ix);
+        update_buffers(scene_ix);
 
         auto& scene = scenes[scene_ix];
         engine::models::acquire(scene.used_models.data(), scene.used_models.size());
@@ -108,6 +133,9 @@ namespace engine::scenes {
         scene.instance_transforms_buffer.destroy();
         scene.instance_transforms_buffer = Buffer{};
         scene.instance_transforms_buffer_ticket = {};
+        light_buffers[scene_ix].first.destroy();
+        light_buffers[scene_ix].first = Buffer{};
+        light_buffers[scene_ix].second = {};
         engine::models::release(scene.used_models.data(), scene.used_models.size());
     }
 
@@ -121,7 +149,7 @@ namespace engine::scenes {
         scene.instance_transforms.emplace_back(transform);
         instance_namess[scene_ix].emplace_back(name);
 
-        update_transforms_buffer(scene_ix);
+        update_buffers(scene_ix);
         want_save = true;
     }
 
@@ -155,7 +183,7 @@ namespace engine::scenes {
             }
         }
 
-        update_transforms_buffer(scene_ix);
+        update_buffers(scene_ix);
         want_save = true;
     }
 
@@ -189,6 +217,9 @@ namespace engine::scenes {
         scene_ref_counts.emplace_back(0);
         scenes.emplace_back();
 
+        lights.emplace_back();
+        light_buffers.emplace_back();
+
         want_save = true;
     }
 
@@ -202,27 +233,28 @@ namespace engine::scenes {
         scene_ref_counts.erase(scene_ref_counts.begin() + scene_ix);
         scenes.erase(scenes.begin() + scene_ix);
 
+        lights.erase(lights.begin() + scene_ix);
+        light_buffers.erase(light_buffers.begin() + scene_ix);
+
         want_save = true;
     }
 
-    void move_to(size_t scene_ix, size_t dst_ix) {
-        auto scene_name = scene_names[scene_ix];
-        scene_names.erase(scene_names.begin() + scene_ix);
-        scene_names.insert(scene_names.begin() + dst_ix, scene_name);
+    uint32_t add_light(uint32_t scene_ix, Light light) {
+        lights[scene_ix].emplace_back(light);
+        update_buffers(scene_ix);
 
-        auto instance_names = instance_namess[scene_ix];
-        instance_namess.erase(instance_namess.begin() + scene_ix);
-        instance_namess.insert(instance_namess.begin() + dst_ix, instance_names);
+        return lights[scene_ix].size() - 1;
+    }
 
-        auto ref_count = scene_ref_counts[scene_ix];
-        scene_ref_counts.erase(scene_ref_counts.begin() + scene_ix);
-        scene_ref_counts.insert(scene_ref_counts.begin() + dst_ix, ref_count);
+    void remove_light(uint32_t scene_ix, uint32_t light_ix) {
+        auto& ls = lights[scene_ix];
+        ls.erase(ls.begin() + light_ix);
 
-        auto scene = scenes[scene_ix];
-        scenes.erase(scenes.begin() + scene_ix);
-        scenes.insert(scenes.begin() + dst_ix, scene);
+        update_buffers(scene_ix);
+    }
 
-        want_save = true;
+    Light& get_light(uint32_t scene_ix, uint32_t light_ix) {
+        return lights[scene_ix][light_ix];
     }
 
     std::string& get_name(size_t scene_ix) {
@@ -264,7 +296,7 @@ namespace engine::scenes {
         want_save = true;
     }
 
-    void update_transforms_buffer(size_t scene_ix) {
+    void update_buffers(size_t scene_ix) {
         auto& scene = scenes[scene_ix];
         if (scene.instance_transforms.empty()) {
             if (scene.instance_transforms_buffer != Buffer{}) scene.instance_transforms_buffer.destroy();
@@ -284,6 +316,25 @@ namespace engine::scenes {
             transport2::upload(true, scene.instance_transforms.data(), std::nullopt,
                                scene.instance_transforms_buffer.size(), scene.instance_transforms_buffer, 0,
                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+
+        auto& light_buf = light_buffers[scene_ix];
+
+        if (lights[scene_ix].empty()) {
+            if (light_buf.first != Buffer{}) light_buf.first.destroy();
+
+            light_buf.first= {};
+            light_buf.second = {};
+            return;
+        }
+
+        light_buf.first.destroy();
+        light_buf.first =
+            Buffer::create(std::format("Scene `{}`'s lights buffer", scene_names[scene_ix]).c_str(),
+                           lights[scene_ix].size() * sizeof(Light),
+                           VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_2_TRANSFER_DST_BIT, std::nullopt);
+        light_buf.second =
+            transport2::upload(true, lights[scene_ix].data(), std::nullopt, light_buf.first.size(), light_buf.first, 0,
+                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     }
 
     nlohmann::json default_json() {
@@ -291,6 +342,7 @@ namespace engine::scenes {
             {"names", nlohmann::json::array()},
             {"instance_names", nlohmann::json::array()},
             {"scenes", nlohmann::json::array()},
+            {"lights", nlohmann::json::array()},
         };
     }
 

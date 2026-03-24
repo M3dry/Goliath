@@ -209,6 +209,15 @@ namespace engine::util {
 }
 
 namespace glm {
+    inline void to_json(nlohmann::json& j, const glm::vec2& v) {
+        j = nlohmann::json::array({v.x, v.y});
+    }
+
+    inline void from_json(const nlohmann::json& j, glm::vec2& v) {
+        v.x = j.at(0).get<float>();
+        v.y = j.at(1).get<float>();
+    }
+
     inline void to_json(nlohmann::json& j, const glm::vec3& v) {
         j = nlohmann::json::array({v.x, v.y, v.z});
     }
