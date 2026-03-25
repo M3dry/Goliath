@@ -5,6 +5,7 @@
 
 struct MeshData {
     Offsets offsets;
+    uint id;
     uint material_id;
     uint vertex_count;
     mat4 transform;
@@ -16,20 +17,22 @@ MeshData read_mesh_data(VertexData verts, uint start_offset) {
     MeshData data;
     data.offsets = read_offsets(verts, start_offset);
     start_offset += offsets_size;
-    data.material_id = verts.data[start_offset];
-    data.vertex_count = verts.data[start_offset + 1];
+
+    data.id = verts.data[start_offset];
+    data.material_id = verts.data[start_offset + 1];
+    data.vertex_count = verts.data[start_offset + 2];
 
     for (uint i = 0; i < 16; i++) {
-        data.transform[i/4][i%4] = uintBitsToFloat(verts.data[start_offset + 2 + i]);
+        data.transform[i/4][i%4] = uintBitsToFloat(verts.data[start_offset + 3 + i]);
     }
 
-    data.min.x = uintBitsToFloat(verts.data[start_offset + 3 + 16]);
-    data.min.y = uintBitsToFloat(verts.data[start_offset + 3 + 16 + 1]);
-    data.min.z = uintBitsToFloat(verts.data[start_offset + 3 + 16 + 2]);
+    data.min.x = uintBitsToFloat(verts.data[start_offset + 4 + 16]);
+    data.min.y = uintBitsToFloat(verts.data[start_offset + 4 + 16 + 1]);
+    data.min.z = uintBitsToFloat(verts.data[start_offset + 4 + 16 + 2]);
 
-    data.max.x = uintBitsToFloat(verts.data[start_offset + 3 + 16 + 3]);
-    data.max.y = uintBitsToFloat(verts.data[start_offset + 3 + 16 + 4]);
-    data.max.z = uintBitsToFloat(verts.data[start_offset + 3 + 16 + 5]);
+    data.max.x = uintBitsToFloat(verts.data[start_offset + 4 + 16 + 3]);
+    data.max.y = uintBitsToFloat(verts.data[start_offset + 4 + 16 + 4]);
+    data.max.z = uintBitsToFloat(verts.data[start_offset + 4 + 16 + 5]);
 
     return data;
 }

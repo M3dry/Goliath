@@ -1,6 +1,8 @@
 #ifndef _CULLED_DATA_
 #define _CULLED_DATA_
 
+#include "library/vertex_data.glsl"
+
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 

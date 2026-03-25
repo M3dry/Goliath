@@ -182,7 +182,7 @@ namespace engine::models {
 
             auto& cpu_data = *cpu_datas[gid.id()];
             engine::gpu_group::begin();
-            auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
+            auto [gpu, draw_buffer] = engine::model::upload(&cpu_data, gid.id());
             auto& gpu_data = gpu_datas[gid.id()];
             gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
                                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
@@ -201,7 +201,7 @@ namespace engine::models {
 
                 auto& cpu_data = *cpu_datas[gid.id()];
                 engine::gpu_group::begin();
-                auto [gpu, draw_buffer] = engine::model::upload(&cpu_data);
+                auto [gpu, draw_buffer] = engine::model::upload(&cpu_data, gid.id());
 
                 auto& gpu_data = gpu_datas[gid.id()];
                 gpu_data.group = engine::gpu_group::end(false, VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,

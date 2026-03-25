@@ -16,7 +16,8 @@
 #include <vulkan/vulkan_core.h>
 
 void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::vec2 src_dims,
-                 engine::GPUImage& src, engine::GPUImage& out, glm::uvec2 out_dims) {
+                 engine::GPUImage& src, engine::GPUImage& out, glm::uvec2 out_dims, glm::uvec2& out_origin,
+                 glm::uvec2& out_image_dims) {
     auto final_stage = out.current_stage;
     auto final_access = out.current_access;
     auto final_layout = out.current_layout;
@@ -93,6 +94,9 @@ void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm
             .y = (int32_t)out_dims.y,
             .z = 1,
         };
+
+        out_origin = {0, 0};
+        out_image_dims = out_dims;
     } else if (strategy == engine::game_interface2::GameConfig::LetterBox) {
         float scale = std::min(out_dims.x / src_dims.x, out_dims.y / src_dims.y);
         if (scale > 1.0f) {
@@ -112,6 +116,9 @@ void blit_target(engine::game_interface2::GameConfig::BlitStrategy strategy, glm
             .y = (int32_t)offset.y + (int32_t)src_dims.y,
             .z = 1,
         };
+
+        out_origin = offset;
+        out_image_dims = src_dims;
     }
 
     VkBlitImageInfo2 blit_info{
@@ -317,15 +324,17 @@ uint32_t Game::render(glm::uvec2 game_window_dims) {
     }
 }
 
-void Game::blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims) {
+void Game::blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims, glm::uvec2& out_origin,
+                            glm::uvec2& out_image_dims) {
     auto current_frame = engine::get_current_frame();
     auto& src = targets[current_frame];
 
+    
     blit_target(config.target_dimensions == glm::uvec2{0, 0} ||
                         config.target_blit_strategy == engine::game_interface2::GameConfig::Stretch
                     ? engine::game_interface2::GameConfig::Stretch
                     : engine::game_interface2::GameConfig::LetterBox,
-                config.clear_color, target_dimensions, src, out, out_dims);
+                config.clear_color, target_dimensions, src, out, out_dims, out_origin, out_image_dims);
 
     engine::synchronization::begin_barriers();
     engine::synchronization::apply_barrier(
@@ -337,8 +346,8 @@ VkSampler GameView::sampler = nullptr;
 
 GameView::GameView() {
     for (size_t i = 0; i < engine::frames_in_flight; i++) {
-        dimensions[i].x = -1;
-        dimensions[i].y = -1;
+        viewport_dimensions[i].x = -1;
+        viewport_dimensions[i].y = -1;
     }
 }
 
@@ -350,7 +359,7 @@ void GameView::process_pane(ImVec2 avail) {
     ImGui_ImplVulkan_RemoveTexture(textures_freeup[engine::get_current_frame()]);
     textures_freeup[engine::get_current_frame()] = nullptr;
 
-    auto& dims = dimensions[curr_frame];
+    auto& dims = viewport_dimensions[curr_frame];
     if ((avail.x != dims.x || avail.y != dims.y) && !skipped_window) {
         auto& image = images[curr_frame];
         auto& view = views[curr_frame];
@@ -382,21 +391,45 @@ void GameView::process_pane(ImVec2 avail) {
 
 void GameView::draw_pane() {
     if (!skipped_window) {
-        auto dim = dimensions[engine::get_current_frame()];
+        auto dim = viewport_dimensions[engine::get_current_frame()];
+        auto& viewport_origin = viewport_origins[engine::get_current_frame()];
+
+        viewport_origin.x = ImGui::GetCursorScreenPos().x;
+        viewport_origin.y = ImGui::GetCursorScreenPos().y;
         ImGui::Image(textures[engine::get_current_frame()], ImVec2{(float)dim.x, (float)dim.y});
     }
 }
 
 void GameView::blit(Game& game) {
     auto curr_frame = engine::get_current_frame();
-    game.blit_game_target(images[curr_frame], dimensions[curr_frame]);
+
+    src_dimensions[curr_frame] = game.target_dimensions;
+    game.blit_game_target(images[curr_frame], viewport_dimensions[curr_frame], image_origins[curr_frame],
+                          image_dimensions[curr_frame]);
 }
 
 void GameView::blit(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color,
                     glm::uvec2 src_dims, engine::GPUImage& src) {
     auto curr_frame = engine::get_current_frame();
 
-    blit_target(strategy, clear_color, src_dims, src, images[curr_frame], dimensions[curr_frame]);
+    src_dimensions[curr_frame] = src_dims;
+    blit_target(strategy, clear_color, src_dims, src, images[curr_frame], viewport_dimensions[curr_frame],
+                image_origins[curr_frame], image_dimensions[curr_frame]);
+}
+
+std::optional<glm::uvec2> GameView::unblit(glm::uvec2 point) {
+    auto curr_frame = engine::get_current_frame();
+    glm::vec2 local_point = glm::vec2{point} - glm::vec2{image_origins[curr_frame] };
+
+    auto image_dims = image_dimensions[curr_frame];
+    if (local_point.x < 0.0f || local_point.y < 0.0f || 
+        local_point.x > image_dims.x || local_point.y > image_dims.y) {
+        return std::nullopt; 
+    }
+
+    glm::vec2 inverse_scale = glm::vec2{src_dimensions[curr_frame]} / glm::vec2{image_dims};
+    
+    return local_point * inverse_scale;
 }
 
 void GameView::init() {

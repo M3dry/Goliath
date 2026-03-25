@@ -135,6 +135,7 @@ using PBRPC = engine::PushConstant<glm::vec<2, uint32_t>, uint64_t, uint64_t, ui
                                    engine::util::padding32, uint64_t>;
 using GridPC = engine::PushConstant<glm::mat4, glm::mat4, glm::vec3, engine::util::padding32, glm::vec2>;
 using PostprocessingPC = engine::PushConstant<glm::vec<2, uint32_t>>;
+using HitDetectionPC = engine::PushConstant<glm::uvec2, glm::uvec2, uint64_t, uint64_t>;
 
 struct PBRShadingSet {
     glm::vec3 cam_pos;
@@ -271,7 +272,7 @@ int main(int argc, char** argv) {
 
     layouts::set_to_default();
 
-        bool scene_viewport_focused = false;
+    bool scene_viewport_focused = false;
     GameView scene_viewport{};
     GameView game_viewport{};
 
@@ -427,6 +428,27 @@ int main(int argc, char** argv) {
                                                                .shader(postprocessing_module)
                                                                .descriptor_layout(0, postprocessing_set_layout)
                                                                .push_constant(PostprocessingPC::size));
+
+    uint32_t hit_detection_spv_size;
+    auto hit_detection_spv_data = engine::util::read_file("hit_detection.spv", &hit_detection_spv_size);
+    auto hit_detection_module = engine::shader::create({hit_detection_spv_data, hit_detection_spv_size});
+    free(hit_detection_spv_data);
+
+    auto hit_detection_set_layout =
+        engine::descriptor::create_layout(engine::DescriptorSet<engine::descriptor::Binding{
+                                              .count = 1,
+                                              .type = engine::descriptor::Binding::StorageImage,
+                                              .stages = VK_SHADER_STAGE_COMPUTE_BIT,
+                                          }>{});
+    auto hit_detection_pipeline = engine::compute::create(engine::ComputePipelineBuilder{}
+                                                              .shader(hit_detection_module)
+                                                              .descriptor_layout(0, hit_detection_set_layout)
+                                                              .push_constant(HitDetectionPC::size));
+    uint32_t* hit_detection_data;
+    bool hit_detection_coherent = false;
+    auto hit_detection_buffer =
+        engine::Buffer::create("Hit Detection buffer", 9 * sizeof(uint32_t), VK_BUFFER_USAGE_2_STORAGE_BUFFER_BIT,
+                               std::pair{(void**)(&hit_detection_data), &hit_detection_coherent});
 
     engine::GPUImage* depth_images = (engine::GPUImage*)malloc(sizeof(engine::GPUImage) * engine::frames_in_flight);
     VkImageView* depth_image_views = (VkImageView*)malloc(sizeof(VkImageView) * engine::frames_in_flight);
@@ -735,7 +757,7 @@ int main(int argc, char** argv) {
 
             engine::rendering::mark("Embedded game");
             if (game && !game_viewport.skipped_window) {
-                game->game.render(game_viewport.dimensions[engine::get_current_frame()]);
+                game->game.render(game_viewport.viewport_dimensions[engine::get_current_frame()]);
             }
 
             VkClearColorValue target_clear_color{};
@@ -759,8 +781,10 @@ int main(int argc, char** argv) {
 
             engine::rendering::mark("Editor: scene flatten");
             engine::culling::bind_flatten();
+            std::vector<uint32_t> drawn_models{};
             tickets[0] =
-                engine::scenes::draw(scene::selected_scene(), [](auto gid, auto transforms_addr, auto transform_ix) {
+                engine::scenes::draw(scene::selected_scene(), [&](auto gid, auto transforms_addr, auto transform_ix) {
+                    drawn_models.emplace_back(transform_ix);
                     auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
                 });
 
@@ -854,6 +878,63 @@ int main(int argc, char** argv) {
                         .indirect_buffer = visbuffer.stages,
                         .buffer_offset = shading.indirect_buffer_offset,
                     });
+                }
+            }
+
+            if (lock_cam && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                glm::uvec2 mouse_pos = {ImGui::GetMousePos().x, ImGui::GetMousePos().y};
+                auto viewport_origin = scene_viewport.viewport_origins[engine::get_current_frame()];
+
+                if (auto res = scene_viewport.unblit(glm::ivec2{mouse_pos} - glm::ivec2{viewport_origin}); res) {
+                    mouse_pos = *res;
+
+                    uint8_t hit_detection_pc[HitDetectionPC::size];
+                    HitDetectionPC::write(
+                        hit_detection_pc, mouse_pos,
+                        glm::uvec2{engine::get_swapchain_extent().width, engine::get_swapchain_extent().height},
+                        hit_detection_buffer.address(), draw_id_buffer.address());
+
+                    auto set = engine::descriptor::new_set(hit_detection_set_layout);
+                    engine::descriptor::begin_update(set);
+                    engine::descriptor::update_storage_image(0, VK_IMAGE_LAYOUT_GENERAL,
+                                                             visbuffer.image_views[engine::get_current_frame()]);
+                    engine::descriptor::end_update();
+
+                    hit_detection_pipeline.bind();
+                    hit_detection_pipeline.dispatch(engine::ComputePipeline::DispatchParams{
+                        .push_constant = hit_detection_pc,
+                        .descriptor_indexes =
+                            {
+                                set,
+                                engine::descriptor::null_set,
+                                engine::descriptor::null_set,
+                                engine::descriptor::null_set,
+                            },
+                        .group_count_x = 1,
+                        .group_count_y = 1,
+                        .group_count_z = 1,
+                    });
+
+                    // if (hit_detection_coherent) {
+                        hit_detection_buffer.flush_mapped(0, hit_detection_buffer.size());
+                    // }
+
+                    // auto id = pick_id_3x3(hit_detection_data);
+
+                    // if (id != 0) {
+                    //     auto instance_ix = drawn_models[id - 1];
+                    //     printf("selecting instance: %d\n", instance_ix);
+                    //     scene::select_instance(scene::selected_scene(), instance_ix);
+                    // }
+
+                    // for (size_t i = 0; i < 9; i++) {
+                    //     if (hit_detection_data[i] != 0) {
+                    //         scene::select_instance(scene::selected_scene(), drawn_models[hit_detection_data[i] - 1]);
+                    //
+                    //         printf("selected instance: %zu\n", scene::selected_instance());
+                    //         break;
+                    //     }
+                    // }
                 }
             }
 
@@ -982,6 +1063,11 @@ int main(int argc, char** argv) {
     engine::descriptor::destroy_layout(postprocessing_set_layout);
     engine::compute::destroy(postprocessing_pipeline);
     engine::shader::destroy(postprocessing_module);
+
+    engine::descriptor::destroy_layout(hit_detection_set_layout);
+    engine::compute::destroy(hit_detection_pipeline);
+    engine::shader::destroy(hit_detection_module);
+    hit_detection_buffer.destroy();
 
     for (std::size_t i = 0; i < engine::frames_in_flight; i++) {
         engine::gpu_image_view::destroy(depth_image_views[i]);

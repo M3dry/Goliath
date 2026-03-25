@@ -157,13 +157,14 @@ namespace engine::exvar {
 
         size_t find_start = 0;
         for (const auto& [path, type, data] : values) {
-            auto it = std::find_if(values.begin() + find_start, values.end(),
-                                   [&](const auto& other) -> bool { return other.path.path_str == path.path_str; });
+            auto it = std::find_if(variables.begin(), variables.end(), [&](const auto& other) -> bool {
+                return other.path.path_str == path.path_str && other.type == type;
+            });
 
-            if (it == values.end()) continue;
+            if (it == variables.end()) continue;
 
-            find_start = std::distance(values.begin(), it);
-            std::memcpy(variables[find_start].address, it->data.data(), it->data.size());
+            find_start = std::distance(variables.begin(), it);
+            std::memcpy(variables[find_start].address, data.data(), data.size());
         }
     }
 

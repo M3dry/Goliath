@@ -146,14 +146,14 @@ namespace engine::model {
 
     struct GPUMeshData {
         GPUOffset offset;
-        uint16_t _padding{};
-        uint16_t mat_id;
+        uint32_t id;
+        uint32_t mat_id;
         uint32_t vertex_count;
         glm::mat4 transform;
         collisions::AABB bounding_box;
     };
 
     std::pair<GPUModel, Buffer>
-    upload(const Model* model);
-    GPUModel upload_raw(const Model* model);
+    upload(const Model* model, uint32_t id = -1);
+    GPUModel upload_raw(const Model* model, uint32_t id = -1);
 }

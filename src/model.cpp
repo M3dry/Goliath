@@ -371,22 +371,28 @@ namespace engine {
 }
 
 namespace engine::model {
-    void upload_func(uint8_t* data, uint32_t start, uint32_t size, void* ctx) {
-        const uint8_t* final_data = data + size;
+    struct Ctx {
         const Model* model;
-        std::memcpy(&model, ctx, sizeof(void*));
-        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
+        uint32_t id;
+        GPUOffset* offsets;
+    };
+
+    void upload_func(uint8_t* data, uint32_t start, uint32_t size, void* ctx_) {
+        const uint8_t* final_data = data + size;
+        auto ctx = (Ctx*)ctx_;
 
         auto data_start = data;
-        for (std::size_t i = 0; i < model->mesh_indices_count; i++) {
-            auto mesh_ix = model->mesh_indexes[i];
-            const auto& mesh = model->meshes[mesh_ix];
+        for (std::size_t i = 0; i < ctx->model->mesh_indices_count; i++) {
+            auto mesh_ix = ctx->model->mesh_indexes[i];
+            const auto& mesh = ctx->model->meshes[mesh_ix];
 
             GPUMeshData m{};
 
+            printf("id: %d\n", ctx->id);
+            m.id = ctx->id;
             m.mat_id = mesh.material_instance.dim();
-            m.offset = offsets[mesh_ix];
-            m.transform = model->mesh_transforms[mesh_ix];
+            m.offset = ctx->offsets[mesh_ix];
+            m.transform = ctx->model->mesh_transforms[mesh_ix];
             m.vertex_count = mesh.indices != nullptr ? mesh.index_count : mesh.vertex_count;
             m.bounding_box = mesh.bounding_box;
 
@@ -394,30 +400,30 @@ namespace engine::model {
             data += sizeof(GPUMeshData);
         }
 
-        for (std::size_t i = 0; i < model->mesh_count; i++) {
-            data += model->meshes[i].upload_data(data);
+        for (std::size_t i = 0; i < ctx->model->mesh_count; i++) {
+            data += ctx->model->meshes[i].upload_data(data);
         }
 
         free(ctx);
     };
 
-    std::pair<GPUModel, Buffer> upload(const Model* model) {
-        auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
-        std::memcpy(ctx, &model, sizeof(void*));
-
-        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
+    std::pair<GPUModel, Buffer> upload(const Model* model, uint32_t id) {
+        auto ctx = (Ctx*)malloc(sizeof(Ctx) + sizeof(GPUOffset) * model->mesh_count);
+        ctx->model = model;
+        ctx->id = id;
+        ctx->offsets = (GPUOffset*)(ctx + 1);
 
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
-            offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
-            offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
+            ctx->offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            ctx->offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
         }
 
         auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
-            offsets[i].start += data_offset;
+            ctx->offsets[i].start += data_offset;
         }
 
         void* draw_buf_host;
@@ -447,22 +453,22 @@ namespace engine::model {
         return {GPUModel{data_offset, model->mesh_indices_count}, draw_buf};
     }
 
-    GPUModel upload_raw(const Model* model) {
-        auto ctx = malloc(sizeof(void*) + sizeof(GPUOffset) * model->mesh_count);
-        std::memcpy(ctx, &model, sizeof(void*));
-
-        GPUOffset* offsets = (GPUOffset*)((uint8_t*)ctx + sizeof(void*));
+    GPUModel upload_raw(const Model* model, uint32_t id) {
+        auto ctx = (Ctx*)malloc(sizeof(Ctx) + sizeof(GPUOffset) * model->mesh_count);
+        ctx->model = model;
+        ctx->id = id;
+        ctx->offsets = (GPUOffset*)(ctx + 1);
 
         uint32_t mesh_sizes = sizeof(GPUMeshData) * model->mesh_indices_count;
         for (std::size_t i = 0; i < model->mesh_count; i++) {
             uint32_t size;
-            offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
-            offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
+            ctx->offsets[i] = model->meshes[i].calc_offset(mesh_sizes, &size);
+            ctx->offsets[i].relative_start = mesh_sizes - i * sizeof(GPUMeshData);
             mesh_sizes += size;
         }
         auto data_offset = engine::gpu_group::upload(mesh_sizes, upload_func, (void*)ctx);
         for (std::size_t i = 0; i < model->mesh_count; i++) {
-            offsets[i].start += data_offset;
+            ctx->offsets[i].start += data_offset;
         }
 
         return GPUModel{data_offset, model->mesh_indices_count};

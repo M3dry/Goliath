@@ -43,7 +43,7 @@ class Game {
     void draw_game_imgui();
     uint32_t render(glm::uvec2 game_window_dims);
 
-    void blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims);
+    void blit_game_target(engine::GPUImage& out, glm::uvec2 out_dims, glm::uvec2& out_origin, glm::uvec2& out_image_dims);
 
   private:
     bool destroyed_state = true;
@@ -56,7 +56,11 @@ struct GameView {
     bool skipped_window = true;
     std::array<engine::GPUImage, engine::frames_in_flight> images{};
     std::array<VkImageView, engine::frames_in_flight> views{};
-    std::array<glm::uvec2, engine::frames_in_flight> dimensions{};
+    std::array<glm::uvec2, engine::frames_in_flight> image_dimensions{};
+    std::array<glm::uvec2, engine::frames_in_flight> image_origins{};
+    std::array<glm::uvec2, engine::frames_in_flight> viewport_dimensions{};
+    std::array<glm::uvec2, engine::frames_in_flight> viewport_origins{};
+    std::array<glm::uvec2, engine::frames_in_flight> src_dimensions{};
     std::array<VkDescriptorSet, engine::frames_in_flight> textures{};
     std::array<VkDescriptorSet, engine::frames_in_flight> textures_freeup{};
 
@@ -66,6 +70,8 @@ struct GameView {
     void draw_pane();
     void blit(Game& game);
     void blit(engine::game_interface2::GameConfig::BlitStrategy strategy, glm::vec4 clear_color, glm::uvec2 src_dims, engine::GPUImage& src);
+
+    std::optional<glm::uvec2> unblit(glm::uvec2 point);
 
     static void init();
     void destroy();
