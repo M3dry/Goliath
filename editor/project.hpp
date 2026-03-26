@@ -3,6 +3,8 @@
 #include <filesystem>
 
 namespace project {
+    extern std::filesystem::path global_editor_config;
+
     extern std::filesystem::path project_root;
     extern std::filesystem::path materials;
     extern std::filesystem::path models_directory;

@@ -6,6 +6,8 @@
 #include <fstream>
 
 namespace project {
+    std::filesystem::path global_editor_config{};
+
     std::filesystem::path project_root{};
     std::filesystem::path materials{};
     std::filesystem::path models_directory{};
@@ -53,6 +55,8 @@ namespace project {
     }
 
     void init() {
+        global_editor_config = ""; // TODO:
+
         std::ofstream o{"./goliath.json"};
         o << nlohmann::json{
             {"materials", "./assets/materials.json"},
