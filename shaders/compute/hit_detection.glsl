@@ -31,5 +31,11 @@ void main() {
     }
 
     VisFragment vis = read_vis_fragment(imageLoad(visbuffer, load_point).x);
-    samples.ids[write_ix] = vis.draw_id;
+    if (vis.draw_id == 0) {
+        samples.ids[write_ix] = -1;
+        return;
+    }
+
+    DrawID draw_id = read_draw_id(draw_ids, vis.draw_id - 1);
+    samples.ids[write_ix] = draw_id.transform_offset / 64;
 }

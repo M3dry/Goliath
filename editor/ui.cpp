@@ -49,6 +49,8 @@ int32_t score_search(std::string_view query, std::string_view candidate) {
 }
 
 namespace ui {
+    bool manipulating_viewport_ui = false;
+
     struct SelectedInstance {
         size_t scene;
         size_t instance;
@@ -113,7 +115,13 @@ namespace ui {
         style.toolButtonIconColor = IM_COL32(255, 255, 255, 255);
     }
 
+    bool manipulating_viewport_gizmos() {
+        return manipulating_viewport_ui;
+    }
+
     void viewport_window(GameView& scene_viewport, bool& scene_focused, GameView* game_viewport, bool* game_focused) {
+        manipulating_viewport_ui = false;
+
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0, 0});
         ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
         if (ImGuiDockNode* node = ImGui::GetWindowDockNode()) {
@@ -162,12 +170,17 @@ namespace ui {
                 bool changed =
                     ImViewGuizmo::Rotate(gizmo_pos, gizmo_quat, glm::vec3{0.0},
                                          ImVec2{gizmo_offset.x + (avail.x - scale * 90), gizmo_offset.y + scale * 90});
+                manipulating_viewport_ui |= ImViewGuizmo::IsOver();
+
                 changed |= ImViewGuizmo::Pan(
                     gizmo_pos, gizmo_quat,
                     ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10), gizmo_offset.y + (avail.y - scale * 50 - 10)});
+                manipulating_viewport_ui |= ImViewGuizmo::IsOver();
+
                 changed |= ImViewGuizmo::Dolly(gizmo_pos, gizmo_quat,
                                                ImVec2{gizmo_offset.x + (avail.x - scale * 50 - 10),
                                                       gizmo_offset.y + (avail.y - scale * 50 - 10 - scale * 50 - 10)});
+                manipulating_viewport_ui |= ImViewGuizmo::IsOver();
 
                 if (changed) {
                     cam_info.cam._orientation =
@@ -195,6 +208,7 @@ namespace ui {
                                                     ImGuizmo::WORLD,
                                                     glm::value_ptr(engine::scenes::get_instance_transforms(
                                                         scene::selected_scene())[scene::selected_instance()]));
+                    manipulating_viewport_ui |= ImGuizmo::IsOver();
 
                     if (changed) {
                         scene::update_camera(cam_info);
@@ -216,6 +230,7 @@ namespace ui {
                         light.position);
                     changed |= ImGuizmo::Manipulate(glm::value_ptr(cam_info.cam._view), glm::value_ptr(proj), ImGuizmo::TRANSLATE,
                                          ImGuizmo::WORLD, glm::value_ptr(mat));
+                    manipulating_viewport_ui |= ImGuizmo::IsOver();
 
                     if (changed) {
                         light.position = mat[3];

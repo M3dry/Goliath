@@ -12,6 +12,7 @@ namespace ui {
     void tick(float dt);
     void begin();
 
+    bool manipulating_viewport_gizmos();
     void viewport_window(GameView& scene_viewport, bool& scene_focused, GameView* game_viewport, bool* game_focused);
 
     void assets_pane();

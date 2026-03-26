@@ -781,10 +781,8 @@ int main(int argc, char** argv) {
 
             engine::rendering::mark("Editor: scene flatten");
             engine::culling::bind_flatten();
-            std::vector<uint32_t> drawn_models{};
             tickets[0] =
                 engine::scenes::draw(scene::selected_scene(), [&](auto gid, auto transforms_addr, auto transform_ix) {
-                    drawn_models.emplace_back(transform_ix);
                     auto _ = engine::culling::flatten(gid, transforms_addr, transform_ix * sizeof(glm::mat4));
                 });
 
@@ -881,7 +879,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (lock_cam && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (lock_cam && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ui::manipulating_viewport_gizmos()) {
                 glm::uvec2 mouse_pos = {ImGui::GetMousePos().x, ImGui::GetMousePos().y};
                 auto viewport_origin = scene_viewport.viewport_origins[engine::get_current_frame()];
 
@@ -915,26 +913,15 @@ int main(int argc, char** argv) {
                         .group_count_z = 1,
                     });
 
-                    // if (hit_detection_coherent) {
+                    if (!hit_detection_coherent) {
                         hit_detection_buffer.flush_mapped(0, hit_detection_buffer.size());
-                    // }
+                    }
 
-                    // auto id = pick_id_3x3(hit_detection_data);
-
-                    // if (id != 0) {
-                    //     auto instance_ix = drawn_models[id - 1];
-                    //     printf("selecting instance: %d\n", instance_ix);
-                    //     scene::select_instance(scene::selected_scene(), instance_ix);
-                    // }
-
-                    // for (size_t i = 0; i < 9; i++) {
-                    //     if (hit_detection_data[i] != 0) {
-                    //         scene::select_instance(scene::selected_scene(), drawn_models[hit_detection_data[i] - 1]);
-                    //
-                    //         printf("selected instance: %zu\n", scene::selected_instance());
-                    //         break;
-                    //     }
-                    // }
+                    size_t inst = pick_id_3x3(hit_detection_data);
+                    if (inst != (uint32_t)-1) {
+                        if (scene::selected_instance() == inst) inst = -1;
+                        scene::select_instance(inst);
+                    }
                 }
             }
 
