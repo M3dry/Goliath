@@ -225,8 +225,9 @@ void main() {
     vec3 albedo = (pbr.albedo * textureGrad(get_texture(pbr.albedo_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy)).rgb;
     float metallic = pbr.metallic_factor * textureGrad(get_texture(pbr.metallic_roughness_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).b;
     float roughness = pbr.roughness_factor * textureGrad(get_texture(pbr.metallic_roughness_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).g;
-    vec3 normal_map_value = pbr.normal_factor * textureGrad(get_texture(pbr.normal_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
+    vec3 normal_map_value = textureGrad(get_texture(pbr.normal_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
     normal_map_value = normal_map_value * 2.0 - 1.0;
+    normal_map_value.xy *= pbr.normal_factor;
     float occlusion = pbr.occlusion_factor * textureGrad(get_texture(pbr.occlusion_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).r;
     vec3 emissive = pbr.emissive_factor * textureGrad(get_texture(pbr.emissive_map), interpolated.texcoord0.value, interpolated.texcoord0.ddx, interpolated.texcoord0.ddy).rgb;
 
@@ -244,7 +245,7 @@ void main() {
         vec3 L = normalize(light.position - world_pos);
         vec3 H = normalize(view + L);
         float distance = length(light.position - world_pos);
-        float attenuation = 1.0 / (distance * distance);
+        float attenuation = 1.0 / max(distance * distance, 0.001);
         vec3 radiance = light.intensity * attenuation;
 
         float NDF = DistributionGGX(normal, H, roughness);

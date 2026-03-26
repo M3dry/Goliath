@@ -1081,12 +1081,11 @@ namespace ui {
     }
 
     void lights_pane() {
-        auto names = engine::scenes::get_light_names(scene::selected_scene());
-
         if (ImGui::Button("New light")) {
             scene::add_light("New light", {});
         }
 
+        auto names = engine::scenes::get_light_names(scene::selected_scene());
         for (size_t i = 0; i < names.size(); i++) {
             ImGui::PushID(i);
             i = lights_entry(names[i], i);

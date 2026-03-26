@@ -25,6 +25,7 @@ namespace engine::scenes {
         glm::vec3 position{};
         float _1{};
         glm::vec3 intensity{1.0f};
+        float _2{};
     };
 
     uint32_t add_light(uint32_t scene_ix, std::string name, Light light);

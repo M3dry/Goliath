@@ -444,6 +444,7 @@ int main(int argc, char** argv) {
                                                               .shader(hit_detection_module)
                                                               .descriptor_layout(0, hit_detection_set_layout)
                                                               .push_constant(HitDetectionPC::size));
+    std::optional<uint32_t> hit = false;
     uint32_t* hit_detection_data;
     bool hit_detection_coherent = false;
     auto hit_detection_buffer =
@@ -750,6 +751,23 @@ int main(int argc, char** argv) {
                     visbuffer, grid_pipeline);
         }
 
+        if (hit && *hit == engine::get_current_frame()) {
+            if (!hit_detection_coherent) {
+                hit_detection_buffer.flush_mapped(0, hit_detection_buffer.size());
+            }
+
+            size_t inst = pick_id_3x3(hit_detection_data);
+            if (inst != (uint32_t)-1) {
+                if (scene::selected_instance() == inst) inst = -1;
+                scene::select_instance(inst);
+            } else {
+                scene::select_instance(-1);
+            }
+
+            hit = std::nullopt;
+        }
+
+
         engine::transport2::ticket tickets[2];
         {
             engine::prepare_draw();
@@ -913,15 +931,7 @@ int main(int argc, char** argv) {
                         .group_count_z = 1,
                     });
 
-                    if (!hit_detection_coherent) {
-                        hit_detection_buffer.flush_mapped(0, hit_detection_buffer.size());
-                    }
-
-                    size_t inst = pick_id_3x3(hit_detection_data);
-                    if (inst != (uint32_t)-1) {
-                        if (scene::selected_instance() == inst) inst = -1;
-                        scene::select_instance(inst);
-                    }
+                    hit = engine::get_current_frame();
                 }
             }
 
