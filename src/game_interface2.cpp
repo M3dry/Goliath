@@ -328,16 +328,18 @@ namespace engine::game_interface2 {
                     continue;
                 }
 
+                bool tick_exit = false;
                 while (accum >= dt) {
                     accum -= dt;
 
-                    config.funcs.game.tick(user_data, &ts, &es);
+                    tick_exit |= config.funcs.game.tick(user_data, &ts, &es);
 
                     event::update_tick();
                 }
+                if (tick_exit) break;
 
-                textures->process_uploads();
-                materials->process();
+                if (textures) textures->process_uploads();
+                if (materials) materials->process();
                 if (prepare_frame()) {
                     if (config.target_dimensions == glm::uvec2{0, 0})
                         update_targets(targets.data(), target_views.data(), target_dimension);

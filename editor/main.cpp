@@ -25,6 +25,7 @@
 #include "goliath/util.hpp"
 #include "goliath/visbuffer.hpp"
 #include "imgui.h"
+#include "init_menu.hpp"
 #include "layout.hpp"
 #include "project.hpp"
 #include "scene.hpp"
@@ -148,13 +149,15 @@ struct PBRShadingSet {
 int main(int argc, char** argv) {
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
 
+    project::find_global_editor_config();
+
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
-        project::init();
+        project::init(std::filesystem::current_path());
         return 0;
     }
 
     if (!project::find_project()) {
-        printf("Project root couldn't be found. To initialize a project use `%s init`\n", argv[0]);
+        engine::game_interface2::start(init_menu(), engine::game_interface2::AssetPaths{}, argc, argv);
         return 0;
     }
     std::filesystem::current_path(project::project_root);
@@ -444,7 +447,7 @@ int main(int argc, char** argv) {
                                                               .shader(hit_detection_module)
                                                               .descriptor_layout(0, hit_detection_set_layout)
                                                               .push_constant(HitDetectionPC::size));
-    std::optional<uint32_t> hit = false;
+    std::optional<uint32_t> hit{};
     uint32_t* hit_detection_data;
     bool hit_detection_coherent = false;
     auto hit_detection_buffer =

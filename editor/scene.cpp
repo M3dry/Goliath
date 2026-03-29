@@ -117,7 +117,7 @@ namespace scene {
     void add(std::string name) {
         engine::scenes::add(name);
         select_scene(engine::scenes::get_names().size() - 1);
-        selected_instances.emplace_back(false,-1);
+        selected_instances.emplace_back(false, -1);
         camera_infos.emplace_back();
 
         want_save = true;

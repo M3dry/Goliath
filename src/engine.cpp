@@ -183,6 +183,16 @@ namespace engine {
 
     void FrameData::destroy_swapchain(OldSwapchain swapchain) {
         swapchains_to_free.emplace_back(swapchain);
+        if (swapchains_to_free.size() >= 5) {
+            auto& del = swapchains_to_free.front();
+
+            vkDestroySwapchainKHR(device(), del.swapchain, nullptr);
+            for (auto sem : del.semaphores) {
+                vkDestroySemaphore(device(), sem, nullptr);
+            }
+
+            swapchains_to_free.erase(swapchains_to_free.begin());
+        }
     }
 
     FrameData::FrameData() {

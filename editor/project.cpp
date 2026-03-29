@@ -54,8 +54,9 @@ namespace project {
         return false;
     }
 
-    void init() {
-        global_editor_config = ""; // TODO:
+    void init(std::filesystem::path root) {
+        auto revert = std::filesystem::current_path();
+        std::filesystem::current_path(root);
 
         std::ofstream o{"./goliath.json"};
         o << nlohmann::json{
@@ -79,5 +80,11 @@ namespace project {
         std::filesystem::create_directory("./assets/dependencies/textures");
 
         o.flush();
+
+        std::filesystem::current_path(revert);
+    }
+
+    void find_global_editor_config() {
+
     }
 }

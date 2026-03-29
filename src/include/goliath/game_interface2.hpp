@@ -350,21 +350,21 @@ namespace engine::game_interface2 {
     TickService make_tick_service();
 
     struct AssetPaths {
-        const char* asset_inputs;
+        const char* asset_inputs = nullptr;
 
-        const char* scenes;
-        const char* materials;
-        const char* models_reg;
-        const char* models_dir;
+        const char* scenes = nullptr;
+        const char* materials = nullptr;
+        const char* models_reg = nullptr;
+        const char* models_dir = nullptr;
 
-        const char* textures_reg;
-        const char* textures_dir;
+        const char* textures_reg = nullptr;
+        const char* textures_dir = nullptr;
     };
 
     using InitFn = void*(const EngineService*, uint32_t, char**);
     using DestroyFn = void(void*, const EngineService*);
     using ResizeFn = void(void*, EngineService*);
-    using TickFn = void(void*, const TickService*, const EngineService*);
+    using TickFn = bool(void*, const TickService*, const EngineService*);
     using DrawImGuiFn = void(void*, const EngineService*);
     using RenderFn =
         uint32_t(void*, const FrameService*, const EngineService*, VkSemaphoreSubmitInfo*);

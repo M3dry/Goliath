@@ -18,5 +18,7 @@ namespace project {
 
     bool find_project();
 
-    void init();
+    void init(std::filesystem::path root);
+
+    void find_global_editor_config();
 }

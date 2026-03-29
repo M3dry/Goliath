@@ -136,7 +136,7 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
 
                     free(state);
                 },
-            .tick = [](void*, const auto* ts, const auto* es) {},
+            .tick = [](void*, const auto* ts, const auto* es) -> bool { return false; },
             .draw_imgui = [](void*, const auto* es) {
                 ImGui::ShowDemoWindow();
             },
