@@ -6,8 +6,6 @@
 #include <fstream>
 
 namespace project {
-    std::filesystem::path global_editor_config{};
-
     std::filesystem::path project_root{};
     std::filesystem::path materials{};
     std::filesystem::path models_directory{};
@@ -59,17 +57,16 @@ namespace project {
         std::filesystem::current_path(root);
 
         std::ofstream o{"./goliath.json"};
-        o << nlohmann::json{
-            {"materials", "./assets/materials.json"},
-            {"models_directory", "./assets/models"},
-            {"models_registry", "./assets/models.reg"},
-            {"textures_directory", "./assets/textures"},
-            {"textures_registry", "./assets/textures.reg"},
-            {"scenes", "./scenes.json"},
-            {"editor_state", "./editor_state.json"},
-            {"asset_inputs", "./assets/inputs.json"},
-            {"dependency_metadata_directory", "./assets/dependencies"}
-        }.dump(4);
+        o << nlohmann::json{{"materials", "./assets/materials.json"},
+                            {"models_directory", "./assets/models"},
+                            {"models_registry", "./assets/models.reg"},
+                            {"textures_directory", "./assets/textures"},
+                            {"textures_registry", "./assets/textures.reg"},
+                            {"scenes", "./scenes.json"},
+                            {"editor_state", "./editor_state.json"},
+                            {"asset_inputs", "./assets/inputs.json"},
+                            {"dependency_metadata_directory", "./assets/dependencies"}}
+                 .dump(4);
 
         std::filesystem::create_directory("./assets");
         std::filesystem::create_directory("./assets/models");
@@ -84,7 +81,88 @@ namespace project {
         std::filesystem::current_path(revert);
     }
 
-    void find_global_editor_config() {
+    static std::filesystem::path xdg_dir(const char* xdg_type, const char* default_dir) {
+        const char* xdg_config_home = std::getenv(xdg_type);
+        std::filesystem::path path;
 
+        if (xdg_config_home && *xdg_config_home) {
+            path = xdg_config_home;
+        } else {
+            const char* home = std::getenv("HOME");
+            if (!home || !*home) {
+                throw std::runtime_error(std::format("couldn't find xdg dir for {}", xdg_type));
+            }
+            path = std::filesystem::path(home) / default_dir;
+        }
+
+        return path;
+    }
+
+#ifdef _WIN32
+#include <filesystem>
+#include <shlobj.h> // SHGetKnownFolderPath
+#include <stdexcept>
+#include <windows.h>
+
+    std::filesystem::path windows_known_folder(REFKNOWNFOLDERID folder_id) {
+        PWSTR wide_path = nullptr;
+
+        HRESULT hr = SHGetKnownFolderPath(folder_id, 0, nullptr, &wide_path);
+        if (FAILED(hr)) {
+            throw std::runtime_error("SHGetKnownFolderPath failed");
+        }
+
+        std::filesystem::path result = wide_path;
+        CoTaskMemFree(wide_path);
+        return result;
+    }
+#endif
+
+    const std::filesystem::path& global_editor_config() {
+        static auto path = []() -> std::filesystem::path {
+#ifdef __linux__
+            auto path = xdg_dir("XDG_CONFIG_HOME", ".config");
+#elif _WIN32
+            auto path = windows_known_folder(FOLDERID_RoamingAppData);
+#endif
+            path /= "goliath";
+
+            std::error_code ec;
+            if (!std::filesystem::exists(path)) {
+                if (!std::filesystem::create_directories(path, ec)) {
+                    if (ec) {
+                        throw std::runtime_error("Failed to create config directory: " + ec.message());
+                    }
+                }
+            }
+
+            return path;
+        }();
+
+        return path;
+    }
+
+    const std::filesystem::path& global_editor_cache() {
+        static auto path = []() -> std::filesystem::path {
+#ifdef __linux__
+            auto path = xdg_dir("XDG_CACHE_HOME", ".cache");
+#elif _WIN32
+            path = windows_known_folder(FOLDERID_LocalAppData);
+#endif
+            path /= "goliath";
+
+            std::error_code ec;
+            if (!std::filesystem::exists(path)) {
+                if (!std::filesystem::create_directories(path, ec)) {
+                    if (ec) {
+                        throw std::runtime_error("Failed to create config directory: " + ec.message());
+                    }
+                }
+            }
+
+            return path;
+        }();
+
+        return path;
     }
 }

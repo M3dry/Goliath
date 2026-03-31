@@ -99,6 +99,7 @@ SET(ENGINE_SOURCES
     vma_ptrs.cpp
     errors.cpp
     dependency_graph.cpp
+    fs.cpp
 
     ${IMGUI_SOURCES}
     ${MIKKTSPACE_SOURCES}

@@ -388,7 +388,6 @@ namespace engine::model {
 
             GPUMeshData m{};
 
-            printf("id: %d\n", ctx->id);
             m.id = ctx->id;
             m.mat_id = mesh.material_instance.dim();
             m.offset = ctx->offsets[mesh_ix];

@@ -12,6 +12,7 @@
 #include "goliath/errors.hpp"
 #include "goliath/event.hpp"
 #include "goliath/exvar.hpp"
+#include "goliath/fs.hpp"
 #include "goliath/game_interface2.hpp"
 #include "goliath/imgui.hpp"
 #include "goliath/materials.hpp"
@@ -149,8 +150,6 @@ struct PBRShadingSet {
 int main(int argc, char** argv) {
     EXVAR_INPUT(exvar_reg, "Editor/Camera/locked", bool, lock_cam, = true, engine::imgui_reflection::Input_ReadOnly);
 
-    project::find_global_editor_config();
-
     if (argc >= 2 && std::strcmp(argv[1], "init") == 0) {
         project::init(std::filesystem::current_path());
         return 0;
@@ -158,9 +157,15 @@ int main(int argc, char** argv) {
 
     if (!project::find_project()) {
         engine::game_interface2::start(init_menu(), engine::game_interface2::AssetPaths{}, argc, argv);
-        return 0;
+        if (!selected_project) {
+            return 0;
+        }
+
+        std::filesystem::current_path(*selected_project);
+        project::find_project();
+    } else {
+        std::filesystem::current_path(project::project_root);
     }
-    std::filesystem::current_path(project::project_root);
 
     auto dep_graph = engine::DependencyGraph::init(project::dependency_graph_metadata_directory);
     if (!dep_graph) {
@@ -338,14 +343,14 @@ int main(int argc, char** argv) {
 
     uint32_t visbuffer_raster_vertex_spv_size;
     auto visbuffer_raster_vertex_spv_data =
-        engine::util::read_file("visbuffer_raster_vertex.spv", &visbuffer_raster_vertex_spv_size);
+        engine::util::read_file(engine::fs::runtime_file("visbuffer_raster_vertex.spv"), &visbuffer_raster_vertex_spv_size);
     auto visbuffer_raster_vertex_module =
         engine::shader::create({visbuffer_raster_vertex_spv_data, visbuffer_raster_vertex_spv_size});
     free(visbuffer_raster_vertex_spv_data);
 
     uint32_t visbuffer_raster_fragment_spv_size;
     auto visbuffer_raster_fragment_spv_data =
-        engine::util::read_file("visbuffer_raster_fragment.spv", &visbuffer_raster_fragment_spv_size);
+        engine::util::read_file(engine::fs::runtime_file("visbuffer_raster_fragment.spv"), &visbuffer_raster_fragment_spv_size);
     auto visbuffer_raster_fragment_module =
         engine::shader::create({visbuffer_raster_fragment_spv_data, visbuffer_raster_fragment_spv_size});
     free(visbuffer_raster_fragment_spv_data);
@@ -363,7 +368,7 @@ int main(int argc, char** argv) {
             .cull_mode(engine::CullMode::Back);
 
     uint32_t pbr_spv_size;
-    auto pbr_spv_data = engine::util::read_file("pbr.spv", &pbr_spv_size);
+    auto pbr_spv_data = engine::util::read_file(engine::fs::runtime_file("pbr.spv"), &pbr_spv_size);
     auto pbr_module = engine::shader::create({pbr_spv_data, pbr_spv_size});
     free(pbr_spv_data);
 
@@ -381,13 +386,13 @@ int main(int argc, char** argv) {
 
     uint32_t fullscreen_triangle_spv_size;
     auto fullscreen_triangle_spv_data =
-        engine::util::read_file("fullscreen_triangle.spv", &fullscreen_triangle_spv_size);
+        engine::util::read_file(engine::fs::runtime_file("fullscreen_triangle.spv"), &fullscreen_triangle_spv_size);
     auto fullscreen_triangle_module =
         engine::shader::create({fullscreen_triangle_spv_data, fullscreen_triangle_spv_size});
     free(fullscreen_triangle_spv_data);
 
     uint32_t grid_spv_size;
-    auto grid_spv_data = engine::util::read_file("grid.spv", &grid_spv_size);
+    auto grid_spv_data = engine::util::read_file(engine::fs::runtime_file("grid.spv"), &grid_spv_size);
     auto grid_module = engine::shader::create({grid_spv_data, grid_spv_size});
     free(grid_spv_data);
 
@@ -412,7 +417,7 @@ int main(int argc, char** argv) {
                              .cull_mode(engine::CullMode::NoCull);
 
     uint32_t postprocessing_spv_size;
-    auto postprocessing_spv_data = engine::util::read_file("postprocessing.spv", &postprocessing_spv_size);
+    auto postprocessing_spv_data = engine::util::read_file(engine::fs::runtime_file("postprocessing.spv"), &postprocessing_spv_size);
     auto postprocessing_module = engine::shader::create({postprocessing_spv_data, postprocessing_spv_size});
     free(postprocessing_spv_data);
 
@@ -433,7 +438,7 @@ int main(int argc, char** argv) {
                                                                .push_constant(PostprocessingPC::size));
 
     uint32_t hit_detection_spv_size;
-    auto hit_detection_spv_data = engine::util::read_file("hit_detection.spv", &hit_detection_spv_size);
+    auto hit_detection_spv_data = engine::util::read_file(engine::fs::runtime_file("hit_detection.spv"), &hit_detection_spv_size);
     auto hit_detection_module = engine::shader::create({hit_detection_spv_data, hit_detection_spv_size});
     free(hit_detection_spv_data);
 

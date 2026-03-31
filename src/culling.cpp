@@ -2,6 +2,7 @@
 #include "goliath/buffer.hpp"
 #include "goliath/compute.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/fs.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
@@ -27,14 +28,14 @@ namespace engine::culling {
         resize(max_tasks);
 
         uint32_t flatten_draw_size;
-        auto* flatten_draw_spv = util::read_file("./flatten_draw.spv", &flatten_draw_size);
+        auto* flatten_draw_spv = util::read_file(fs::runtime_file("./flatten_draw.spv"), &flatten_draw_size);
         auto flatten_draw_module = engine::shader::create({flatten_draw_spv, flatten_draw_size});
         flatten_draw_pipeline =
             compute::create(ComputePipelineBuilder{}.shader(flatten_draw_module).push_constant(FlattenDrawPC::size));
         free(flatten_draw_spv);
 
         uint32_t culling_size;
-        auto* culling_spv = util::read_file("./culling.spv", &culling_size);
+        auto* culling_spv = util::read_file(fs::runtime_file("./culling.spv"), &culling_size);
         auto culling_module = engine::shader::create({culling_spv, culling_size});
         culling_pipeline =
             compute::create(ComputePipelineBuilder{}.shader(culling_module).push_constant(CullingPC::size));

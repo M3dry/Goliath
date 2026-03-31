@@ -6,6 +6,7 @@
 #include "goliath/samplers.hpp"
 #include "goliath/texture.hpp"
 #include "goliath/transport2.hpp"
+#include "goliath/fs.hpp"
 #include "imgui.h"
 #include <fstream>
 #include <vulkan/vulkan_core.h>
@@ -95,13 +96,13 @@ extern "C" GameConfig GAME_INTERFACE_MAIN() {
                 state->sampler = engine::sampler::create(engine::Sampler{});
 
                 uint32_t image_vertex_spv_size;
-                auto image_vertex_spv_data = engine::util::read_file("goiview_vertex.spv", &image_vertex_spv_size);
+                auto image_vertex_spv_data = engine::util::read_file(engine::fs::runtime_file("goiview_vertex.spv"), &image_vertex_spv_size);
                 auto image_vertex_module = engine::shader::create({image_vertex_spv_data, image_vertex_spv_size});
                 free(image_vertex_spv_data);
 
                 uint32_t image_fragment_spv_size;
                 auto image_fragment_spv_data =
-                    engine::util::read_file("goiview_fragment.spv", &image_fragment_spv_size);
+                    engine::util::read_file(engine::fs::runtime_file("goiview_fragment.spv"), &image_fragment_spv_size);
                 auto image_fragment_module = engine::shader::create({image_fragment_spv_data, image_fragment_spv_size});
                 free(image_fragment_spv_data);
 

@@ -4,6 +4,7 @@
 #include "goliath/compute.hpp"
 #include "goliath/descriptor_pool.hpp"
 #include "goliath/engine.hpp"
+#include "goliath/fs.hpp"
 #include "goliath/push_constant.hpp"
 #include "goliath/rendering.hpp"
 #include "goliath/synchronization.hpp"
@@ -55,7 +56,7 @@ namespace engine::visbuffer {
                                                                  }>{});
 
         uint32_t material_count_size;
-        auto* material_count_spv = util::read_file("./material_count.spv", &material_count_size);
+        auto* material_count_spv = util::read_file(fs::runtime_file("./material_count.spv"), &material_count_size);
         auto material_count_module = shader::create({material_count_spv, material_count_size});
         state->material_count_pipeline = compute::create(ComputePipelineBuilder{}
                                                       .shader(material_count_module)
@@ -65,7 +66,7 @@ namespace engine::visbuffer {
         free(material_count_spv);
 
         uint32_t offsets_size;
-        auto* offsets_spv = util::read_file("./offsets.spv", &offsets_size);
+        auto* offsets_spv = util::read_file(fs::runtime_file("./offsets.spv"), &offsets_size);
         auto offsets_module = shader::create({offsets_spv, offsets_size});
         state->offsets_pipeline =
             compute::create(ComputePipelineBuilder{}.shader(offsets_module).push_constant(Offsets::size));
@@ -73,7 +74,7 @@ namespace engine::visbuffer {
         free(offsets_spv);
 
         uint32_t fragment_id_size;
-        auto* fragment_id_spv = util::read_file("./fragment_id.spv", &fragment_id_size);
+        auto* fragment_id_spv = util::read_file(fs::runtime_file("./fragment_id.spv"), &fragment_id_size);
         auto fragment_id_module = shader::create({fragment_id_spv, fragment_id_size});
         state->fragment_id_pipeline = compute::create(ComputePipelineBuilder{}
                                                    .shader(fragment_id_module)
