@@ -47,6 +47,10 @@ namespace engine {
             }
         };
 
+        struct LoadError {
+            gid gid;
+        };
+
         ~Textures();
 
         static Textures* make(const char* textures_directry, size_t texture_capacity = 1000) {

@@ -1,4 +1,5 @@
 #include "goliath/textures.hpp"
+#include "goliath/errors.hpp"
 #include "goliath/mspc_queue.hpp"
 #include "goliath/samplers.hpp"
 #include "goliath/thread_pool.hpp"
@@ -84,9 +85,11 @@ namespace engine {
             std::ifstream file{path, std::ios::binary | std::ios::ate};
             auto size_signed = file.tellg();
             if (size_signed < 0) {
-                printf("trying to load gid{.gen = %d, .id = %d}\n", gid.gen(), gid.id());
-                fflush(stdout);
-                assert(false && "texture somehow isn't on disk");
+                auto error = Textures::LoadError{
+                    .gid = gid,
+                };
+                errors::throw_err(errors::Textures_Load, &error);
+                return;
             }
 
             image_size = (uint32_t)size_signed - sizeof(Metadata);

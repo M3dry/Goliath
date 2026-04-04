@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
                     };
                 } else if constexpr (std::is_same_v<ErrType, engine::models::LoadError>) {
                     fn = [err]() -> bool {
-                        ImGui::Text("Model at gid{%d, %d} couldn't be retrived from disk", err.model.gen(),
+                        ImGui::Text("Model at gid{%d, %d} couldn't be retrieved from disk", err.model.gen(),
                                     err.model.id());
                         if (ImGui::Button("Remove model and all it's dependencies from project")) {
                             auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err.model);
@@ -234,6 +234,36 @@ int main(int argc, char** argv) {
 
                         if (ImGui::Button("Remove just the model")) {
                             remove_asset(err.model);
+                            return true;
+                        }
+
+                        if (ImGui::Button("Ignore")) {
+                            return true;
+                        }
+
+                        return false;
+                    };
+                } else if constexpr (std::is_same_v<ErrType, engine::Textures::LoadError>) {
+                    fn = [err]() -> bool {
+                        ImGui::Text("Texture at gid{%d, %d} couldn't be retrieved from disk", err.gid.gen(), err.gid.id());
+                        if (ImGui::Button("Remove texture and all it's dependencies")) {
+                            auto [to_remove, dep_removes] = state::dependency_graph->deep_remove(err.gid);
+
+                            for (const auto& gid : to_remove) {
+                                remove_asset(gid);
+                            }
+
+                            for (const auto& [gid, dgid] : dep_removes) {
+                                std::visit([](auto gid, auto dgid) {
+                                    printf("gid: %d %d; dgid: %d %d", gid.id(), gid.gen(), dgid.id(), dgid.gen());
+                                }, gid, dgid);
+                            }
+
+                            return true;
+                        }
+
+                        if (ImGui::Button("Remove just the texture")) {
+                            remove_asset(err.gid);
                             return true;
                         }
 
