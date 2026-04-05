@@ -306,7 +306,7 @@ namespace engine {
         glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
-        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+        //glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
         state->window =
             glfwCreateWindow(mode->width, mode->height, opts.window_name, opts.fullscreen ? monitor : nullptr, nullptr);
         VK_CHECK(glfwCreateWindowSurface(state->instance, window(), nullptr, &state->surface));

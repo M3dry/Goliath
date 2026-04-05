@@ -5,6 +5,13 @@
 
 #include <fstream>
 
+#ifdef _WIN32
+#include <filesystem>
+#include <shlobj.h> // SHGetKnownFolderPath
+#include <stdexcept>
+#include <windows.h>
+#endif
+
 namespace project {
     std::filesystem::path project_root{};
     std::filesystem::path materials{};
@@ -99,11 +106,6 @@ namespace project {
     }
 
 #ifdef _WIN32
-#include <filesystem>
-#include <shlobj.h> // SHGetKnownFolderPath
-#include <stdexcept>
-#include <windows.h>
-
     std::filesystem::path windows_known_folder(REFKNOWNFOLDERID folder_id) {
         PWSTR wide_path = nullptr;
 
@@ -147,7 +149,7 @@ namespace project {
 #ifdef __linux__
             auto path = xdg_dir("XDG_CACHE_HOME", ".cache");
 #elif _WIN32
-            path = windows_known_folder(FOLDERID_LocalAppData);
+            auto path = windows_known_folder(FOLDERID_LocalAppData);
 #endif
             path /= "goliath";
 

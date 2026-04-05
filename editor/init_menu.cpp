@@ -42,6 +42,8 @@ GameConfig init_menu() {
                 glfwSetWindowSize(engine::window(), 1000, 700);
                 glfwSetWindowAttrib(engine::window(), GLFW_RESIZABLE, GLFW_TRUE);
                 glfwSetWindowAttrib(engine::window(), GLFW_FLOATING, GLFW_TRUE);
+                glfwSetWindowAttrib(engine::window(), GLFW_DECORATED, GLFW_TRUE);
+
 
                 auto projects_file = project::global_editor_cache() / "projects.json";
                 auto j = engine::util::read_json(projects_file);
@@ -74,7 +76,7 @@ GameConfig init_menu() {
             .tick = [](void* _state, const TickService* ts, const EngineService* es) -> bool {
                 auto& state = *(InitMenuState*)_state;
                 if (state.want_save) {
-                    printf("saving to: %s %d\n", state.save_file.c_str(), selected_project.has_value());
+                    printf("saving to: %s %d\n", state.save_file.string().c_str(), selected_project.has_value());
                     std::ofstream o{state.save_file};
                     o << nlohmann::json{
                         {"names", state.project_names},
@@ -123,7 +125,7 @@ GameConfig init_menu() {
                                                                   std::chrono::system_clock::now().time_since_epoch())
                                                                   .count();
                             } else {
-                                state.project_names.emplace_back(selected_project->stem());
+                                state.project_names.emplace_back(selected_project->stem().string());
                                 state.project_paths.emplace_back(*selected_project);
                                 state.project_last_used.emplace_back(
                                     std::chrono::duration_cast<std::chrono::seconds>(
@@ -157,7 +159,7 @@ GameConfig init_menu() {
 
                             if (std::find(state.project_paths.begin(), state.project_paths.end(), *selected_project) ==
                                 state.project_paths.end()) {
-                                state.project_names.emplace_back(selected_project->stem());
+                                state.project_names.emplace_back(selected_project->stem().string());
                                 state.project_paths.emplace_back(*selected_project);
                                 state.project_last_used.emplace_back(
                                     std::chrono::duration_cast<std::chrono::seconds>(
@@ -191,7 +193,7 @@ GameConfig init_menu() {
 
                         ImGui::BeginGroup();
                         ImGui::Text("%s", state.project_names[i].c_str());
-                        ImGui::Text("%s", state.project_paths[i].c_str());
+                        ImGui::Text("%s", state.project_paths[i].string().c_str());
                         ImGui::EndGroup();
 
                         auto max = ImGui::GetItemRectMax();

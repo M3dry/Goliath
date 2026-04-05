@@ -489,7 +489,7 @@ namespace ui {
     void assets_entry_post(engine::Textures::gid gid, uint32_t ix) {
         const auto& name = **game_textures->get_name(gid);
 
-        if (ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
+        if (gid.id() != 0 && ImGui::BeginPopupContextItem("TextureEntryContextMenu")) {
             if (ImGui::MenuItem("Rename")) {
                 rename_tmp = name;
                 rename_dst = [gid](const auto& str) {
