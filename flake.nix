@@ -17,16 +17,11 @@
         devShell = pkgs.mkShell {
           nativeBuildInputs = with pkgs;
             [
-              glm
-              xxHash
-              vulkan-volk
               vulkan-headers
               vulkan-loader
               vulkan-memory-allocator
               vulkan-utility-libraries
               vulkan-validation-layers
-
-              catch2_3
 
               pkg-config
               cmake
@@ -35,8 +30,6 @@
               valgrind
               shader-slang
               shaderc
-
-              julia
 
               xorg.libX11.dev
               xorg.libXrandr.dev

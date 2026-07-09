@@ -1,5 +1,2 @@
-/build
-/.cache
-/.clangd
-/compile_commands.json
-/null.o
+.zig-cache/
+zig-out/
