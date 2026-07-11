@@ -43,16 +43,13 @@
               gtk3
 
               libxkbcommon
-            ]
-            ++ [
-              llvm.clang-tools
-              llvm.clang
-              llvm.lld
+
               pleaseKeepMyInputs
             ];
           shellHook = ''
             export CC=clang
             export CXX=clang++
+            export VK_HEADERS_XML="${pkgs.vulkan-headers}/share/vulkan/registry/vk.xml"
 
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.vulkan-loader pkgs.xorg.libX11 pkgs.xorg.libXrandr pkgs.xorg.libXcursor pkgs.xorg.libXinerama pkgs.xorg.libXi pkgs.xorg.libXext pkgs.wayland pkgs.libxkbcommon pkgs.libdecor]}"
           '';
