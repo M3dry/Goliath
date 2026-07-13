@@ -15,9 +15,16 @@ const Instance = vk.InstanceProxy;
 const Device = vk.DeviceProxy;
 
 pub const Ctx = struct {
+    pub const frames_in_flight: u32 = 2;
+
     window: *zglfw.Window,
-    window_size: struct {u32, u32},
     graphics: GraphicsCtx,
+    frames: []Frame,
+    swapchain: Swapchain,
+    curent_frame: u32 = 0,
+
+    timeline_semaphore: vk.Semaphore,
+    timeline_value: u64,
 
     pub const WindowOpts = struct {
         pub const Size = union(enum) {
@@ -51,22 +58,220 @@ pub const Ctx = struct {
         const window = try zglfw.createWindow(width, height, name, null, null);
 
         zglfw.getFramebufferSize(window, &width, &height);
-        const window_size: struct {u32, u32} = .{@intCast(width), @intCast(height)};
+        const extent: vk.Extent2D = .{
+            .width = @intCast(width),
+            .height = @intCast(height),
+        };
 
         const graphics_ctx = try GraphicsCtx.init(alloc, window);
 
-        return .{
+        const frames = try alloc.alloc(Frame, frames_in_flight);
+        errdefer alloc.free(frames);
+
+        var i: usize = 0;
+        errdefer for (frames[0..i]) |frame| frame.deinit(&graphics_ctx);
+
+        for (frames) |_| {
+            frames[i] = try Frame.init(&graphics_ctx);
+            i += 1;
+        }
+
+        const swapchain = try Swapchain.init(alloc, &graphics_ctx, extent);
+
+
+        const timeline_semaphore = try graphics_ctx.dev.createSemaphore(&vk.SemaphoreCreateInfo{
+            .p_next = &vk.SemaphoreTypeCreateInfo{
+                .initial_value = 0,
+                .semaphore_type = .timeline,
+            },
+        }, null);
+
+        return Ctx{
             .window = window,
-            .window_size = window_size,
             .graphics = graphics_ctx,
+            .frames = frames,
+            .swapchain = swapchain,
+            .timeline_semaphore = timeline_semaphore,
+            .timeline_value = 0,
         };
     }
 
     pub fn deinit(self: Ctx, alloc: Allocator) void {
+        if (self.graphics.dev.deviceWaitIdle()) {} else |_| { return; }
+
+        for (self.frames) |frame| {
+            frame.deinit(&self.graphics);
+        }
+        alloc.free(self.frames);
+
+        self.graphics.dev.destroySemaphore(self.timeline_semaphore, null);
+
+        self.swapchain.deinit(&self.graphics, alloc);
         self.graphics.deinit(alloc);
 
         self.window.destroy();
         zglfw.terminate();
+    }
+
+    pub const PrepareResult = enum {
+        skip_drawing,
+        success,
+    };
+
+    pub fn prepare_frame(self: *Ctx) !PrepareResult {
+        const frame = &self.frames[self.curent_frame];
+        _ = try self.graphics.dev.waitForFences(&[_]vk.Fence{ frame.fence }, .true, std.math.maxInt(u64));
+        try self.graphics.dev.resetFences(&[_]vk.Fence{ frame.fence });
+
+        const acquired = self.graphics.dev.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), frame.semaphore, .null_handle) catch |err| if (err == error.OutOfDateKHR) DeviceWrapper.AcquireNextImageKHRResult{
+            .result = .error_out_of_date_khr,
+            .image_index = 0,
+        } else return err;
+        if (acquired.result == .error_out_of_date_khr or acquired.result == .suboptimal_khr) {
+            self.graphics.dev.destroySemaphore(frame.semaphore, null);
+            frame.semaphore = try self.graphics.dev.createSemaphore(&.{}, null);
+            frame.acquired_swapchain = null;
+
+            self.graphics.dev.destroyFence(frame.fence, null);
+            frame.fence = try self.graphics.dev.createFence(&.{
+                .flags = .{ .signaled_bit = true },
+            }, null);
+
+            return .skip_drawing;
+        }
+
+        frame.acquired_swapchain = acquired.image_index;
+        return .success;
+    }
+
+    pub fn prepare_draw(self: Ctx) !void {
+        const frame = self.frames[self.curent_frame];
+        std.debug.assert(frame.acquired_swapchain != null);
+
+        try self.graphics.dev.resetCommandBuffer(frame.cmd_buf, .{});
+
+        try self.graphics.dev.beginCommandBuffer(frame.cmd_buf, &.{
+            .flags = .{ .one_time_submit_bit = true, },
+        });
+
+        self.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
+            .image_memory_barrier_count = 1,
+            .p_image_memory_barriers = (&vk.ImageMemoryBarrier2{
+                .src_stage_mask = .{ .all_commands_bit = true },
+                .src_access_mask = .{ .memory_write_bit = true },
+                .dst_stage_mask = .{ .all_commands_bit = true },
+                .dst_access_mask = .{ .memory_write_bit = true, .memory_read_bit = true },
+                .old_layout = .undefined,
+                .new_layout = .transfer_dst_optimal,
+                .src_queue_family_index = self.graphics.graphics_family,
+                .dst_queue_family_index = self.graphics.graphics_family,
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = vk.REMAINING_MIP_LEVELS,
+                    .base_array_layer = 0,
+                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
+                },
+                .image = self.swapchain.images[frame.acquired_swapchain.?].image,
+            })[0..1],
+        });
+    }
+
+    pub const SwapchainState = enum {
+        recreated,
+        same,
+    };
+
+    pub fn end_frame(self: *Ctx, alloc: Allocator) !SwapchainState {
+        const frame = &self.frames[self.curent_frame];
+
+        var res: vk.Result = .error_out_of_date_khr;
+        if (frame.acquired_swapchain) |acquired_image| {
+            self.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = (&vk.ImageMemoryBarrier2{
+                    .src_stage_mask = .{ .all_commands_bit = true },
+                    .src_access_mask = .{ .memory_write_bit = true },
+                    .dst_stage_mask = .{ .all_commands_bit = true },
+                    .dst_access_mask = .{ .memory_write_bit = true, .memory_read_bit = true },
+                    .old_layout = .transfer_dst_optimal,
+                    .new_layout = .present_src_khr,
+                    .src_queue_family_index = self.graphics.graphics_family,
+                    .dst_queue_family_index = self.graphics.graphics_family,
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = vk.REMAINING_MIP_LEVELS,
+                        .base_array_layer = 0,
+                        .layer_count = vk.REMAINING_ARRAY_LAYERS,
+                    },
+                    .image = self.swapchain.images[acquired_image].image,
+                })[0..1],
+            });
+
+            try self.graphics.dev.endCommandBuffer(frame.cmd_buf);
+
+            self.timeline_value += 1;
+
+            try self.graphics.dev.queueSubmit2(self.graphics.graphics_queue, (&vk.SubmitInfo2{
+                .wait_semaphore_info_count = 1,
+                .p_wait_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+                    .semaphore = frame.semaphore,
+                    .value = 0,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                })[0..1],
+                .command_buffer_info_count = 1,
+                .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
+                    .command_buffer = frame.cmd_buf,
+                    .device_mask = 0,
+                })[0..1],
+                .signal_semaphore_info_count = 2,
+                .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{
+                    .{
+                        .semaphore = self.swapchain.images[acquired_image].semaphore,
+                        .value = 0,
+                        .stage_mask = .{ .all_commands_bit = true },
+                        .device_index = 0,
+                    },
+                    .{
+                        .semaphore = self.timeline_semaphore,
+                        .value = self.timeline_value,
+                        .stage_mask = .{ .all_commands_bit = true },
+                        .device_index = 0,
+                    }
+                },
+            })[0..1], frame.fence);
+
+            const wait = (&self.swapchain.images[acquired_image].semaphore)[0..1];
+            const handles = (&self.swapchain.handle)[0..1];
+            const indices = (&acquired_image)[0..1];
+            std.log.debug("{d}, {d}, {*}, {*}, {*}", .{acquired_image, self.swapchain.images.len, wait, handles, indices});
+            res = self.graphics.dev.queuePresentKHR(self.graphics.graphics_queue, &.{
+                .wait_semaphore_count = 1,
+                .p_wait_semaphores = wait,
+                .swapchain_count = 1,
+                .p_swapchains = handles,
+                .p_image_indices = indices,
+            }) catch |err| if (err == error.OutOfDateKHR) .error_out_of_date_khr else return err;
+
+            self.curent_frame = (self.curent_frame + 1) % frames_in_flight;
+
+            frame.acquired_swapchain = null;
+        }
+
+        switch (res) {
+            .error_out_of_date_khr, .suboptimal_khr => {},
+            else => return .same,
+        }
+
+        std.log.info("hit swapchain rebuild", .{});
+        const width, const height = self.window.getFramebufferSize();
+        try self.swapchain.recreate(alloc, &self.graphics, .{
+            .width = @intCast(width),
+            .height = @intCast(height),
+        });
+        return .recreated;
     }
 };
 
@@ -341,8 +546,6 @@ const GraphicsCtx = struct {
     }
 
     pub fn deinit(self: GraphicsCtx, alloc: Allocator) void {
-        if (self.dev.deviceWaitIdle()) {} else |_| { return; }
-
         var vma_stats: vma.VmaTotalStatistics = undefined;
         vma.vmaCalculateStatistics(self.vma_alloc, &vma_stats);
         if (vma_stats.total.statistics.allocationCount != 0) {
@@ -359,5 +562,203 @@ const GraphicsCtx = struct {
 
         alloc.destroy(self.dev.wrapper);
         alloc.destroy(self.instance.wrapper);
+    }
+};
+
+const Frame = struct {
+    cmd_pool: vk.CommandPool,
+    cmd_buf: vk.CommandBuffer,
+
+    semaphore: vk.Semaphore,
+    fence: vk.Fence,
+    acquired_swapchain: ?u32,
+
+    pub fn init(gc: *const GraphicsCtx) !Frame {
+        const cmd_pool = try gc.dev.createCommandPool(&.{
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = gc.graphics_family,
+        }, null);
+
+        var cmd_buf: vk.CommandBuffer = undefined;
+        try gc.dev.allocateCommandBuffers(&.{
+            .command_pool = cmd_pool,
+            .command_buffer_count = 1,
+            .level = .primary,
+        }, (&cmd_buf)[0..1]);
+
+        const semaphore = try gc.dev.createSemaphore(&.{}, null);
+
+        const fence = try gc.dev.createFence(&.{
+            .flags = .{ .signaled_bit = true },
+        }, null);
+
+        return .{
+            .cmd_pool = cmd_pool,
+            .cmd_buf = cmd_buf,
+            .semaphore = semaphore,
+            .fence = fence,
+            .acquired_swapchain = null,
+        };
+    }
+
+    pub fn deinit(self: Frame, gc: *const GraphicsCtx) void {
+        gc.dev.destroyCommandPool(self.cmd_pool, null);
+        gc.dev.destroySemaphore(self.semaphore, null);
+        gc.dev.destroyFence(self.fence, null);
+    }
+};
+
+const Swapchain = struct {
+    const SwapImage = struct {
+        image: vk.Image,
+        view: vk.ImageView,
+        semaphore: vk.Semaphore,
+
+        pub fn init(gc: *const GraphicsCtx, img: vk.Image, format: vk.Format) !SwapImage {
+            const view = try gc.dev.createImageView(&.{
+                .image = img,
+                .view_type = .@"2d",
+                .format = format,
+                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }, null);
+            errdefer gc.dev.destroyImageView(view, null);
+
+            const semaphore = try gc.dev.createSemaphore(&vk.SemaphoreCreateInfo{}, null);
+
+            return .{
+                .image = img,
+                .view = view,
+                .semaphore = semaphore,
+            };
+        }
+
+        pub fn deinit(self: SwapImage, gc: *const GraphicsCtx) void {
+            gc.dev.destroyImageView(self.view, null);
+            gc.dev.destroySemaphore(self.semaphore, null);
+        }
+    };
+
+    handle: vk.SwapchainKHR,
+    format: vk.Format,
+    present_mode: vk.PresentModeKHR,
+    extent: vk.Extent2D,
+    images: []SwapImage,
+
+    pub fn init(alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D) !Swapchain {
+        return try initRecycle(alloc, gc, extent, .null_handle);
+    }
+
+    fn initRecycle(alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
+        const caps = try gc.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(gc.pdev, gc.surface);
+        const actual_extent = if (caps.current_extent.width != 0xFFFF_FFFF) caps.current_extent else vk.Extent2D{
+            .width = std.math.clamp(extent.width, caps.min_image_extent.width, caps.max_image_extent.width),
+            .height = std.math.clamp(extent.height, caps.min_image_extent.height, caps.max_image_extent.height),
+        };
+
+        if (actual_extent.width == 0 or actual_extent.height == 0) {
+            return error.InvalidSurfaceDimensions;
+        }
+
+        const preferred_format = vk.SurfaceFormatKHR{
+            .format = .b8g8r8_srgb,
+            .color_space = .srgb_nonlinear_khr,
+        };
+        const surface_formats = try gc.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(gc.pdev, gc.surface, alloc);
+        defer alloc.free(surface_formats);
+
+        const surface_format = for (surface_formats) |sf| {
+            if (std.meta.eql(sf, preferred_format)) {
+                break preferred_format;
+            }
+        } else surface_formats[0];
+
+        const present_modes = try gc.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(gc.pdev, gc.surface, alloc);
+        defer alloc.free(present_modes);
+
+        const preferred_modes = [_]vk.PresentModeKHR{
+            .mailbox_khr,
+            .immediate_khr,
+        };
+
+        const present_mode: vk.PresentModeKHR = for (preferred_modes) |mode| {
+            if (std.mem.indexOfScalar(vk.PresentModeKHR, present_modes, mode) != null) {
+                break mode;
+            }
+        } else .fifo_khr;
+
+        var image_count = caps.min_image_count + 1;
+        if (caps.max_image_count > 0) {
+            image_count = @min(image_count, caps.max_image_count);
+        }
+
+        const handle = gc.dev.createSwapchainKHR(&.{
+            .surface = gc.surface,
+            .min_image_count = image_count,
+            .image_format = surface_format.format,
+            .image_color_space = surface_format.color_space,
+            .image_extent = actual_extent,
+            .image_array_layers = 1,
+            .image_usage = .{ .transfer_dst_bit = true, .color_attachment_bit = true },
+            .image_sharing_mode = .exclusive,
+            .pre_transform = caps.current_transform,
+            .composite_alpha = .{ .opaque_bit_khr = true },
+            .present_mode = present_mode,
+            .clipped = .true,
+            .old_swapchain = old_handle,
+        }, null) catch return error.SwapchainCreationFailed;
+        errdefer gc.dev.destroySwapchainKHR(handle, null);
+
+        if (old_handle != .null_handle) {
+            gc.dev.destroySwapchainKHR(old_handle, null);
+        }
+
+        const images = try gc.dev.getSwapchainImagesAllocKHR(handle, alloc);
+        defer alloc.free(images);
+
+        const swap_images = try alloc.alloc(SwapImage, images.len);
+        errdefer alloc.free(swap_images);
+
+        var i: usize = 0;
+        errdefer for (swap_images[0..i]) |si| si.deinit(gc);
+
+        for (images) |image| {
+            swap_images[i] = try SwapImage.init(gc, image, surface_format.format);
+            i += 1;
+        }
+
+        return .{
+            .handle = handle,
+            .format = surface_format.format,
+            .present_mode = present_mode,
+            .extent = actual_extent,
+            .images = swap_images,
+        };
+    }
+
+    pub fn deinitExceptSwapchain(self: Swapchain, gc: *const GraphicsCtx, alloc: Allocator) void {
+        for (self.images) |image| {
+            image.deinit(gc);
+        }
+        alloc.free(self.images);
+    }
+
+    pub fn deinit(self: Swapchain, gc: *const GraphicsCtx, alloc: Allocator) void {
+        self.deinitExceptSwapchain(gc, alloc);
+        gc.dev.destroySwapchainKHR(self.handle, null);
+    }
+
+    pub fn recreate(self: *Swapchain, alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
+        try gc.dev.queueWaitIdle(gc.graphics_queue);
+
+        self.deinitExceptSwapchain(gc, alloc);
+
+        self.* = try initRecycle(alloc, gc, extent, self.handle);
     }
 };

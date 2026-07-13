@@ -11,5 +11,14 @@ pub fn main(init: std.process.Init) !void {
 
     while (!ctx.window.shouldClose()) {
         base.zglfw.pollEvents();
+
+        if (try ctx.prepare_frame() == .success) {
+            try ctx.prepare_draw();
+
+        }
+
+        if (try ctx.end_frame(gpa) == .recreated) {
+            // rebuild user frame structures
+        }
     }
 }
