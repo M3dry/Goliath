@@ -51,11 +51,22 @@ pub fn build(b: *std.Build) void {
         .root_module = vma_mod,
     });
 
+    const zgui = b.dependency("zgui", .{
+        .shared = false,
+        .with_implot = true,
+        .backend = .glfw_vulkan,
+        .vulkan_include = "",
+    });
+    const zgui_imgui = zgui.artifact("imgui");
+    zgui_imgui.root_module.addSystemIncludePath(vk_headers_dep.path("include"));
+    zgui_imgui.root_module.addCMacro("GLFW_INCLUDE_NONE", "");
+
     const mod = b.addModule("base", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "vulkan", .module = vulkan_mod },
             .{ .name = "zglfw", .module = zglfw_mod },
+            .{ .name = "zgui", .module = zgui.module("root") },
         },
         .target = target,
         .optimize = optimize,
@@ -65,6 +76,8 @@ pub fn build(b: *std.Build) void {
 
     mod.linkLibrary(vma_lib);
     mod.addIncludePath(vma_include_path);
+
+    mod.linkLibrary(zgui_imgui);
 
     const check_obj = b.addObject(.{
         .name = "check",
