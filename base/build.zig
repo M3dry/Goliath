@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
     const vma_include_path = vma_dep.path("include");
 
     const write_files = b.addWriteFiles();
-    const vma_c_file = write_files.add("vma.cpp", 
+    const vma_c_file = write_files.add("vma.cpp",
         \\#define VMA_IMPLEMENTATION
         \\#define VMA_STATIC_VULKAN_FUNCTIONS 0
         \\#include <vk_mem_alloc.h>
@@ -79,6 +79,12 @@ pub fn build(b: *std.Build) void {
 
     mod.linkLibrary(zgui_imgui);
 
+    // Shader compilation
+    if (b.option(std.Build.LazyPath, "shader_src", "Path to shader source directory")) |shader_src| {
+        const mod_name = b.option([]const u8, "shader_mod_name", "Shader module name") orelse "shaders";
+        compileAndEmbedShaders(b, shader_src, mod_name);
+    }
+
     const check_obj = b.addObject(.{
         .name = "check",
         .root_module = mod,
@@ -96,4 +102,22 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run base tests");
     test_step.dependOn(&run_mod_tests.step);
+}
+
+fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod_name: []const u8) void {
+    const src_path = shader_src.getPath(b);
+
+    const gen_tool = b.addExecutable(.{
+        .name = "gen_shaders",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("gen_shaders.zig"),
+            .target = b.resolveTargetQuery(.{}),
+        }),
+    });
+
+    const run_gen = b.addRunArtifact(gen_tool);
+    run_gen.addArg(src_path);
+    const out_lp = run_gen.addOutputFileArg("shaders.zig");
+
+    _ = b.addModule(mod_name, .{ .root_source_file = out_lp });
 }

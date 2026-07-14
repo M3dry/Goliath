@@ -2,7 +2,10 @@ const std = @import("std");
 const base = @import("base");
 const zgui = base.zgui;
 
+const shaders = @import("shaders");
+
 pub fn main(init: std.process.Init) !void {
+
     const gpa = init.gpa;
     var ctx = try base.Ctx.init(gpa, "Demo", .{
         .resizable = false,
@@ -18,6 +21,16 @@ pub fn main(init: std.process.Init) !void {
 
     var imgui = try base.imgui.ImguiState.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
+
+    var gbuf = try base.Buffer.init(&ctx, .graphics, "Test buffer", @sizeOf(i64)*100, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, false);
+    defer gbuf.deinit(&ctx);
+
+    var tex_pool = try base.TexturePool.init(ctx.graphics.dev, 1000);
+    defer tex_pool.deinit(ctx.graphics.dev);
+
+    const shader = shaders.get(.compute_culling);
+    const shader_mod = try base.ShaderModule.init(&ctx, shader, .{ .compute_bit = true });
+    _ = shader_mod;
 
     var timer = base.timing.FrameTimer.init(1.0 / 60.0);
     while (!ctx.window.shouldClose()) {
