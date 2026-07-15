@@ -10,6 +10,7 @@ var vk_loader_get_proc: vk.PfnGetInstanceProcAddr = undefined;
 pub const ImguiState = struct {
     descriptor_pool: vk.DescriptorPool,
     api_version: u32,
+    enabled: bool = true,
 
     pub fn init(allocator: Allocator, ctx: anytype) !ImguiState {
         const dev = ctx.graphics.dev;
@@ -66,15 +67,26 @@ pub const ImguiState = struct {
         dev.destroyDescriptorPool(self.descriptor_pool, null);
     }
 
+    pub fn enable(self: *ImguiState, v: bool) void {
+        self.enabled = v;
+        if (!v) zgui.setWindowFocus(null);
+    }
+
     pub fn newFrame(self: *ImguiState, dt: f32, fb_width: u32, fb_height: u32) void {
-        _ = self;
+        if (!self.enabled) {
+            zgui.io.addMousePositionEvent(-std.math.floatMax(f32), -std.math.floatMax(f32));
+        }
         zgui.io.setDeltaTime(dt);
         zgui.backend.newFrame(fb_width, fb_height);
+        if (!self.enabled) {
+            zgui.setNextFrameWantCaptureKeyboard(false);
+            zgui.setNextFrameWantCaptureMouse(false);
+        }
     }
 
     pub fn render(self: *ImguiState, ctx: anytype) void {
         _ = self;
-        const frame = ctx.frames[ctx.curent_frame];
+        const frame = ctx.frames[ctx.current_frame];
         const cmd_buf = frame.cmd_buf;
         const dev = ctx.graphics.dev;
         const qf = ctx.graphics.graphics_family;

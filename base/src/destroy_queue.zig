@@ -12,10 +12,12 @@ pub const DestroyQueue = struct {
 
     alloc: std.mem.Allocator,
     frames: [2]std.ArrayListUnmanaged(Entry) = .{ .empty, .empty },
+    current_frame: u32,
 
-    pub fn init(alloc: std.mem.Allocator) DestroyQueue {
+    pub fn init(alloc: std.mem.Allocator, current_frame: u32) DestroyQueue {
         return .{
             .alloc = alloc,
+            .current_frame = current_frame,
         };
     }
 
@@ -33,24 +35,24 @@ pub const DestroyQueue = struct {
         }
     }
 
-    pub fn enqueueBuffer(self: *DestroyQueue, handle: vk.Buffer, allocation: vma.VmaAllocation, frame_index: u32) void {
-        self.frames[frame_index].append(self.alloc, .{ .buffer = .{ .handle = handle, .allocation = allocation } }) catch {};
+    pub fn enqueueBuffer(self: *DestroyQueue, handle: vk.Buffer, allocation: vma.VmaAllocation) void {
+        self.frames[self.current_frame].append(self.alloc, .{ .buffer = .{ .handle = handle, .allocation = allocation } }) catch {};
     }
 
-    pub fn enqueueImage(self: *DestroyQueue, handle: vk.Image, allocation: vma.VmaAllocation, frame_index: u32) void {
-        self.frames[frame_index].append(self.alloc, .{ .image = .{ .handle = handle, .allocation = allocation } }) catch {};
+    pub fn enqueueImage(self: *DestroyQueue, handle: vk.Image, allocation: vma.VmaAllocation) void {
+        self.frames[self.current_frame].append(self.alloc, .{ .image = .{ .handle = handle, .allocation = allocation } }) catch {};
     }
 
-    pub fn enqueueImageView(self: *DestroyQueue, view: vk.ImageView, frame_index: u32) void {
-        self.frames[frame_index].append(self.alloc, .{ .image_view = view }) catch {};
+    pub fn enqueueImageView(self: *DestroyQueue, view: vk.ImageView) void {
+        self.frames[self.current_frame].append(self.alloc, .{ .image_view = view }) catch {};
     }
 
-    pub fn enqueueSampler(self: *DestroyQueue, sampler: vk.Sampler, frame_index: u32) void {
-        self.frames[frame_index].append(self.alloc, .{ .sampler = sampler }) catch {};
+    pub fn enqueueSampler(self: *DestroyQueue, sampler: vk.Sampler) void {
+        self.frames[self.current_frame].append(self.alloc, .{ .sampler = sampler }) catch {};
     }
 
-    pub fn flush(self: *DestroyQueue, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy, frame_index: u32) void {
-        const frame = &self.frames[frame_index];
+    pub fn flush(self: *DestroyQueue, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy) void {
+        const frame = &self.frames[self.current_frame];
         for (frame.items) |entry| {
             switch (entry) {
                 .buffer => |b| vma.vmaDestroyBuffer(vma_alloc, @ptrFromInt(@intFromEnum(b.handle)), b.allocation),
@@ -60,5 +62,9 @@ pub const DestroyQueue = struct {
             }
         }
         frame.clearRetainingCapacity();
+    }
+
+    pub fn update_current_frame(self: *DestroyQueue, frame: u32) void {
+        self.current_frame = frame;
     }
 };

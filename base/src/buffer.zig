@@ -1,8 +1,8 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
-const Ctx = @import("root.zig").Ctx;
 const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
+const DestroyQueue = @import("destroy_queue.zig").DestroyQueue;
 
 pub const Buffer = struct {
     handle: vk.Buffer = .null_handle,
@@ -14,7 +14,7 @@ pub const Buffer = struct {
     coherent: bool = false,
 
     pub fn init(
-        ctx: *const Ctx,
+        gc: *const GraphicsCtx,
         queue_type: GraphicsCtx.QueueType,
         name: [:0]const u8,
         size_: vk.DeviceSize,
@@ -31,7 +31,7 @@ pub const Buffer = struct {
             .usage = usage_with_address,
             .sharing_mode = .exclusive,
             .queue_family_index_count = 1,
-            .p_queue_family_indices = (&ctx.graphics.queueFamilyFromType(queue_type))[0..1],
+            .p_queue_family_indices = (&gc.queueFamilyFromType(queue_type))[0..1],
         };
 
         var alloc_info = vma.VmaAllocationCreateInfo{
@@ -45,7 +45,7 @@ pub const Buffer = struct {
 
         var alloc_info_out: vma.VmaAllocationInfo = undefined;
         const res = vma.vmaCreateBuffer(
-            ctx.graphics.vma_alloc,
+            gc.vma_alloc,
             @ptrCast(&buffer_info),
             &alloc_info,
             @ptrCast(&buf.handle),
@@ -57,7 +57,7 @@ pub const Buffer = struct {
         const address_info = vk.BufferDeviceAddressInfo{
             .buffer = buf.handle,
         };
-        buf.address = ctx.graphics.dev.getBufferDeviceAddress(&address_info);
+        buf.address = gc.dev.getBufferDeviceAddress(&address_info);
 
         buf.size = size_;
         if (host) {
@@ -65,11 +65,11 @@ pub const Buffer = struct {
             buf.mapped_len = @intCast(size_);
 
             var props: u32 = undefined;
-            vma.vmaGetAllocationMemoryProperties(ctx.graphics.vma_alloc, buf.allocation, &props);
+            vma.vmaGetAllocationMemoryProperties(gc.vma_alloc, buf.allocation, &props);
             buf.coherent = (props & vma.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
         }
 
-        try ctx.graphics.dev.setDebugUtilsObjectNameEXT(&.{
+        try gc.dev.setDebugUtilsObjectNameEXT(&.{
             .object_type = .buffer,
             .object_handle = @intFromEnum(buf.handle),
             .p_object_name = name,
@@ -78,9 +78,9 @@ pub const Buffer = struct {
         return buf;
     }
 
-    pub fn deinit(self: *Buffer, ctx: *Ctx) void {
+    pub fn deinit(self: *Buffer, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
-            ctx.destroy_queue.enqueueBuffer(self.handle, self.allocation, ctx.curent_frame);
+            destroy_queue.enqueueBuffer(self.handle, self.allocation);
             self.handle = .null_handle;
             self.allocation = null;
         }

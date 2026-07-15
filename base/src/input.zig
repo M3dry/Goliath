@@ -215,6 +215,11 @@ pub const InputState = struct {
         return .{ .x = self.mouse_delta_x, .y = self.mouse_delta_y };
     }
 
+    pub fn setMousePos(self: *InputState, x: f64, y: f64) void {
+        self.mouse_x = x;
+        self.mouse_y = y;
+    }
+
     pub fn scrollDelta(self: *const InputState) struct { x: f64, y: f64 } {
         return .{ .x = self.scroll_x, .y = self.scroll_y };
     }

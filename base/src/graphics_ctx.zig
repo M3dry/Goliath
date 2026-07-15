@@ -50,7 +50,7 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     return .false;
 }
 
-fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, required_device_extensions: []const [*:0]const u8) !?struct {vk.PhysicalDevice, vk.PhysicalDeviceProperties, u32, u32} {
+fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, required_device_extensions: []const [*:0]const u8) !?struct {vk.PhysicalDevice, vk.PhysicalDeviceProperties, u32, u32, bool} {
     const propsv = try instance.enumerateDeviceExtensionPropertiesAlloc(pdev, null, alloc);
     defer alloc.free(propsv);
 
@@ -73,30 +73,30 @@ fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, 
     const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(pdev, alloc);
     defer alloc.free(families);
 
-    var graphics_family: ?u32 = null;
-    var transport_family: ?u32 = null;
-
-    for (families, 0..) |propertis, i| {
+    const graphics_family: u32 = for (families, 0..) |props, i| {
         const family: u32 = @intCast(i);
-
-        if (graphics_family == null and propertis.queue_flags.graphics_bit and (try instance.getPhysicalDeviceSurfaceSupportKHR(pdev, family, surface)) == .true) {
-            graphics_family = family;
+        if (props.queue_flags.graphics_bit and (try instance.getPhysicalDeviceSurfaceSupportKHR(pdev, family, surface)) == .true) {
+            break family;
         }
+    } else return null;
 
-        if ((transport_family == null or transport_family == graphics_family) and propertis.queue_flags.transfer_bit) {
-            transport_family = family;
+    const transport_family: u32 = for (families, 0..) |props, i| {
+        const family: u32 = @intCast(i);
+        if (props.queue_flags.transfer_bit) {
+            if (family != graphics_family) {
+                break family;
+            }
         }
-    }
+    } else graphics_family;
 
-    if (graphics_family == null or transport_family == null) {
-        return null;
-    }
+    const has_dedicated_transport = transport_family != graphics_family;
 
     return .{
         pdev,
         instance.getPhysicalDeviceProperties(pdev),
-        graphics_family.?,
-        transport_family.?,
+        graphics_family,
+        transport_family,
+        has_dedicated_transport,
     };
 }
 
@@ -118,6 +118,7 @@ pub const GraphicsCtx = struct {
 
     transport_family: u32,
     transport_queue: vk.Queue,
+    has_dedicated_transport: bool,
 
     surface: vk.SurfaceKHR,
 
@@ -134,8 +135,8 @@ pub const GraphicsCtx = struct {
         defer extensions.deinit(alloc);
 
         try extensions.append(alloc, vk.extensions.ext_debug_utils.name);
-        try extensions.append(alloc, vk.extensions.khr_portability_enumeration.name);
-        try extensions.append(alloc, vk.extensions.khr_get_physical_device_properties_2.name);
+        // try extensions.append(alloc, vk.extensions.khr_portability_enumeration.name);
+        // try extensions.append(alloc, vk.extensions.khr_get_physical_device_properties_2.name);
 
         const glfw_exts = try zglfw.getRequiredInstanceExtensions();
         try extensions.appendSlice(alloc, glfw_exts);
@@ -186,7 +187,7 @@ pub const GraphicsCtx = struct {
 
         const pdevs = try inst.enumeratePhysicalDevicesAlloc(alloc);
         defer alloc.free(pdevs);
-        const pdev, const props, const graphics_family, const transport_family = for (pdevs) |pdev| {
+        const pdev, const props, const graphics_family, const transport_family, const has_dedicated_transport = for (pdevs) |pdev| {
             if (try checkSuitable(alloc, inst, pdev, surface, &required_device_extensions)) |candidate| {
                 break candidate;
             }
@@ -281,6 +282,7 @@ pub const GraphicsCtx = struct {
 
             .transport_family = transport_family,
             .transport_queue = device.getDeviceQueue(transport_family, 0),
+            .has_dedicated_transport = has_dedicated_transport,
 
             .surface = surface,
 

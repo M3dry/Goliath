@@ -1,19 +1,133 @@
 const std = @import("std");
 const base = @import("base");
 const zgui = base.zgui;
+const zm = base.zmath;
 
 const shaders = @import("shaders");
+
+fn generateCheckerboard(allocator: std.mem.Allocator, width: u32, height: u32, cell_size: u32) !base.image_loader.ImageData {
+    const pixels = try allocator.alloc(u8, (width * height * 4));
+    errdefer allocator.free(pixels);
+
+    const colors = [_]u8{ 0xFF, 0xCC, 0x88, 0xFF, 0x44, 0x22, 0x11, 0xFF };
+    for (0..height) |y| {
+        for (0..width) |x| {
+            const cx = x / cell_size;
+            const cy = y / cell_size;
+            const ci = @as(usize, (cx + cy) % 2) * 4;
+            const i = (y * width + x) * 4;
+            pixels[i + 0] = colors[ci + 0];
+            pixels[i + 1] = colors[ci + 1];
+            pixels[i + 2] = colors[ci + 2];
+            pixels[i + 3] = colors[ci + 3];
+        }
+    }
+
+    return .{
+        .pixels = pixels,
+        .width = width,
+        .height = height,
+    };
+}
 
 pub fn main(init: std.process.Init) !void {
 
     const gpa = init.gpa;
+    const render_extent: base.vk.Extent2D = .{ .width = 1920, .height = 1080 };
+    const render_format: base.vk.Format = .r32g32b32a32_sfloat;
     var ctx = try base.Ctx.init(gpa, "Demo", .{
         .resizable = false,
         .size = .fullscreen,
-        .render_extent = .{ .width = 1920, .height = 1080 },
+        .render_extent = render_extent,
         .blit_strategy = .letterbox,
+        .render_format = render_format,
     });
     defer ctx.deinit(gpa);
+
+    var transport: base.Transport = undefined;
+    try transport.init(&ctx.graphics, gpa);
+    defer transport.deinit(&ctx.graphics);
+
+    const vertex_data = [_]@Vector(4, f32){
+        @Vector(4, f32){ -0.5, -0.5, 0.0, 1.0 },
+        @Vector(4, f32){ 0.5, -0.5, 0.0, 1.0 },
+        @Vector(4, f32){ 0.0, 0.5, 0.0, 1.0 },
+    };
+    var vertex_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Triangle vertices", @sizeOf(@TypeOf(vertex_data)), .{ .vertex_buffer_bit = true, .transfer_dst_bit = true }, false);
+    defer vertex_buf.deinitNow(ctx.graphics.vma_alloc);
+
+    const vertex_ticket = transport.uploadBuffer(
+        true,
+        std.mem.sliceAsBytes(&vertex_data),
+        null,
+        vertex_buf.handle,
+        0,
+        .{ .vertex_input_bit = true },
+        .{ .memory_read_bit = true },
+    );
+    while (!transport.isReady(vertex_ticket)) {
+        transport.drain(&ctx.graphics);
+        std.Thread.yield() catch {};
+    }
+
+    const tex_w = 256;
+    const tex_h = 256;
+    var texture_data = try generateCheckerboard(gpa, tex_w, tex_h, 32);
+    defer texture_data.deinit(gpa);
+
+    var texture_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "checkerboard", .{
+        .format = .r8g8b8a8_srgb,
+        .extent = .{ .width = tex_w, .height = tex_h },
+        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
+    });
+    defer texture_image.deinitNow(ctx.graphics.vma_alloc);
+
+    const texture_ticket = transport.uploadImage(
+        true,
+        .r8g8b8a8_srgb,
+        .{ .width = tex_w, .height = tex_h, .depth = 1 },
+        texture_data.pixels,
+        null,
+        texture_image.handle,
+        .{
+            .aspect_mask = .{ .color_bit = true },
+            .mip_level = 0,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+        .{ .x = 0, .y = 0, .z = 0 },
+        .undefined,
+        .read_only_optimal,
+        .{ .fragment_shader_bit = true },
+        .{ .shader_read_bit = true },
+    );
+    while (!transport.isReady(texture_ticket)) {
+        transport.drain(&ctx.graphics);
+        std.Thread.yield() catch {};
+    }
+
+    var texture_view = try base.ImageView.init(&ctx.graphics, .{
+        .image = texture_image.handle,
+        .format = .r8g8b8a8_srgb,
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    });
+    defer texture_view.deinitNow(ctx.graphics.dev);
+
+    var sampler = try base.Sampler.init(&ctx.graphics, .{
+        .mag_filter = .linear,
+        .min_filter = .linear,
+        .mipmap_mode = .linear,
+        .address_mode_u = .repeat,
+        .address_mode_v = .repeat,
+        .address_mode_w = .repeat,
+    });
+    defer sampler.deinitNow(&ctx.graphics);
 
     var input = base.input.InputState{};
     input.init(ctx.window);
@@ -22,16 +136,58 @@ pub fn main(init: std.process.Init) !void {
     var imgui = try base.imgui.ImguiState.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
-    var gbuf = try base.Buffer.init(&ctx, .graphics, "Test buffer", @sizeOf(i64)*100, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, false);
-    defer gbuf.deinit(&ctx);
+    const vert = shaders.get(.vertex_test);
+    const vert_mod = try base.ShaderModule.init(&ctx, vert);
+    defer vert_mod.deinit(&ctx);
 
-    var tex_pool = try base.TexturePool.init(ctx.graphics.dev, 1000);
-    defer tex_pool.deinit(ctx.graphics.dev);
+    const frag = shaders.get(.fragment_test);
+    const frag_mod = try base.ShaderModule.init(&ctx, frag);
+    defer frag_mod.deinit(&ctx);
 
-    const shader = shaders.get(.compute_culling);
-    const shader_mod = try base.ShaderModule.init(&ctx, shader, .{ .compute_bit = true });
-    _ = shader_mod;
+    const set_layout = try ctx.graphics.dev.createDescriptorSetLayout(&.{
+        .flags = .{ .update_after_bind_pool_bit = true },
+        .binding_count = 1,
+        .p_bindings = &.{
+            base.vk.DescriptorSetLayoutBinding{
+                .binding = 0,
+                .descriptor_type = .combined_image_sampler,
+                .descriptor_count = 1,
+                .stage_flags = .{ .fragment_bit = true },
+                .p_immutable_samplers = null,
+            },
+        },
+    }, null);
+    defer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
 
+    const PC = struct {
+        vp: zm.Mat,
+        vertex_buffer_addr: u64,
+    };
+
+    var pipeline = try base.GraphicsPipeline.init(&ctx, .{
+        .vertex = vert_mod,
+        .fragment = frag_mod,
+        .set_layouts = &.{set_layout},
+        .color_attachments = &.{.{ .format = render_format }},
+        .push_constant_size = @intCast(base.PushConstant.size(PC)),
+    });
+    defer pipeline.deinit(&ctx);
+
+    const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
+    var cam = base.Camera.init(
+        zm.f32x4(0, 0, -2, 1),
+        0,
+        0,
+        std.math.pi / 4.0,
+        aspect,
+        0.01,
+        100.0,
+    );
+
+    var mouse_captured = false;
+    var camera_speed: f32 = 2.0;
+
+    defer ctx.graphics.dev.deviceWaitIdle() catch {};
     var timer = base.timing.FrameTimer.init(1.0 / 60.0);
     while (!ctx.window.shouldClose()) {
         timer.tick();
@@ -40,59 +196,49 @@ pub fn main(init: std.process.Init) !void {
         if (try ctx.prepare_frame() == .success) {
             try ctx.prepare_draw();
 
-            const win_size = ctx.window.getSize();
-            imgui.newFrame(@floatCast(timer.frame_dt), @intCast(win_size[0]), @intCast(win_size[1]));
+            imgui.newFrame(@floatCast(timer.frame_dt), ctx.swapchain.extent.width, ctx.swapchain.extent.height);
 
             while (timer.shouldUpdate()) {
                 timer.consume();
                 input.update(.{
-                    .keyboard = imgui.wantCaptureKeyboard(),
-                    .mouse = imgui.wantCaptureMouse(),
+                    .keyboard = !mouse_captured and imgui.wantCaptureKeyboard(),
+                    .mouse = !mouse_captured and imgui.wantCaptureMouse(),
                 });
-
-                if (input.justPressed(.space)) {
-                    std.log.info("space pressed", .{});
-                }
-                if (input.justReleased(.q)) {
-                    std.log.info("q released", .{});
-                }
-                if (input.isRepeated(.a)) {
-                    std.log.info("a repeating", .{});
-                }
-                if (input.justPressed(.w)) {
-                    std.log.info("w pressed, mods: {any}", .{input.justPressedWith(.w).?});
-                }
-                if (input.anyJustPressed()) |key| {
-                    std.log.info("any key pressed: {s}", .{@tagName(key)});
-                }
-                if (input.anyKeyDown()) {
-                    std.log.info("some key is held", .{});
-                }
-                const pos = input.mousePos();
-                const delta = input.mouseDelta();
-                if (delta.x != 0 or delta.y != 0) {
-                    std.log.info("mouse pos=({d:.1},{d:.1}) delta=({d:.1},{d:.1})", .{ pos.x, pos.y, delta.x, delta.y });
-                }
-                const scroll = input.scrollDelta();
-                if (scroll.x != 0 or scroll.y != 0) {
-                    std.log.info("scroll ({d:.1},{d:.1})", .{ scroll.x, scroll.y });
-                }
-                if (input.mouseJustPressed(.left)) {
-                    std.log.info("left mouse pressed", .{});
-                }
-                if (input.mouseJustPressed(.right)) {
-                    std.log.info("right mouse pressed", .{});
-                }
-                if (input.mouseJustReleased(.middle)) {
-                    std.log.info("middle mouse released", .{});
-                }
-                for (input.charEvents()) |cp| {
-                    var buf: [4]u8 = undefined;
-                    const len = std.unicode.utf8Encode(cp, &buf) catch continue;
-                    std.log.info("char input: {s}", .{buf[0..len]});
-                }
-                input.clearCharEvents();
             }
+
+            if (input.mouseJustPressed(.right)) {
+                mouse_captured = true;
+                imgui.enable(false);
+                try ctx.window.setInputMode(.cursor, .disabled);
+                if (base.zglfw.rawMouseMotionSupported()) {
+                    try ctx.window.setInputMode(.raw_mouse_motion, true);
+                }
+            }
+            if (input.justPressed(.escape)) {
+                mouse_captured = false;
+                imgui.enable(true);
+                ctx.window.setInputMode(.cursor, .normal) catch {};
+                const pos = ctx.window.getCursorPos();
+                input.setMousePos(pos[0], pos[1]);
+            }
+
+            if (mouse_captured) {
+                const m = input.mouseDelta();
+                cam.rotate(@floatCast(m.x * 0.001), @floatCast(-m.y * 0.001));
+
+                const scroll = input.scrollDelta();
+                camera_speed *= @as(f32, @floatCast(1.0 + scroll.y * 0.1));
+                camera_speed = std.math.clamp(camera_speed, 0.1, 100.0);
+            }
+
+            const dt: f32 = @floatCast(timer.frame_dt);
+            const speed = camera_speed * dt;
+            if (input.isDown(.w)) cam.translate(cam.forward() * @as(zm.Vec, @splat(speed)));
+            if (input.isDown(.s)) cam.translate(cam.forward() * @as(zm.Vec, @splat(-speed)));
+            if (input.isDown(.a)) cam.translate(cam.right() * @as(zm.Vec, @splat(-speed)));
+            if (input.isDown(.d)) cam.translate(cam.right() * @as(zm.Vec, @splat(speed)));
+            if (input.isDown(.q)) cam.translate(cam.up() * @as(zm.Vec, @splat(-speed)));
+            if (input.isDown(.e)) cam.translate(cam.up() * @as(zm.Vec, @splat(speed)));
 
             zgui.showDemoWindow(null);
 
@@ -102,20 +248,56 @@ pub fn main(init: std.process.Init) !void {
             }
             zgui.end();
 
-            const frame = ctx.frames[ctx.curent_frame];
-            const qf = ctx.graphics.graphics_family;
+            const frame = ctx.frames[ctx.current_frame];
+            const dp = ctx.descriptorPool();
+
+            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
+            dp.beginUpdate(set_id);
+            dp.updateSampledImage(0, .read_only_optimal, texture_view.handle, sampler.handle);
+            dp.endUpdate(&ctx.graphics.dev);
 
             const rt = ctx.renderTarget();
-            {
-                const barrier = base.vk.ImageMemoryBarrier2{
+            ctx.graphics.dev.cmdBeginRendering(frame.cmd_buf, &.{
+                .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
+                .layer_count = 1,
+                .view_mask = 0,
+                .color_attachment_count = 1,
+                .p_color_attachments = (&base.vk.RenderingAttachmentInfo{
+                    .image_view = rt.view,
+                    .image_layout = .color_attachment_optimal,
+                    .resolve_mode = .{},
+                    .resolve_image_layout = .undefined,
+                    .load_op = .clear,
+                    .store_op = .store,
+                    .clear_value = .{ .color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } },
+                })[0..1],
+            });
+
+            cam.update();
+
+            var pc_buf: [base.PushConstant.size(PC)]u8 = undefined;
+            base.PushConstant.write(PC, &pc_buf, .{ .vp = (cam.view_projection), .vertex_buffer_addr = vertex_buf.address });
+
+            dp.bindSet(frame.cmd_buf, &ctx.graphics.dev, set_id, .graphics, pipeline.layout, 0);
+            pipeline.bind(&ctx.graphics.dev, frame.cmd_buf);
+            pipeline.draw(&ctx.graphics.dev, frame.cmd_buf, .{
+                .push_constant = pc_buf[0..],
+                .vertex_count = 3,
+            });
+
+            ctx.graphics.dev.cmdEndRendering(frame.cmd_buf);
+
+            ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = (&base.vk.ImageMemoryBarrier2{
                     .src_stage_mask = .{ .color_attachment_output_bit = true },
                     .src_access_mask = .{ .color_attachment_write_bit = true, .color_attachment_read_bit = true },
-                    .dst_stage_mask = .{ .all_transfer_bit = true },
-                    .dst_access_mask = .{ .transfer_read_bit = true },
+                    .dst_stage_mask = .{ .color_attachment_output_bit = true },
+                    .dst_access_mask = .{ .color_attachment_write_bit = true, .color_attachment_read_bit = true },
                     .old_layout = .color_attachment_optimal,
-                    .new_layout = .transfer_dst_optimal,
-                    .src_queue_family_index = qf,
-                    .dst_queue_family_index = qf,
+                    .new_layout = .color_attachment_optimal,
+                    .src_queue_family_index = ctx.graphics.graphics_family,
+                    .dst_queue_family_index = ctx.graphics.graphics_family,
                     .subresource_range = .{
                         .aspect_mask = .{ .color_bit = true },
                         .base_mip_level = 0,
@@ -124,51 +306,31 @@ pub fn main(init: std.process.Init) !void {
                         .layer_count = base.vk.REMAINING_ARRAY_LAYERS,
                     },
                     .image = rt.image,
-                };
-                ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
-                    .image_memory_barrier_count = 1,
-                    .p_image_memory_barriers = (&barrier)[0..1],
-                });
-            }
+                })[0..1],
+            });
 
-            ctx.graphics.dev.cmdClearColorImage(
-                frame.cmd_buf,
-                rt.image,
-                .transfer_dst_optimal,
-                &base.vk.ClearColorValue{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } },
-                (&base.vk.ImageSubresourceRange{
+            const barrier = base.vk.ImageMemoryBarrier2{
+                .src_stage_mask = .{ .color_attachment_output_bit = true },
+                .src_access_mask = .{ .color_attachment_write_bit = true },
+                .dst_stage_mask = .{ .all_transfer_bit = true },
+                .dst_access_mask = .{ .transfer_read_bit = true },
+                .old_layout = .color_attachment_optimal,
+                .new_layout = .transfer_src_optimal,
+                .src_queue_family_index = ctx.graphics.graphics_family,
+                .dst_queue_family_index = ctx.graphics.graphics_family,
+                .subresource_range = .{
                     .aspect_mask = .{ .color_bit = true },
                     .base_mip_level = 0,
                     .level_count = base.vk.REMAINING_MIP_LEVELS,
                     .base_array_layer = 0,
                     .layer_count = base.vk.REMAINING_ARRAY_LAYERS,
-                })[0..1],
-            );
-
-            {
-                const barrier = base.vk.ImageMemoryBarrier2{
-                    .src_stage_mask = .{ .all_transfer_bit = true },
-                    .src_access_mask = .{ .transfer_write_bit = true },
-                    .dst_stage_mask = .{ .all_transfer_bit = true },
-                    .dst_access_mask = .{ .transfer_read_bit = true },
-                    .old_layout = .transfer_dst_optimal,
-                    .new_layout = .transfer_src_optimal,
-                    .src_queue_family_index = qf,
-                    .dst_queue_family_index = qf,
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = base.vk.REMAINING_MIP_LEVELS,
-                        .base_array_layer = 0,
-                        .layer_count = base.vk.REMAINING_ARRAY_LAYERS,
-                    },
-                    .image = rt.image,
-                };
-                ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
-                    .image_memory_barrier_count = 1,
-                    .p_image_memory_barriers = (&barrier)[0..1],
-                });
-            }
+                },
+                .image = rt.image,
+            };
+            ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = (&barrier)[0..1],
+            });
 
             ctx.end_drawing();
 

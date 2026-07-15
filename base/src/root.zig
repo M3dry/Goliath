@@ -4,12 +4,24 @@ pub const timing = @import("timing.zig");
 pub const input = @import("input.zig");
 pub const imgui = @import("imgui.zig");
 pub const zgui = @import("zgui");
+pub const zmath = @import("zmath");
+pub const pipeline = @import("pipeline.zig");
+pub const compute = @import("compute.zig");
 
 pub const Buffer = @import("buffer.zig").Buffer;
 pub const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
 pub const TexturePool = @import("texture_pool.zig").TexturePool;
 pub const DestroyQueue = @import("destroy_queue.zig").DestroyQueue;
 pub const ShaderModule = @import("shader.zig").ShaderModule;
+pub const GraphicsPipeline = pipeline.GraphicsPipeline;
+pub const ComputePipeline = compute.ComputePipeline;
+pub const Image2D = @import("image.zig").Image2D;
+pub const ImageView = @import("image.zig").ImageView;
+pub const Sampler = @import("sampler.zig").Sampler;
+pub const Transport = @import("transport.zig").Transport;
+pub const Camera = @import("camera.zig").Camera;
+pub const PushConstant = @import("push_constant.zig").PushConstant;
+pub const image_loader = @import("image_loader.zig");
 
 const std = @import("std");
 const vma = @import("vma.zig").vma;
@@ -29,7 +41,7 @@ pub const Ctx = struct {
     graphics: GraphicsCtx,
     frames: []Frame,
     swapchain: Swapchain,
-    curent_frame: u32 = 0,
+    current_frame: u32 = 0,
 
     blit_strategy: BlitStrategy,
     render_extent: vk.Extent2D,
@@ -39,6 +51,8 @@ pub const Ctx = struct {
 
     timeline_semaphore: vk.Semaphore,
     timeline_value: u64,
+
+    descriptor_pools: [frames_in_flight]DescriptorPool,
 
     pub const WindowOpts = struct {
         pub const Size = union(enum) {
@@ -51,6 +65,7 @@ pub const Ctx = struct {
 
         render_extent: vk.Extent2D = .{ .width = 1920, .height = 1080 },
         blit_strategy: BlitStrategy = .stretch,
+        render_format: vk.Format,
     };
 
     pub fn init(alloc: Allocator, name: [:0]const u8, window_opts: WindowOpts) !Ctx {
@@ -85,25 +100,21 @@ pub const Ctx = struct {
         const frames = try alloc.alloc(Frame, frames_in_flight);
         errdefer alloc.free(frames);
 
-        var i: usize = 0;
-        errdefer for (frames[0..i]) |frame| frame.deinit(&graphics_ctx);
-
-        const swapchain = try Swapchain.init(alloc, &graphics_ctx, extent);
-
-        for (frames) |_| {
-            frames[i] = try Frame.init(&graphics_ctx);
-            i += 1;
-        }
-
-        const rt_format = .b8g8r8a8_unorm;
         {
+            var i: usize = 0;
             var rt_idx: usize = 0;
+            errdefer for (frames[0..i]) |*frame| frame.deinit(&graphics_ctx);
             errdefer for (frames[0..rt_idx]) |*f| f.deinitRenderTexture(&graphics_ctx);
-            for (frames) |*f| {
-                try f.initRenderTexture(&graphics_ctx, window_opts.render_extent, rt_format);
+
+            for (frames) |_| {
+                frames[i] = try Frame.init(&graphics_ctx);
+                i += 1;
+                try frames[rt_idx].initRenderTexture(&graphics_ctx, window_opts.render_extent, window_opts.render_format);
                 rt_idx += 1;
             }
         }
+
+        const swapchain = try Swapchain.init(alloc, &graphics_ctx, extent);
 
         const timeline_semaphore = try graphics_ctx.dev.createSemaphore(&vk.SemaphoreCreateInfo{
             .p_next = &vk.SemaphoreTypeCreateInfo{
@@ -112,6 +123,17 @@ pub const Ctx = struct {
             },
         }, null);
 
+        var descriptor_pools: [frames_in_flight]DescriptorPool = undefined;
+        {
+            var i: usize = 0;
+            errdefer for (descriptor_pools[0..i]) |*pool| pool.deinit(&graphics_ctx, alloc);
+
+            for (descriptor_pools) |_| {
+                descriptor_pools[i] = try DescriptorPool.init(&graphics_ctx, alloc);
+                i += 1;
+            }
+        }
+
         return Ctx{
             .window = window,
             .graphics = graphics_ctx,
@@ -119,17 +141,22 @@ pub const Ctx = struct {
             .swapchain = swapchain,
             .blit_strategy = window_opts.blit_strategy,
             .render_extent = window_opts.render_extent,
-            .render_format = rt_format,
-            .destroy_queue = .init(alloc),
+            .render_format = window_opts.render_format,
+            .destroy_queue = .init(alloc, 0),
             .timeline_semaphore = timeline_semaphore,
             .timeline_value = 0,
+            .descriptor_pools = descriptor_pools,
         };
     }
 
     pub fn deinit(self: *Ctx, alloc: Allocator) void {
         if (self.graphics.dev.deviceWaitIdle()) {} else |_| { return; }
 
-        for (self.frames) |frame| {
+        for (&self.descriptor_pools) |*pool| {
+            pool.deinit(&self.graphics, alloc);
+        }
+
+        for (self.frames) |*frame| {
             frame.deinit(&self.graphics);
         }
         alloc.free(self.frames);
@@ -146,8 +173,12 @@ pub const Ctx = struct {
     }
 
     pub fn renderTarget(self: Ctx) struct { image: vk.Image, view: vk.ImageView } {
-        const frame = self.frames[self.curent_frame];
-        return .{ .image = frame.render_image, .view = frame.render_view };
+        const frame = self.frames[self.current_frame];
+        return .{ .image = frame.render_target.handle, .view = frame.render_target_view.handle };
+    }
+
+    pub fn descriptorPool(self: *Ctx) *DescriptorPool {
+        return &self.descriptor_pools[self.current_frame];
     }
 
     pub const PrepareResult = enum {
@@ -156,9 +187,9 @@ pub const Ctx = struct {
     };
 
     pub fn prepare_frame(self: *Ctx) !PrepareResult {
-        const frame = &self.frames[self.curent_frame];
+        const frame = &self.frames[self.current_frame];
         _ = try self.graphics.dev.waitForFences(&[_]vk.Fence{ frame.fence }, .true, std.math.maxInt(u64));
-        self.destroy_queue.flush(self.graphics.vma_alloc, &self.graphics.dev, self.curent_frame);
+        self.destroy_queue.flush(self.graphics.vma_alloc, &self.graphics.dev);
         try self.graphics.dev.resetFences(&[_]vk.Fence{ frame.fence });
 
         const acquired = self.graphics.dev.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), frame.semaphore, .null_handle) catch |err| if (err == error.OutOfDateKHR) vk.DeviceWrapper.AcquireNextImageKHRResult{
@@ -184,11 +215,12 @@ pub const Ctx = struct {
         }
 
         frame.acquired_swapchain = acquired.image_index;
+        self.descriptor_pools[self.current_frame].clear(&self.graphics.dev);
         return .success;
     }
 
     pub fn prepare_draw(self: Ctx) !void {
-        const frame = self.frames[self.curent_frame];
+        const frame = self.frames[self.current_frame];
         std.debug.assert(frame.acquired_swapchain != null);
 
         try self.graphics.dev.resetCommandBuffer(frame.cmd_buf, .{});
@@ -214,7 +246,7 @@ pub const Ctx = struct {
                     .base_array_layer = 0,
                     .layer_count = vk.REMAINING_ARRAY_LAYERS,
                 },
-                .image = frame.render_image,
+                .image = frame.render_target.handle,
             },
             .{
                 .src_stage_mask = .{ .all_commands_bit = true },
@@ -247,7 +279,7 @@ pub const Ctx = struct {
     };
 
     pub fn end_drawing(self: *Ctx) void {
-        const frame = &self.frames[self.curent_frame];
+        const frame = &self.frames[self.current_frame];
         const acquired_image = frame.acquired_swapchain orelse return;
 
         const rw = self.render_extent.width;
@@ -325,7 +357,7 @@ pub const Ctx = struct {
 
         self.graphics.dev.cmdBlitImage(
             frame.cmd_buf,
-            frame.render_image,
+            frame.render_target.handle,
             .transfer_src_optimal,
             self.swapchain.images[acquired_image].image,
             .transfer_dst_optimal,
@@ -340,7 +372,7 @@ pub const Ctx = struct {
     }
 
     pub fn end_frame(self: *Ctx, alloc: Allocator) !SwapchainState {
-        const frame = &self.frames[self.curent_frame];
+        const frame = &self.frames[self.current_frame];
 
         var res: vk.Result = .error_out_of_date_khr;
         if (frame.acquired_swapchain) |acquired_image| {
@@ -386,7 +418,8 @@ pub const Ctx = struct {
                 .p_image_indices = (&acquired_image)[0..1],
             }) catch |err| if (err == error.OutOfDateKHR) .error_out_of_date_khr else return err;
 
-            self.curent_frame = (self.curent_frame + 1) % frames_in_flight;
+            self.current_frame = (self.current_frame + 1) % frames_in_flight;
+            self.destroy_queue.update_current_frame(self.current_frame);
 
             frame.acquired_swapchain = null;
         }
@@ -413,9 +446,8 @@ const Frame = struct {
     fence: vk.Fence,
     acquired_swapchain: ?u32,
 
-    render_image: vk.Image,
-    render_view: vk.ImageView,
-    alloc: vma.VmaAllocation,
+    render_target: Image2D = .{},
+    render_target_view: ImageView = .{},
 
     pub fn init(gc: *const GraphicsCtx) !Frame {
         const cmd_pool = try gc.dev.createCommandPool(&.{
@@ -442,35 +474,20 @@ const Frame = struct {
             .semaphore = semaphore,
             .fence = fence,
             .acquired_swapchain = null,
-            .render_image = .null_handle,
-            .render_view = .null_handle,
-            .alloc = null,
         };
     }
 
     pub fn initRenderTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D, format: vk.Format) !void {
-        const res = vma.vmaCreateImage(gc.vma_alloc, @ptrCast(&vk.ImageCreateInfo{
-            .image_type = .@"2d",
+        self.render_target = try Image2D.init(gc, gc.vma_alloc, "render_target", .{
             .format = format,
-            .extent = .{ .width = extent.width, .height = extent.height, .depth = 1 },
-            .mip_levels = 1,
-            .array_layers = 1,
-            .samples = .{ .@"1_bit" = true },
-            .tiling = .optimal,
+            .extent = extent,
             .usage = .{ .color_attachment_bit = true, .transfer_src_bit = true, .transfer_dst_bit = true },
-            .sharing_mode = .exclusive,
-            .initial_layout = .undefined,
-        }), &vma.VmaAllocationCreateInfo{
-            .usage = vma.VMA_MEMORY_USAGE_GPU_ONLY,
-        }, @ptrCast(&self.render_image), &self.alloc, null);
-        errdefer vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.render_image)), self.alloc);
-        if (res < 0) return error.VmaImageError;
+        });
+        errdefer self.render_target.deinitNow(gc.vma_alloc);
 
-        self.render_view = try gc.dev.createImageView(&.{
-            .image = self.render_image,
-            .view_type = .@"2d",
+        self.render_target_view = try ImageView.init(gc, .{
+            .image = self.render_target.handle,
             .format = format,
-            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
                 .base_mip_level = 0,
@@ -478,24 +495,19 @@ const Frame = struct {
                 .base_array_layer = 0,
                 .layer_count = 1,
             },
-        }, null);
+        });
+        errdefer self.render_target_view.deinitNow(gc.dev);
     }
 
     pub fn deinitRenderTexture(self: *Frame, gc: *const GraphicsCtx) void {
-        if (self.render_image != .null_handle) {
-            gc.dev.destroyImageView(self.render_view, null);
-            vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.render_image)), self.alloc);
-
-            self.render_image = .null_handle;
-            self.render_view = .null_handle;
-            self.alloc = null;
-        }
+        self.render_target_view.deinitNow(gc.dev);
+        self.render_target.deinitNow(gc.vma_alloc);
     }
 
-    pub fn deinit(self: Frame, gc: *const GraphicsCtx) void {
-        if (self.render_image != .null_handle) {
-            gc.dev.destroyImageView(self.render_view, null);
-            vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.render_image)), self.alloc);
+    pub fn deinit(self: *Frame, gc: *const GraphicsCtx) void {
+        if (self.render_target.handle != .null_handle) {
+            self.render_target_view.deinitNow(gc.dev);
+            self.render_target.deinitNow(gc.vma_alloc);
         }
         gc.dev.destroyCommandPool(self.cmd_pool, null);
         gc.dev.destroySemaphore(self.semaphore, null);
