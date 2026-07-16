@@ -1,7 +1,9 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const Ctx = @import("root.zig").Ctx;
 const shader = @import("shader.zig");
+
+const Ctx = @import("root.zig").Ctx;
+const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
 
 pub const DispatchParams = struct {
     push_constant: ?[]const u8 = null,
@@ -76,21 +78,23 @@ pub const ComputePipeline = struct {
         }
     }
 
-    pub fn bind(self: *const ComputePipeline, dev: *vk.DeviceProxy, cmd_buf: vk.CommandBuffer) void {
-        dev.cmdBindPipeline(cmd_buf, .compute, self.handle);
+    pub fn bind(self: *const ComputePipeline, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer) void {
+        gc.dev.cmdBindPipeline(cmd_buf, .compute, self.handle);
     }
 
-    pub fn dispatch(self: *const ComputePipeline, dev: *vk.DeviceProxy, cmd_buf: vk.CommandBuffer, params: DispatchParams) void {
+    pub fn dispatch(self: *const ComputePipeline, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DispatchParams) void {
         if (params.push_constant) |pc| {
-            dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
+            gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
         }
-        dev.cmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
+
+        gc.dev.cmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
     }
 
-    pub fn dispatchIndirect(self: *const ComputePipeline, dev: *vk.DeviceProxy, cmd_buf: vk.CommandBuffer, params: DispatchIndirectParams) void {
+    pub fn dispatchIndirect(self: *const ComputePipeline, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DispatchIndirectParams) void {
         if (params.push_constant) |pc| {
-            dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
+            gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
         }
-        dev.cmdDispatchIndirect(cmd_buf, params.buffer, params.offset);
+
+        gc.dev.cmdDispatchIndirect(cmd_buf, params.buffer, params.offset);
     }
 };

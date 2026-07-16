@@ -31,11 +31,11 @@ fn generateCheckerboard(allocator: std.mem.Allocator, width: u32, height: u32, c
 }
 
 pub fn main(init: std.process.Init) !void {
-
     const gpa = init.gpa;
     const render_extent: base.vk.Extent2D = .{ .width = 1920, .height = 1080 };
     const render_format: base.vk.Format = .r32g32b32a32_sfloat;
     var ctx = try base.Ctx.init(gpa, "Demo", .{
+        .name = "Demo",
         .resizable = false,
         .size = .fullscreen,
         .render_extent = render_extent,
@@ -204,41 +204,43 @@ pub fn main(init: std.process.Init) !void {
                     .keyboard = !mouse_captured and imgui.wantCaptureKeyboard(),
                     .mouse = !mouse_captured and imgui.wantCaptureMouse(),
                 });
-            }
 
-            if (input.mouseJustPressed(.right)) {
-                mouse_captured = true;
-                imgui.enable(false);
-                try ctx.window.setInputMode(.cursor, .disabled);
-                if (base.zglfw.rawMouseMotionSupported()) {
-                    try ctx.window.setInputMode(.raw_mouse_motion, true);
+                if (input.mouseJustPressed(.right)) {
+                    mouse_captured = true;
+                    imgui.enable(false);
+                    try ctx.window.setInputMode(.cursor, .disabled);
+                    if (base.zglfw.rawMouseMotionSupported()) {
+                        try ctx.window.setInputMode(.raw_mouse_motion, true);
+                    }
                 }
-            }
-            if (input.justPressed(.escape)) {
-                mouse_captured = false;
-                imgui.enable(true);
-                ctx.window.setInputMode(.cursor, .normal) catch {};
-                const pos = ctx.window.getCursorPos();
-                input.setMousePos(pos[0], pos[1]);
-            }
+                if (input.justPressed(.escape)) {
+                    mouse_captured = false;
+                    imgui.enable(true);
+                    ctx.window.setInputMode(.cursor, .normal) catch {};
+                    const pos = ctx.window.getCursorPos();
+                    input.setMousePos(pos[0], pos[1]);
+                }
 
-            if (mouse_captured) {
-                const m = input.mouseDelta();
-                cam.rotate(@floatCast(m.x * 0.001), @floatCast(-m.y * 0.001));
+                if (mouse_captured) {
+                    const m = input.mouseDelta();
+                    cam.rotate(@floatCast(m.x * 0.001), @floatCast(-m.y * 0.001));
 
-                const scroll = input.scrollDelta();
-                camera_speed *= @as(f32, @floatCast(1.0 + scroll.y * 0.1));
-                camera_speed = std.math.clamp(camera_speed, 0.1, 100.0);
+                    const scroll = input.scrollDelta();
+                    camera_speed *= @as(f32, @floatCast(1.0 + scroll.y * 0.1));
+                    camera_speed = std.math.clamp(camera_speed, 0.1, 100.0);
+                }
+
+                const dt: f32 = @floatCast(timer.frame_dt);
+                const speed = camera_speed * dt;
+                if (input.isDown(.w)) cam.translate(cam.forward() * @as(zm.Vec, @splat(speed)));
+                if (input.isDown(.s)) cam.translate(cam.forward() * @as(zm.Vec, @splat(-speed)));
+                if (input.isDown(.a)) cam.translate(cam.right() * @as(zm.Vec, @splat(-speed)));
+                if (input.isDown(.d)) cam.translate(cam.right() * @as(zm.Vec, @splat(speed)));
+                if (input.isDown(.q)) cam.translate(cam.up() * @as(zm.Vec, @splat(-speed)));
+                if (input.isDown(.e)) cam.translate(cam.up() * @as(zm.Vec, @splat(speed)));
+
+                cam.update();
             }
-
-            const dt: f32 = @floatCast(timer.frame_dt);
-            const speed = camera_speed * dt;
-            if (input.isDown(.w)) cam.translate(cam.forward() * @as(zm.Vec, @splat(speed)));
-            if (input.isDown(.s)) cam.translate(cam.forward() * @as(zm.Vec, @splat(-speed)));
-            if (input.isDown(.a)) cam.translate(cam.right() * @as(zm.Vec, @splat(-speed)));
-            if (input.isDown(.d)) cam.translate(cam.right() * @as(zm.Vec, @splat(speed)));
-            if (input.isDown(.q)) cam.translate(cam.up() * @as(zm.Vec, @splat(-speed)));
-            if (input.isDown(.e)) cam.translate(cam.up() * @as(zm.Vec, @splat(speed)));
 
             zgui.showDemoWindow(null);
 
@@ -249,88 +251,43 @@ pub fn main(init: std.process.Init) !void {
             zgui.end();
 
             const frame = ctx.frames[ctx.current_frame];
+            const rt = ctx.renderTarget();
             const dp = ctx.descriptorPool();
 
             const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
             dp.beginUpdate(set_id);
-            dp.updateSampledImage(0, .read_only_optimal, texture_view.handle, sampler.handle);
+            dp.updateSampledImage(gpa, 0, .read_only_optimal, texture_view.handle, sampler.handle);
             dp.endUpdate(&ctx.graphics.dev);
-
-            const rt = ctx.renderTarget();
-            ctx.graphics.dev.cmdBeginRendering(frame.cmd_buf, &.{
-                .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
-                .layer_count = 1,
-                .view_mask = 0,
-                .color_attachment_count = 1,
-                .p_color_attachments = (&base.vk.RenderingAttachmentInfo{
-                    .image_view = rt.view,
-                    .image_layout = .color_attachment_optimal,
-                    .resolve_mode = .{},
-                    .resolve_image_layout = .undefined,
-                    .load_op = .clear,
-                    .store_op = .store,
-                    .clear_value = .{ .color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } },
-                })[0..1],
-            });
-
-            cam.update();
 
             var pc_buf: [base.PushConstant.size(PC)]u8 = undefined;
             base.PushConstant.write(PC, &pc_buf, .{ .vp = (cam.view_projection), .vertex_buffer_addr = vertex_buf.address });
 
-            dp.bindSet(frame.cmd_buf, &ctx.graphics.dev, set_id, .graphics, pipeline.layout, 0);
-            pipeline.bind(&ctx.graphics.dev, frame.cmd_buf);
-            pipeline.draw(&ctx.graphics.dev, frame.cmd_buf, .{
-                .push_constant = pc_buf[0..],
-                .vertex_count = 3,
-            });
+            var rg = base.RenderGraph.init(gpa);
+            defer rg.deinit();
 
-            ctx.graphics.dev.cmdEndRendering(frame.cmd_buf);
-
-            ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
-                .image_memory_barrier_count = 1,
-                .p_image_memory_barriers = (&base.vk.ImageMemoryBarrier2{
-                    .src_stage_mask = .{ .color_attachment_output_bit = true },
-                    .src_access_mask = .{ .color_attachment_write_bit = true, .color_attachment_read_bit = true },
-                    .dst_stage_mask = .{ .color_attachment_output_bit = true },
-                    .dst_access_mask = .{ .color_attachment_write_bit = true, .color_attachment_read_bit = true },
-                    .old_layout = .color_attachment_optimal,
-                    .new_layout = .color_attachment_optimal,
-                    .src_queue_family_index = ctx.graphics.graphics_family,
-                    .dst_queue_family_index = ctx.graphics.graphics_family,
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = base.vk.REMAINING_MIP_LEVELS,
-                        .base_array_layer = 0,
-                        .layer_count = base.vk.REMAINING_ARRAY_LAYERS,
-                    },
-                    .image = rt.image,
-                })[0..1],
-            });
-
-            const barrier = base.vk.ImageMemoryBarrier2{
-                .src_stage_mask = .{ .color_attachment_output_bit = true },
-                .src_access_mask = .{ .color_attachment_write_bit = true },
-                .dst_stage_mask = .{ .all_transfer_bit = true },
-                .dst_access_mask = .{ .transfer_read_bit = true },
-                .old_layout = .color_attachment_optimal,
-                .new_layout = .transfer_src_optimal,
-                .src_queue_family_index = ctx.graphics.graphics_family,
-                .dst_queue_family_index = ctx.graphics.graphics_family,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = base.vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = base.vk.REMAINING_ARRAY_LAYERS,
-                },
+            const rt_ref = try rg.addImage(.{
                 .image = rt.image,
-            };
-            ctx.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
-                .image_memory_barrier_count = 1,
-                .p_image_memory_barriers = (&barrier)[0..1],
+                .start_usage = .{
+                    .stage = .{ .color_attachment_output_bit = true },
+                    .access = .{ .color_attachment_write_bit = true, .color_attachment_read_bit = true },
+                    .layout = .color_attachment_optimal,
+                },
+                .end_usage = .{
+                    .stage = .{ .all_transfer_bit = true },
+                    .access = .{ .transfer_read_bit = true },
+                    .layout = .transfer_src_optimal,
+                },
             });
+
+            const gpass = try rg.addGraphicsPass(.{
+                .pipeline = &pipeline,
+                .color_attachments = &.{.{ .image = rt_ref, .view = rt.view, .load_op = .clear, .store_op = .store, .clear_color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } }},
+                .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
+            });
+            gpass.setDescriptorSets(&.{set_id});
+            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = 3 });
+
+            try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
 
             ctx.end_drawing();
 

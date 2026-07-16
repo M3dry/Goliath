@@ -1,0 +1,1577 @@
+const std = @import("std");
+const vk = @import("vulkan");
+const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
+const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
+const GraphicsPipeline = @import("pipeline.zig").GraphicsPipeline;
+const ComputePipeline = @import("compute.zig").ComputePipeline;
+
+const Allocator = std.mem.Allocator;
+
+pub const ImageRef = struct {
+    index: u32,
+};
+
+pub const BufferRef = struct {
+    index: u32,
+};
+
+pub const ImageUsage = struct {
+    stage: vk.PipelineStageFlags2,
+    access: vk.AccessFlags2,
+    layout: vk.ImageLayout,
+};
+
+pub const BufferUsage = struct {
+    stage: vk.PipelineStageFlags2,
+    access: vk.AccessFlags2,
+};
+
+pub const ImageContract = struct {
+    image: vk.Image,
+    start_usage: ImageUsage,
+    end_usage: ImageUsage,
+};
+
+pub const BufferContract = struct {
+    buffer: vk.Buffer,
+    offset: u64,
+    size: u64,
+    start_usage: BufferUsage,
+    end_usage: BufferUsage,
+};
+
+pub const DrawCall = struct {
+    push_constant: ?[]const u8 = null,
+    vertex_count: u32,
+    instance_count: u32 = 1,
+    first_vertex: u32 = 0,
+    first_instance: u32 = 0,
+};
+
+pub const DrawIndirect = struct {
+    push_constant: ?[]const u8 = null,
+    buffer: BufferRef,
+    offset: u32 = 0,
+    draw_count: u32,
+    stride: u32 = @sizeOf(vk.DrawIndirectCommand),
+};
+
+pub const DrawIndirectCount = struct {
+    push_constant: ?[]const u8 = null,
+    buffer: BufferRef,
+    offset: u32 = 0,
+    count_buffer: BufferRef,
+    count_offset: u32 = 0,
+    max_draw_count: u32,
+    stride: u32 = @sizeOf(vk.DrawIndirectCommand),
+};
+
+pub const DispatchCall = struct {
+    push_constant: ?[]const u8 = null,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+};
+
+pub const DispatchIndirect = struct {
+    push_constant: ?[]const u8 = null,
+    buffer: BufferRef,
+    offset: u64 = 0,
+};
+
+pub const ColorAttachment = struct {
+    image: ImageRef,
+    view: vk.ImageView,
+    load_op: vk.AttachmentLoadOp = .clear,
+    store_op: vk.AttachmentStoreOp = .store,
+    clear_color: vk.ClearColorValue = .{ .float_32 = .{ 0, 0, 0, 0 } },
+    layout: vk.ImageLayout = .color_attachment_optimal,
+};
+
+pub const DepthAttachment = struct {
+    image: ImageRef,
+    view: vk.ImageView,
+    load_op: vk.AttachmentLoadOp = .clear,
+    store_op: vk.AttachmentStoreOp = .store,
+    clear_depth: f32 = 1.0,
+    clear_stencil: u32 = 0,
+    layout: vk.ImageLayout = .depth_stencil_attachment_optimal,
+};
+
+const ImageRefUsage = struct {
+    ref: ImageRef,
+    usage: ImageUsage,
+};
+
+const BufferRefUsage = struct {
+    ref: BufferRef,
+    usage: BufferUsage,
+};
+
+pub const GraphicsPass = struct {
+    pipeline: *GraphicsPipeline,
+    color_attachments: []const ColorAttachment = &.{},
+    depth_attachment: ?DepthAttachment = null,
+    render_area: vk.Rect2D,
+    descriptor_sets: []const u64 = &.{},
+    reads_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
+    reads_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+    writes_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
+    writes_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+    draws: std.ArrayListUnmanaged(DrawCall) = .empty,
+    indirect: ?DrawIndirect = null,
+    indirect_count: ?DrawIndirectCount = null,
+};
+
+pub const ComputePass = struct {
+    pipeline: *ComputePipeline,
+    descriptor_sets: []const u64 = &.{},
+    reads_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
+    reads_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+    writes_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
+    writes_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+    dispatch: DispatchCall,
+    indirect: ?DispatchIndirect = null,
+};
+
+pub const GraphicsPassHandle = struct {
+    rg: *RenderGraph,
+    index: u32,
+
+    pub fn readImage(self: GraphicsPassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].graphics.reads_images.append(
+            self.rg.alloc,
+            .{ .ref = image, .usage = usage },
+        );
+    }
+    pub fn readBuffer(self: GraphicsPassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].graphics.reads_buffers.append(
+            self.rg.alloc,
+            .{ .ref = buffer, .usage = usage },
+        );
+    }
+    pub fn writeImage(self: GraphicsPassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].graphics.writes_images.append(
+            self.rg.alloc,
+            .{ .ref = image, .usage = usage },
+        );
+    }
+    pub fn writeBuffer(self: GraphicsPassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].graphics.writes_buffers.append(
+            self.rg.alloc,
+            .{ .ref = buffer, .usage = usage },
+        );
+    }
+    pub fn draw(self: GraphicsPassHandle, call: DrawCall) Allocator.Error!void {
+        try self.rg.passes.items[self.index].graphics.draws.append(
+            self.rg.alloc,
+            call,
+        );
+    }
+    pub fn drawIndirect(self: GraphicsPassHandle, indirect: DrawIndirect) void {
+        self.rg.passes.items[self.index].graphics.indirect = indirect;
+    }
+    pub fn drawIndirectCount(self: GraphicsPassHandle, count: DrawIndirectCount) void {
+        self.rg.passes.items[self.index].graphics.indirect_count = count;
+    }
+    pub fn setDescriptorSets(self: GraphicsPassHandle, sets: []const u64) void {
+        self.rg.passes.items[self.index].graphics.descriptor_sets = sets;
+    }
+};
+
+pub const ComputePassHandle = struct {
+    rg: *RenderGraph,
+    index: u32,
+
+    pub fn readImage(self: ComputePassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].compute.reads_images.append(
+            self.rg.alloc,
+            .{ .ref = image, .usage = usage },
+        );
+    }
+    pub fn readBuffer(self: ComputePassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].compute.reads_buffers.append(
+            self.rg.alloc,
+            .{ .ref = buffer, .usage = usage },
+        );
+    }
+    pub fn writeImage(self: ComputePassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].compute.writes_images.append(
+            self.rg.alloc,
+            .{ .ref = image, .usage = usage },
+        );
+    }
+    pub fn writeBuffer(self: ComputePassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+        try self.rg.passes.items[self.index].compute.writes_buffers.append(
+            self.rg.alloc,
+            .{ .ref = buffer, .usage = usage },
+        );
+    }
+    pub fn setDescriptorSets(self: ComputePassHandle, sets: []const u64) void {
+        self.rg.passes.items[self.index].compute.descriptor_sets = sets;
+    }
+};
+
+pub const Pass = union(enum) {
+    graphics: GraphicsPass,
+    compute: ComputePass,
+};
+
+const ImageTrackedState = struct {
+    layout: vk.ImageLayout,
+    stage: vk.PipelineStageFlags2,
+    access: vk.AccessFlags2,
+};
+
+const BufferTrackedState = struct {
+    stage: vk.PipelineStageFlags2,
+    access: vk.AccessFlags2,
+};
+
+fn attachmentLayoutToUsage(layout: vk.ImageLayout) ImageUsage {
+    return switch (layout) {
+        .color_attachment_optimal => .{
+            .stage = .{ .color_attachment_output_bit = true },
+            .access = .{ .color_attachment_read_bit = true, .color_attachment_write_bit = true },
+            .layout = layout,
+        },
+        .depth_stencil_attachment_optimal, .depth_attachment_optimal => .{
+            .stage = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+            .access = .{ .depth_stencil_attachment_read_bit = true, .depth_stencil_attachment_write_bit = true },
+            .layout = layout,
+        },
+        .depth_stencil_read_only_optimal, .depth_read_only_optimal => .{
+            .stage = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+            .access = .{ .depth_stencil_attachment_read_bit = true },
+            .layout = layout,
+        },
+        else => unreachable,
+    };
+}
+
+fn imageAspectFromLayout(layout: vk.ImageLayout) vk.ImageAspectFlags {
+    return switch (layout) {
+        .color_attachment_optimal => .{ .color_bit = true },
+        .depth_stencil_attachment_optimal,
+        .depth_stencil_read_only_optimal,
+        .depth_attachment_optimal,
+        .depth_read_only_optimal,
+        => .{ .depth_bit = true, .stencil_bit = true },
+        else => .{ .color_bit = true },
+    };
+}
+
+fn imageUsageEqual(a: ImageTrackedState, b: ImageUsage) bool {
+    return a.layout == b.layout and
+        std.meta.eql(a.stage, b.stage) and
+        std.meta.eql(a.access, b.access);
+}
+
+fn bufferUsageEqual(a: BufferTrackedState, b: BufferUsage) bool {
+    return std.meta.eql(a.stage, b.stage) and
+        std.meta.eql(a.access, b.access);
+}
+
+fn mergeStage(a: vk.PipelineStageFlags2, b: vk.PipelineStageFlags2) vk.PipelineStageFlags2 {
+    return a.merge(b);
+}
+
+fn mergeAccess(a: vk.AccessFlags2, b: vk.AccessFlags2) vk.AccessFlags2 {
+    return a.merge(b);
+}
+
+fn mergeBufferUsage(a: BufferUsage, b: BufferUsage) BufferUsage {
+    return .{
+        .stage = mergeStage(a.stage, b.stage),
+        .access = mergeAccess(a.access, b.access),
+    };
+}
+
+fn mergeImageUsage(a: ImageUsage, b: ImageUsage) ImageUsage {
+    return .{
+        .stage = mergeStage(a.stage, b.stage),
+        .access = mergeAccess(a.access, b.access),
+        .layout = b.layout,
+    };
+}
+
+fn upsertBuffer(
+    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    idx: u32,
+    usage: BufferUsage,
+    alloc: Allocator,
+) Allocator.Error!void {
+    const gop = try pass_buffers.getOrPut(alloc, idx);
+    if (gop.found_existing) {
+        gop.value_ptr.* = mergeBufferUsage(gop.value_ptr.*, usage);
+    } else {
+        gop.value_ptr.* = usage;
+    }
+}
+
+fn upsertImage(
+    pass_images: *std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
+    idx: u32,
+    usage: ImageUsage,
+    alloc: Allocator,
+) Allocator.Error!void {
+    const gop = try pass_images.getOrPut(alloc, idx);
+    if (gop.found_existing) {
+        gop.value_ptr.* = mergeImageUsage(gop.value_ptr.*, usage);
+    } else {
+        gop.value_ptr.* = usage;
+    }
+}
+
+fn collectPassRequirementsGraphics(
+    pass_images: *std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
+    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    gp: *const GraphicsPass,
+    alloc: Allocator,
+) Allocator.Error!void {
+    pass_images.clearRetainingCapacity();
+    pass_buffers.clearRetainingCapacity();
+
+    for (gp.color_attachments) |att| {
+        try upsertImage(pass_images, att.image.index, attachmentLayoutToUsage(att.layout), alloc);
+    }
+    if (gp.depth_attachment) |att| {
+        try upsertImage(pass_images, att.image.index, attachmentLayoutToUsage(att.layout), alloc);
+    }
+
+    for (gp.reads_images.items) |ri| {
+        try upsertImage(pass_images, ri.ref.index, ri.usage, alloc);
+    }
+    for (gp.reads_buffers.items) |rb| {
+        try upsertBuffer(pass_buffers, rb.ref.index, rb.usage, alloc);
+    }
+
+    for (gp.writes_images.items) |wi| {
+        try upsertImage(pass_images, wi.ref.index, wi.usage, alloc);
+    }
+    for (gp.writes_buffers.items) |wb| {
+        try upsertBuffer(pass_buffers, wb.ref.index, wb.usage, alloc);
+    }
+
+    const indirect_stage = vk.PipelineStageFlags2{ .draw_indirect_bit = true };
+    const indirect_access = vk.AccessFlags2{ .indirect_command_read_bit = true };
+
+    if (gp.indirect) |ind| {
+        try upsertBuffer(pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+    }
+    if (gp.indirect_count) |ic| {
+        try upsertBuffer(pass_buffers, ic.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+        try upsertBuffer(pass_buffers, ic.count_buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+    }
+}
+
+fn collectPassRequirementsCompute(
+    pass_images: *std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
+    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    cp: *const ComputePass,
+    alloc: Allocator,
+) Allocator.Error!void {
+    pass_images.clearRetainingCapacity();
+    pass_buffers.clearRetainingCapacity();
+
+    for (cp.reads_images.items) |ri| {
+        try upsertImage(pass_images, ri.ref.index, ri.usage, alloc);
+    }
+    for (cp.reads_buffers.items) |rb| {
+        try upsertBuffer(pass_buffers, rb.ref.index, rb.usage, alloc);
+    }
+
+    for (cp.writes_images.items) |wi| {
+        try upsertImage(pass_images, wi.ref.index, wi.usage, alloc);
+    }
+    for (cp.writes_buffers.items) |wb| {
+        try upsertBuffer(pass_buffers, wb.ref.index, wb.usage, alloc);
+    }
+
+    const indirect_stage = vk.PipelineStageFlags2{ .draw_indirect_bit = true };
+    const indirect_access = vk.AccessFlags2{ .indirect_command_read_bit = true };
+
+    if (cp.indirect) |ind| {
+        try upsertBuffer(pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+    }
+}
+
+fn emitPassBarriers(
+    pass_images: std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
+    pass_buffers: std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    image_states: []ImageTrackedState,
+    buffer_states: []BufferTrackedState,
+    contracts: []const ImageContract,
+    buf_contracts: []const BufferContract,
+    qf: u32,
+    img_bars: *std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
+    buf_bars: *std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
+    alloc: Allocator,
+) Allocator.Error!void {
+    var it = pass_images.iterator();
+    while (it.next()) |entry| {
+        const idx = entry.key_ptr.*;
+        const req = entry.value_ptr.*;
+        const cur = &image_states[idx];
+        if (!imageUsageEqual(cur.*, req)) {
+            try img_bars.append(alloc, .{
+                .src_stage_mask = cur.stage,
+                .src_access_mask = cur.access,
+                .dst_stage_mask = req.stage,
+                .dst_access_mask = req.access,
+                .old_layout = cur.layout,
+                .new_layout = req.layout,
+                .src_queue_family_index = qf,
+                .dst_queue_family_index = qf,
+                .image = contracts[idx].image,
+                .subresource_range = .{
+                    .aspect_mask = imageAspectFromLayout(req.layout),
+                    .base_mip_level = 0,
+                    .level_count = vk.REMAINING_MIP_LEVELS,
+                    .base_array_layer = 0,
+                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
+                },
+            });
+            cur.* = .{
+                .layout = req.layout,
+                .stage = req.stage,
+                .access = req.access,
+            };
+        }
+    }
+
+    var bit = pass_buffers.iterator();
+    while (bit.next()) |entry| {
+        const idx = entry.key_ptr.*;
+        const req = entry.value_ptr.*;
+        const cur = &buffer_states[idx];
+        if (!bufferUsageEqual(cur.*, req)) {
+            try buf_bars.append(alloc, .{
+                .src_stage_mask = cur.stage,
+                .src_access_mask = cur.access,
+                .dst_stage_mask = req.stage,
+                .dst_access_mask = req.access,
+                .src_queue_family_index = qf,
+                .dst_queue_family_index = qf,
+                .buffer = buf_contracts[idx].buffer,
+                .offset = buf_contracts[idx].offset,
+                .size = buf_contracts[idx].size,
+            });
+            cur.* = .{
+                .stage = req.stage,
+                .access = req.access,
+            };
+        }
+    }
+}
+
+fn recordGraphicsCommands(
+    gp: *const GraphicsPass,
+    gc: *const GraphicsCtx,
+    cmd_buf: vk.CommandBuffer,
+    dp: *DescriptorPool,
+    buf_contracts: []const BufferContract,
+) void {
+    for (gp.descriptor_sets, 0..) |set_id, i| {
+        dp.bindSet(cmd_buf, gc, set_id, .graphics, gp.pipeline.layout, @intCast(i));
+    }
+
+    gp.pipeline.bind(gc, cmd_buf);
+
+    for (gp.draws.items) |d| {
+        gp.pipeline.draw(gc, cmd_buf, .{
+            .push_constant = d.push_constant,
+            .vertex_count = d.vertex_count,
+            .instance_count = d.instance_count,
+            .first_vertex = d.first_vertex,
+            .first_instance = d.first_instance,
+        });
+    }
+
+    if (gp.indirect) |ind| {
+        gp.pipeline.drawIndirect(gc, cmd_buf, .{
+            .push_constant = ind.push_constant,
+            .buffer = buf_contracts[ind.buffer.index].buffer,
+            .offset = ind.offset,
+            .draw_count = ind.draw_count,
+            .stride = ind.stride,
+        });
+    }
+    if (gp.indirect_count) |ic| {
+        gp.pipeline.drawIndirectCount(gc, cmd_buf, .{
+            .push_constant = ic.push_constant,
+            .buffer = buf_contracts[ic.buffer.index].buffer,
+            .offset = ic.offset,
+            .count_buffer = buf_contracts[ic.count_buffer.index].buffer,
+            .count_offset = ic.count_offset,
+            .max_draw_count = ic.max_draw_count,
+            .stride = ic.stride,
+        });
+    }
+}
+
+fn recordGraphicsPass(
+    gp: *const GraphicsPass,
+    gc: *const GraphicsCtx,
+    cmd_buf: vk.CommandBuffer,
+    dp: *DescriptorPool,
+    buf_contracts: []const BufferContract,
+) void {
+    const dev = &gc.dev;
+    beginRendering(gp, dev, cmd_buf);
+    recordGraphicsCommands(gp, gc, cmd_buf, dp, buf_contracts);
+    dev.cmdEndRendering(cmd_buf);
+}
+
+fn renderTargetsEqual(a: *const GraphicsPass, b: *const GraphicsPass) bool {
+    if (a.color_attachments.len != b.color_attachments.len) return false;
+    for (a.color_attachments, b.color_attachments) |ca, cb| {
+        if (ca.view != cb.view or ca.layout != cb.layout) return false;
+    }
+    if ((a.depth_attachment != null) != (b.depth_attachment != null)) return false;
+    if (a.depth_attachment) |da| {
+        const db = b.depth_attachment.?;
+        if (da.view != db.view or da.layout != db.layout) return false;
+    }
+    return a.render_area.offset.x == b.render_area.offset.x and
+        a.render_area.offset.y == b.render_area.offset.y and
+        a.render_area.extent.width == b.render_area.extent.width and
+        a.render_area.extent.height == b.render_area.extent.height;
+}
+
+fn beginRendering(
+    gp: *const GraphicsPass,
+    dev: *const vk.DeviceProxy,
+    cmd_buf: vk.CommandBuffer,
+) void {
+    var color_attachment_infos: [8]vk.RenderingAttachmentInfo = undefined;
+    std.debug.assert(gp.color_attachments.len <= color_attachment_infos.len);
+
+    for (gp.color_attachments, 0..) |att, i| {
+        color_attachment_infos[i] = .{
+            .image_view = att.view,
+            .image_layout = att.layout,
+            .resolve_mode = .{},
+            .resolve_image_layout = .undefined,
+            .load_op = att.load_op,
+            .store_op = att.store_op,
+            .clear_value = .{ .color = att.clear_color },
+        };
+    }
+
+    var depth_attachment_info: vk.RenderingAttachmentInfo = undefined;
+    const p_depth: ?*const vk.RenderingAttachmentInfo = if (gp.depth_attachment) |*att| blk: {
+        depth_attachment_info = .{
+            .image_view = att.view,
+            .image_layout = att.layout,
+            .resolve_mode = .{},
+            .resolve_image_layout = .undefined,
+            .load_op = att.load_op,
+            .store_op = att.store_op,
+            .clear_value = .{ .depth_stencil = .{ .depth = att.clear_depth, .stencil = att.clear_stencil } },
+        };
+        break :blk &depth_attachment_info;
+    } else null;
+
+    dev.cmdBeginRendering(cmd_buf, &.{
+        .render_area = gp.render_area,
+        .layer_count = 1,
+        .view_mask = 0,
+        .color_attachment_count = @intCast(gp.color_attachments.len),
+        .p_color_attachments = &color_attachment_infos,
+        .p_depth_attachment = p_depth,
+        .p_stencil_attachment = p_depth,
+    });
+}
+
+fn recordComputePass(
+    cp: *const ComputePass,
+    gc: *const GraphicsCtx,
+    cmd_buf: vk.CommandBuffer,
+    dp: *DescriptorPool,
+    buf_contracts: []const BufferContract,
+) void {
+    for (cp.descriptor_sets, 0..) |set_id, i| {
+        dp.bindSet(cmd_buf, gc, set_id, .compute, cp.pipeline.layout, @intCast(i));
+    }
+
+    cp.pipeline.bind(gc, cmd_buf);
+
+    if (cp.indirect) |ind| {
+        cp.pipeline.dispatchIndirect(gc, cmd_buf, .{
+            .push_constant = ind.push_constant,
+            .buffer = buf_contracts[ind.buffer.index].buffer,
+            .offset = ind.offset,
+        });
+    } else {
+        cp.pipeline.dispatch(gc, cmd_buf, .{
+            .push_constant = cp.dispatch.push_constant,
+            .group_count_x = cp.dispatch.group_count_x,
+            .group_count_y = cp.dispatch.group_count_y,
+            .group_count_z = cp.dispatch.group_count_z,
+        });
+    }
+}
+
+fn flushBarriers(
+    dev: *vk.DeviceProxy,
+    cmd_buf: vk.CommandBuffer,
+    img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
+    buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
+) void {
+    if (img_bars.items.len == 0 and buf_bars.items.len == 0) return;
+    dev.cmdPipelineBarrier2(cmd_buf, &.{
+        .buffer_memory_barrier_count = @intCast(buf_bars.items.len),
+        .p_buffer_memory_barriers = buf_bars.items.ptr,
+        .image_memory_barrier_count = @intCast(img_bars.items.len),
+        .p_image_memory_barriers = img_bars.items.ptr,
+    });
+}
+
+fn emitFinalBarriers(
+    self: *const RenderGraph,
+    image_states: []ImageTrackedState,
+    buffer_states: []BufferTrackedState,
+    qf: u32,
+    dev: *vk.DeviceProxy,
+    cmd_buf: vk.CommandBuffer,
+    arena_alloc: Allocator,
+) Allocator.Error!void {
+    var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+    var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+
+    for (self.images.items, image_states, 0..) |contract, state, i| {
+        if (!imageUsageEqual(state, contract.end_usage)) {
+            try img_bars.append(arena_alloc, .{
+                .src_stage_mask = state.stage,
+                .src_access_mask = state.access,
+                .dst_stage_mask = contract.end_usage.stage,
+                .dst_access_mask = contract.end_usage.access,
+                .old_layout = state.layout,
+                .new_layout = contract.end_usage.layout,
+                .src_queue_family_index = qf,
+                .dst_queue_family_index = qf,
+                .image = contract.image,
+                .subresource_range = .{
+                    .aspect_mask = imageAspectFromLayout(contract.end_usage.layout),
+                    .base_mip_level = 0,
+                    .level_count = vk.REMAINING_MIP_LEVELS,
+                    .base_array_layer = 0,
+                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
+                },
+            });
+            _ = i;
+        }
+    }
+
+    for (self.buffers.items, buffer_states, 0..) |contract, state, i| {
+        if (!bufferUsageEqual(state, contract.end_usage)) {
+            try buf_bars.append(arena_alloc, .{
+                .src_stage_mask = state.stage,
+                .src_access_mask = state.access,
+                .dst_stage_mask = contract.end_usage.stage,
+                .dst_access_mask = contract.end_usage.access,
+                .src_queue_family_index = qf,
+                .dst_queue_family_index = qf,
+                .buffer = contract.buffer,
+                .offset = contract.offset,
+                .size = contract.size,
+            });
+            _ = i;
+        }
+    }
+
+    flushBarriers(dev, cmd_buf, img_bars, buf_bars);
+    img_bars.deinit(arena_alloc);
+    buf_bars.deinit(arena_alloc);
+}
+
+pub const RenderGraph = struct {
+    alloc: Allocator,
+    images: std.ArrayListUnmanaged(ImageContract),
+    buffers: std.ArrayListUnmanaged(BufferContract),
+    passes: std.ArrayListUnmanaged(Pass),
+
+    pub fn init(alloc: Allocator) RenderGraph {
+        return .{
+            .alloc = alloc,
+            .images = .empty,
+            .buffers = .empty,
+            .passes = .empty,
+        };
+    }
+    pub fn deinit(self: *RenderGraph) void {
+        for (self.passes.items) |*pass| {
+            switch (pass.*) {
+                .graphics => |*gp| {
+                    gp.reads_images.deinit(self.alloc);
+                    gp.reads_buffers.deinit(self.alloc);
+                    gp.writes_images.deinit(self.alloc);
+                    gp.writes_buffers.deinit(self.alloc);
+                    gp.draws.deinit(self.alloc);
+                },
+                .compute => |*cp| {
+                    cp.reads_images.deinit(self.alloc);
+                    cp.reads_buffers.deinit(self.alloc);
+                    cp.writes_images.deinit(self.alloc);
+                    cp.writes_buffers.deinit(self.alloc);
+                },
+            }
+        }
+        self.passes.deinit(self.alloc);
+        self.buffers.deinit(self.alloc);
+        self.images.deinit(self.alloc);
+    }
+
+    pub fn addImage(self: *RenderGraph, contract: ImageContract) Allocator.Error!ImageRef {
+        try self.images.append(self.alloc, contract);
+        return .{ .index = @intCast(self.images.items.len - 1) };
+    }
+
+    pub fn addBuffer(self: *RenderGraph, contract: BufferContract) Allocator.Error!BufferRef {
+        try self.buffers.append(self.alloc, contract);
+        return .{ .index = @intCast(self.buffers.items.len - 1) };
+    }
+
+    pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!GraphicsPassHandle {
+        try self.passes.append(self.alloc, .{ .graphics = .{
+            .pipeline = desc.pipeline,
+            .color_attachments = desc.color_attachments,
+            .depth_attachment = desc.depth_attachment,
+            .render_area = desc.render_area,
+            .descriptor_sets = desc.descriptor_sets,
+            .indirect = desc.indirect,
+            .indirect_count = desc.indirect_count,
+        } });
+        return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
+    }
+
+    pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!ComputePassHandle {
+        try self.passes.append(self.alloc, .{ .compute = .{
+            .pipeline = desc.pipeline,
+            .descriptor_sets = desc.descriptor_sets,
+            .dispatch = desc.dispatch,
+            .indirect = desc.indirect,
+        } });
+        return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
+    }
+
+    pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
+        if (other.images.items.len == 0 and other.buffers.items.len == 0 and other.passes.items.len == 0) return;
+
+        var image_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
+        defer image_remap.deinit(self.alloc);
+
+        for (other.images.items, 0..) |o_img, o_idx| {
+            var found = false;
+            for (self.images.items, 0..) |s_img, s_idx| {
+                if (s_img.image == o_img.image) {
+                    try image_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
+                    self.images.items[s_idx].end_usage = o_img.end_usage;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const new_idx = self.images.items.len;
+                try self.images.append(self.alloc, o_img);
+                try image_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
+            }
+        }
+
+        var buffer_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
+        defer buffer_remap.deinit(self.alloc);
+
+        for (other.buffers.items, 0..) |o_buf, o_idx| {
+            var found = false;
+            for (self.buffers.items, 0..) |s_buf, s_idx| {
+                if (s_buf.buffer == o_buf.buffer) {
+                    try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
+                    self.buffers.items[s_idx].end_usage = o_buf.end_usage;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                const new_idx = self.buffers.items.len;
+                try self.buffers.append(self.alloc, o_buf);
+                try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
+            }
+        }
+
+        for (other.passes.items) |*o_pass| {
+            switch (o_pass.*) {
+                .graphics => |*o_gp| {
+                    var new_gp = GraphicsPass{
+                        .pipeline = o_gp.pipeline,
+                        .color_attachments = o_gp.color_attachments,
+                        .depth_attachment = if (o_gp.depth_attachment) |da| DepthAttachment{
+                            .image = .{ .index = image_remap.get(da.image.index) orelse @panic("merge: dangling ImageRef") },
+                            .view = da.view,
+                            .load_op = da.load_op,
+                            .store_op = da.store_op,
+                            .clear_depth = da.clear_depth,
+                            .clear_stencil = da.clear_stencil,
+                            .layout = da.layout,
+                        } else null,
+                        .render_area = o_gp.render_area,
+                        .descriptor_sets = o_gp.descriptor_sets,
+                        .reads_images = .empty,
+                        .reads_buffers = .empty,
+                        .writes_images = .empty,
+                        .writes_buffers = .empty,
+                        .draws = .empty,
+                        .indirect = if (o_gp.indirect) |ind| DrawIndirect{
+                            .push_constant = ind.push_constant,
+                            .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                            .offset = ind.offset,
+                            .draw_count = ind.draw_count,
+                            .stride = ind.stride,
+                        } else null,
+                        .indirect_count = if (o_gp.indirect_count) |ic| DrawIndirectCount{
+                            .push_constant = ic.push_constant,
+                            .buffer = .{ .index = buffer_remap.get(ic.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                            .offset = ic.offset,
+                            .count_buffer = .{ .index = buffer_remap.get(ic.count_buffer.index) orelse @panic("merge: dangling BufferRef") },
+                            .count_offset = ic.count_offset,
+                            .max_draw_count = ic.max_draw_count,
+                            .stride = ic.stride,
+                        } else null,
+                    };
+
+                    for (o_gp.reads_images.items) |item| {
+                        try new_gp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    }
+                    for (o_gp.reads_buffers.items) |item| {
+                        try new_gp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    }
+                    for (o_gp.writes_images.items) |item| {
+                        try new_gp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    }
+                    for (o_gp.writes_buffers.items) |item| {
+                        try new_gp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    }
+                    try new_gp.draws.appendSlice(self.alloc, o_gp.draws.items);
+
+                    try self.passes.append(self.alloc, .{ .graphics = new_gp });
+                },
+                .compute => |*o_cp| {
+                    var new_cp = ComputePass{
+                        .pipeline = o_cp.pipeline,
+                        .descriptor_sets = o_cp.descriptor_sets,
+                        .reads_images = .empty,
+                        .reads_buffers = .empty,
+                        .writes_images = .empty,
+                        .writes_buffers = .empty,
+                        .dispatch = o_cp.dispatch,
+                        .indirect = if (o_cp.indirect) |ind| DispatchIndirect{
+                            .push_constant = ind.push_constant,
+                            .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                            .offset = ind.offset,
+                        } else null,
+                    };
+
+                    for (o_cp.reads_images.items) |item| {
+                        try new_cp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    }
+                    for (o_cp.reads_buffers.items) |item| {
+                        try new_cp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    }
+                    for (o_cp.writes_images.items) |item| {
+                        try new_cp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    }
+                    for (o_cp.writes_buffers.items) |item| {
+                        try new_cp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    }
+
+                    try self.passes.append(self.alloc, .{ .compute = new_cp });
+                },
+            }
+        }
+
+        other.deinit();
+        other.* = init(self.alloc);
+    }
+
+    pub fn run(
+        self: *const RenderGraph,
+        gc: *GraphicsCtx,
+        cmd_buf: vk.CommandBuffer,
+        dp: *DescriptorPool,
+    ) Allocator.Error!void {
+        const dev = &gc.dev;
+        const qf = gc.graphics_family;
+
+        var arena = std.heap.ArenaAllocator.init(self.alloc);
+        defer arena.deinit();
+        const arena_alloc = arena.allocator();
+
+        const num_images = self.images.items.len;
+        const num_buffers = self.buffers.items.len;
+
+        var image_states: []ImageTrackedState = &.{};
+        var buffer_states: []BufferTrackedState = &.{};
+
+        if (num_images > 0) {
+            image_states = try arena_alloc.alloc(ImageTrackedState, num_images);
+            for (self.images.items, 0..) |contract, i| {
+                image_states[i] = .{
+                    .layout = contract.start_usage.layout,
+                    .stage = contract.start_usage.stage,
+                    .access = contract.start_usage.access,
+                };
+            }
+        }
+
+        if (num_buffers > 0) {
+            buffer_states = try arena_alloc.alloc(BufferTrackedState, num_buffers);
+            for (self.buffers.items, 0..) |contract, i| {
+                buffer_states[i] = .{
+                    .stage = contract.start_usage.stage,
+                    .access = contract.start_usage.access,
+                };
+            }
+        }
+
+        const max_capacity = @max(num_images, num_buffers) * 2 + 16;
+        var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
+        try pass_images.ensureTotalCapacity(arena_alloc, max_capacity);
+        var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
+        try pass_buffers.ensureTotalCapacity(arena_alloc, max_capacity);
+
+        var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+        var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+
+        var prev_gp: ?*const GraphicsPass = null;
+        const dev_proxy = dev;
+
+        for (self.passes.items) |*pass| {
+            switch (pass.*) {
+                .graphics => |*gp| {
+                    try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, arena_alloc);
+                    try emitPassBarriers(
+                        pass_images,
+                        pass_buffers,
+                        image_states,
+                        buffer_states,
+                        self.images.items,
+                        self.buffers.items,
+                        qf,
+                        &img_bars,
+                        &buf_bars,
+                        arena_alloc,
+                    );
+
+                    const can_merge = if (prev_gp) |prev| blk: {
+                        if (img_bars.items.len > 0 or buf_bars.items.len > 0) break :blk false;
+                        break :blk renderTargetsEqual(prev, gp);
+                    } else false;
+
+                    if (can_merge) {
+                        recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                    } else {
+                        if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
+                        flushBarriers(dev, cmd_buf, img_bars, buf_bars);
+                        img_bars.clearRetainingCapacity();
+                        buf_bars.clearRetainingCapacity();
+                        beginRendering(gp, dev, cmd_buf);
+                        recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                    }
+                    prev_gp = gp;
+                },
+                .compute => |*cp| {
+                    if (prev_gp != null) {
+                        dev_proxy.cmdEndRendering(cmd_buf);
+                        prev_gp = null;
+                    }
+                    try collectPassRequirementsCompute(&pass_images, &pass_buffers, cp, arena_alloc);
+                    try emitPassBarriers(
+                        pass_images,
+                        pass_buffers,
+                        image_states,
+                        buffer_states,
+                        self.images.items,
+                        self.buffers.items,
+                        qf,
+                        &img_bars,
+                        &buf_bars,
+                        arena_alloc,
+                    );
+                    flushBarriers(dev, cmd_buf, img_bars, buf_bars);
+                    img_bars.clearRetainingCapacity();
+                    buf_bars.clearRetainingCapacity();
+                    recordComputePass(cp, gc, cmd_buf, dp, self.buffers.items);
+                },
+            }
+        }
+
+        if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
+
+        try emitFinalBarriers(self, image_states, buffer_states, qf, dev, cmd_buf, arena_alloc);
+    }
+};
+
+test "builder: add images, buffers, passes and deinit" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const rt_img: vk.Image = @enumFromInt(0);
+    const rt_view: vk.ImageView = @enumFromInt(0);
+    const depth_img: vk.Image = @enumFromInt(0);
+    const depth_view: vk.ImageView = @enumFromInt(0);
+    const vb: vk.Buffer = @enumFromInt(0);
+    const count_buf: vk.Buffer = @enumFromInt(1);
+
+    const rt = rg.addImage(.{
+        .image = rt_img,
+        .start_usage = .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_write_bit = true },
+            .layout = .undefined,
+        },
+        .end_usage = .{
+            .stage = .{ .all_transfer_bit = true },
+            .access = .{ .transfer_read_bit = true },
+            .layout = .transfer_src_optimal,
+        },
+    });
+    try std.testing.expectEqual(@as(u32, 0), rt.index);
+
+    const depth = rg.addImage(.{
+        .image = depth_img,
+        .start_usage = .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_write_bit = true },
+            .layout = .undefined,
+        },
+        .end_usage = .{
+            .stage = .{ .early_fragment_tests_bit = true },
+            .access = .{ .depth_stencil_attachment_write_bit = true },
+            .layout = .depth_stencil_attachment_optimal,
+        },
+    });
+    try std.testing.expectEqual(@as(u32, 1), depth.index);
+
+    const buf_a = rg.addBuffer(.{
+        .buffer = vb,
+        .offset = 0,
+        .size = 64,
+        .start_usage = .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_write_bit = true },
+        },
+        .end_usage = .{
+            .stage = .{ .vertex_input_bit = true },
+            .access = .{ .memory_read_bit = true },
+        },
+    });
+    try std.testing.expectEqual(@as(u32, 0), buf_a.index);
+
+    const buf_b = rg.addBuffer(.{
+        .buffer = count_buf,
+        .offset = 0,
+        .size = 16,
+        .start_usage = .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_write_bit = true },
+        },
+        .end_usage = .{
+            .stage = .{ .vertex_input_bit = true },
+            .access = .{ .memory_read_bit = true },
+        },
+    });
+    try std.testing.expectEqual(@as(u32, 1), buf_b.index);
+
+    const gp_desc = GraphicsPass{
+        .pipeline = undefined,
+        .color_attachments = &.{.{ .image = rt, .view = rt_view }},
+        .depth_attachment = .{ .image = depth, .view = depth_view },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1920, .height = 1080 } },
+    };
+
+    const gp_handle = rg.addGraphicsPass(gp_desc);
+    try std.testing.expectEqual(@as(u32, 0), gp_handle.index);
+
+    gp_handle.readBuffer(buf_a, .{
+        .stage = .{ .vertex_input_bit = true },
+        .access = .{ .memory_read_bit = true },
+    });
+    gp_handle.writeImage(rt, .{
+        .stage = .{ .color_attachment_output_bit = true },
+        .access = .{ .color_attachment_write_bit = true },
+        .layout = .color_attachment_optimal,
+    });
+    gp_handle.draw(.{ .vertex_count = 3 });
+    gp_handle.setDescriptorSets(&.{ 7 });
+
+    try std.testing.expectEqual(@as(usize, 2), rg.images.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rg.buffers.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rg.passes.items.len);
+
+    {
+        const gp = &rg.passes.items[0].graphics;
+        try std.testing.expectEqual(@as(usize, 1), gp.draws.items.len);
+        try std.testing.expectEqual(@as(usize, 0), gp.reads_images.items.len);
+        try std.testing.expectEqual(@as(usize, 1), gp.reads_buffers.items.len);
+        try std.testing.expectEqual(@as(usize, 1), gp.writes_images.items.len);
+        try std.testing.expectEqual(@as(usize, 0), gp.writes_buffers.items.len);
+        try std.testing.expectEqual(@as(u32, 3), gp.draws.items[0].vertex_count);
+        try std.testing.expectEqual(@as(usize, 1), gp.descriptor_sets.len);
+        try std.testing.expectEqual(@as(u64, 7), gp.descriptor_sets[0]);
+
+        try std.testing.expectEqual(@as(u32, 1), gp.color_attachments.len);
+        try std.testing.expectEqual(@as(u32, 0), gp.color_attachments[0].image.index);
+        try std.testing.expectEqual(rt_view, gp.color_attachments[0].view);
+        try std.testing.expectEqual(@as(u32, 1), gp.depth_attachment.?.image.index);
+    }
+
+    const cp_desc = ComputePass{
+        .pipeline = undefined,
+        .dispatch = .{ .group_count_x = 8, .group_count_y = 8, .group_count_z = 1 },
+        .indirect = null,
+    };
+
+    const cp_handle = rg.addComputePass(cp_desc);
+    try std.testing.expectEqual(@as(u32, 1), cp_handle.index);
+
+    cp_handle.readImage(rt, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_read_bit = true },
+        .layout = .read_only_optimal,
+    });
+    cp_handle.writeImage(rt, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_write_bit = true },
+        .layout = .general,
+    });
+    cp_handle.setDescriptorSets(&.{ 42 });
+
+    try std.testing.expectEqual(@as(usize, 2), rg.passes.items.len);
+
+    {
+        const cp = &rg.passes.items[1].compute;
+        try std.testing.expectEqual(@as(usize, 1), cp.reads_images.items.len);
+        try std.testing.expectEqual(@as(usize, 1), cp.writes_images.items.len);
+        try std.testing.expectEqual(@as(u32, 8), cp.dispatch.group_count_x);
+        try std.testing.expectEqual(@as(u64, 42), cp.descriptor_sets[0]);
+    }
+}
+
+test "indirect: drawIndirect and drawIndirectCount with BufferRef" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const vb: vk.Buffer = @enumFromInt(100);
+    const cb: vk.Buffer = @enumFromInt(200);
+
+    const ind_buf = rg.addBuffer(.{
+        .buffer = vb, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+    const cnt_buf = rg.addBuffer(.{
+        .buffer = cb, .offset = 0, .size = 16,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    const pass = rg.addGraphicsPass(.{
+        .pipeline = undefined,
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+
+    pass.drawIndirect(.{
+        .buffer = ind_buf,
+        .draw_count = 10,
+    });
+    pass.drawIndirectCount(.{
+        .buffer = ind_buf,
+        .count_buffer = cnt_buf,
+        .max_draw_count = 10,
+    });
+
+    {
+        const gp = &rg.passes.items[0].graphics;
+        try std.testing.expect(gp.indirect != null);
+        try std.testing.expect(gp.indirect_count != null);
+        try std.testing.expectEqual(@as(u32, 0), gp.indirect.?.buffer.index);
+        try std.testing.expectEqual(@as(u32, 0), gp.indirect_count.?.buffer.index);
+        try std.testing.expectEqual(@as(u32, 1), gp.indirect_count.?.count_buffer.index);
+    }
+}
+
+test "indirect: dispatchIndirect with BufferRef" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const vb: vk.Buffer = @enumFromInt(100);
+
+    const ind_buf = rg.addBuffer(.{
+        .buffer = vb, .offset = 0, .size = 64,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    _ = rg.addComputePass(.{
+        .pipeline = undefined,
+        .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
+        .indirect = .{
+            .buffer = ind_buf,
+        },
+    });
+
+    const cp = &rg.passes.items[0].compute;
+    try std.testing.expect(cp.indirect != null);
+    try std.testing.expectEqual(@as(u32, 0), cp.indirect.?.buffer.index);
+}
+
+test "merge: explicit read + indirect draw merge into one barrier" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const rt_img: vk.Image = @enumFromInt(0);
+    const rt_view: vk.ImageView = @enumFromInt(0);
+    const vb: vk.Buffer = @enumFromInt(100);
+
+    const rt = rg.addImage(.{
+        .image = rt_img,
+        .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+        .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+    });
+    const ind_buf = rg.addBuffer(.{
+        .buffer = vb, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    const pass = rg.addGraphicsPass(.{
+        .pipeline = undefined,
+        .color_attachments = &.{.{ .image = rt, .view = rt_view }},
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+
+    pass.readBuffer(ind_buf, .{
+        .stage = .{ .vertex_shader_bit = true },
+        .access = .{ .shader_read_bit = true },
+    });
+    pass.drawIndirect(.{
+        .buffer = ind_buf,
+        .draw_count = 5,
+    });
+
+    var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
+    var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
+
+    const gp = &rg.passes.items[0].graphics;
+    collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
+    defer {
+        pass_images.deinit(alloc);
+        pass_buffers.deinit(alloc);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), pass_buffers.count());
+
+    const merged = pass_buffers.get(0).?;
+    try std.testing.expect(merged.stage.vertex_shader_bit);
+    try std.testing.expect(merged.stage.draw_indirect_bit);
+    try std.testing.expect(merged.access.shader_read_bit);
+    try std.testing.expect(merged.access.indirect_command_read_bit);
+}
+
+test "barrier helpers: image usage equality" {
+    const a: ImageTrackedState = .{ .layout = .undefined, .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } };
+    const b: ImageUsage = .{ .layout = .undefined, .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } };
+    try std.testing.expect(imageUsageEqual(a, b));
+
+    const c: ImageUsage = .{ .layout = .color_attachment_optimal, .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true } };
+    try std.testing.expect(!imageUsageEqual(a, c));
+}
+
+test "barrier helpers: buffer usage equality" {
+    const a: BufferTrackedState = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } };
+    const b: BufferUsage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } };
+    try std.testing.expect(bufferUsageEqual(a, b));
+
+    const c: BufferUsage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } };
+    try std.testing.expect(!bufferUsageEqual(a, c));
+}
+
+test "attachmentLayoutToUsage: color attachment" {
+    const u = attachmentLayoutToUsage(.color_attachment_optimal);
+    try std.testing.expect(u.stage.color_attachment_output_bit);
+    try std.testing.expectEqual(.color_attachment_optimal, u.layout);
+}
+
+test "attachmentLayoutToUsage: depth read-only" {
+    const u = attachmentLayoutToUsage(.depth_stencil_read_only_optimal);
+    try std.testing.expect(u.stage.early_fragment_tests_bit);
+    try std.testing.expect(!u.access.depth_stencil_attachment_write_bit);
+    try std.testing.expect(u.access.depth_stencil_attachment_read_bit);
+}
+
+test "merge helpers: stage and access bits OR correctly" {
+    const a = vk.PipelineStageFlags2{ .vertex_shader_bit = true };
+    const b = vk.PipelineStageFlags2{ .draw_indirect_bit = true };
+    const merged = mergeStage(a, b);
+    try std.testing.expect(merged.vertex_shader_bit);
+    try std.testing.expect(merged.draw_indirect_bit);
+    try std.testing.expect(!merged.fragment_shader_bit);
+
+    const acc_a = vk.AccessFlags2{ .shader_read_bit = true };
+    const acc_b = vk.AccessFlags2{ .indirect_command_read_bit = true };
+    const acc_merged = mergeAccess(acc_a, acc_b);
+    try std.testing.expect(acc_merged.shader_read_bit);
+    try std.testing.expect(acc_merged.indirect_command_read_bit);
+}
+
+test "merge helpers: buffer merge combines both" {
+    const a = BufferUsage{ .stage = .{ .vertex_shader_bit = true }, .access = .{ .shader_read_bit = true } };
+    const b = BufferUsage{ .stage = .{ .draw_indirect_bit = true }, .access = .{ .indirect_command_read_bit = true } };
+    const m = mergeBufferUsage(a, b);
+    try std.testing.expect(m.stage.vertex_shader_bit);
+    try std.testing.expect(m.stage.draw_indirect_bit);
+    try std.testing.expect(m.access.shader_read_bit);
+    try std.testing.expect(m.access.indirect_command_read_bit);
+}
+
+test "merge: two disjoint graphs concatenate cleanly" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const img1: vk.Image = @enumFromInt(1);
+    const buf1: vk.Buffer = @enumFromInt(100);
+
+    _ = rg1.addImage(.{
+        .image = img1,
+        .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
+        .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
+    });
+    _ = rg1.addBuffer(.{
+        .buffer = buf1, .offset = 0, .size = 64,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+    _ = rg1.addGraphicsPass(.{
+        .pipeline = undefined,
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+
+    var rg2 = RenderGraph.init(alloc);
+    defer rg2.deinit();
+
+    const img2: vk.Image = @enumFromInt(2);
+    const buf2: vk.Buffer = @enumFromInt(200);
+
+    _ = rg2.addImage(.{
+        .image = img2,
+        .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
+        .end_usage = .{ .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true }, .layout = .color_attachment_optimal },
+    });
+    _ = rg2.addBuffer(.{
+        .buffer = buf2, .offset = 0, .size = 128,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+    _ = rg2.addComputePass(.{
+        .pipeline = undefined,
+        .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
+    });
+
+    rg1.merge(&rg2);
+
+    try std.testing.expectEqual(@as(usize, 2), rg1.images.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rg1.buffers.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rg1.passes.items.len);
+    try std.testing.expectEqual(img1, rg1.images.items[0].image);
+    try std.testing.expectEqual(img2, rg1.images.items[1].image);
+    try std.testing.expectEqual(buf1, rg1.buffers.items[0].buffer);
+    try std.testing.expectEqual(@as(u64, 64), rg1.buffers.items[0].size);
+    try std.testing.expectEqual(buf2, rg1.buffers.items[1].buffer);
+    try std.testing.expectEqual(@as(u64, 128), rg1.buffers.items[1].size);
+    try std.testing.expect(rg1.passes.items[0] == .graphics);
+    try std.testing.expect(rg1.passes.items[1] == .compute);
+}
+
+test "merge: overlapping image dedup and end_usage inheritance" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const shared_img: vk.Image = @enumFromInt(42);
+    const shared_buf: vk.Buffer = @enumFromInt(7);
+
+    _ = rg1.addImage(.{
+        .image = shared_img,
+        .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
+        .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
+    });
+    _ = rg1.addBuffer(.{
+        .buffer = shared_buf, .offset = 0, .size = 32,
+        .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+        .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
+    });
+    const pa = rg1.addGraphicsPass(.{
+        .pipeline = undefined,
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+    pa.draw(.{ .vertex_count = 3 });
+
+    var rg2 = RenderGraph.init(alloc);
+    defer rg2.deinit();
+
+    _ = rg2.addImage(.{
+        .image = shared_img,
+        .start_usage = .{ .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true }, .layout = .color_attachment_optimal },
+        .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .present_src_khr },
+    });
+    _ = rg2.addBuffer(.{
+        .buffer = shared_buf, .offset = 0, .size = 32,
+        .start_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
+        .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
+    });
+    const pb = rg2.addGraphicsPass(.{
+        .pipeline = undefined,
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+    pb.draw(.{ .vertex_count = 5 });
+
+    rg1.merge(&rg2);
+
+    try std.testing.expectEqual(@as(usize, 1), rg1.images.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rg1.buffers.items.len);
+    try std.testing.expectEqual(@as(usize, 2), rg1.passes.items.len);
+
+    try std.testing.expectEqual(shared_img, rg1.images.items[0].image);
+    try std.testing.expectEqual(.undefined, rg1.images.items[0].start_usage.layout);
+    try std.testing.expectEqual(.present_src_khr, rg1.images.items[0].end_usage.layout);
+
+    try std.testing.expectEqual(shared_buf, rg1.buffers.items[0].buffer);
+    try std.testing.expect(rg1.buffers.items[0].end_usage.stage.vertex_input_bit);
+
+    const gp0 = &rg1.passes.items[0].graphics;
+    const gp1 = &rg1.passes.items[1].graphics;
+    try std.testing.expectEqual(@as(u32, 3), gp0.draws.items[0].vertex_count);
+    try std.testing.expectEqual(@as(u32, 5), gp1.draws.items[0].vertex_count);
+}
+
+test "merge: empty other is a no-op" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const img: vk.Image = @enumFromInt(1);
+    _ = rg1.addImage(.{
+        .image = img,
+        .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+        .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+    });
+
+    var empty = RenderGraph.init(alloc);
+    defer empty.deinit();
+
+    rg1.merge(&empty);
+
+    try std.testing.expectEqual(@as(usize, 1), rg1.images.items.len);
+    try std.testing.expectEqual(@as(usize, 0), rg1.buffers.items.len);
+    try std.testing.expectEqual(@as(usize, 0), rg1.passes.items.len);
+}
+
+test "merge: refs are correctly rebased through dedup" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const shared: vk.Image = @enumFromInt(99);
+    const other_img: vk.Image = @enumFromInt(88);
+    const view: vk.ImageView = @enumFromInt(77);
+
+    const a = rg1.addImage(.{
+        .image = shared,
+        .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+        .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+    });
+    _ = rg1.addGraphicsPass(.{
+        .pipeline = undefined,
+        .color_attachments = &.{.{ .image = a, .view = view }},
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+
+    var rg2 = RenderGraph.init(alloc);
+    defer rg2.init(alloc);
+
+    const b = rg2.addImage(.{
+        .image = shared,
+        .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+        .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+    });
+    const c = rg2.addImage(.{
+        .image = other_img,
+        .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+        .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
+    });
+    const p2 = rg2.addGraphicsPass(.{
+        .pipeline = undefined,
+        .color_attachments = &.{ .{ .image = b, .view = view }, .{ .image = c, .view = view } },
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+    p2.readImage(c, .{ .stage = .{}, .access = .{}, .layout = .undefined });
+
+    rg1.merge(&rg2);
+
+    try std.testing.expectEqual(@as(usize, 2), rg1.images.items.len);
+    try std.testing.expectEqual(shared, rg1.images.items[0].image);
+    try std.testing.expectEqual(other_img, rg1.images.items[1].image);
+
+    const merged = &rg1.passes.items[1].graphics;
+    try std.testing.expectEqual(@as(u32, 0), merged.color_attachments[0].image.index);
+    try std.testing.expectEqual(@as(u32, 1), merged.color_attachments[1].image.index);
+    try std.testing.expectEqual(@as(u32, 1), merged.reads_images.items[0].ref.index);
+}
+
+test "merge: indirect BufferRef is rebased" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const buf: vk.Buffer = @enumFromInt(10);
+    _ = rg1.addBuffer(.{
+        .buffer = buf, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    var rg2 = RenderGraph.init(alloc);
+    defer rg2.deinit();
+
+    const ind_buf = rg2.addBuffer(.{
+        .buffer = buf, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+    const p = rg2.addGraphicsPass(.{
+        .pipeline = undefined,
+        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+    });
+    p.drawIndirect(.{ .buffer = ind_buf, .draw_count = 10 });
+
+    rg1.merge(&rg2);
+
+    try std.testing.expectEqual(@as(usize, 1), rg1.buffers.items.len);
+    const merged = &rg1.passes.items[0].graphics;
+    try std.testing.expect(merged.indirect != null);
+    try std.testing.expectEqual(@as(u32, 0), merged.indirect.?.buffer.index);
+}

@@ -124,7 +124,7 @@ pub const GraphicsCtx = struct {
 
     debug_messenger: vk.DebugUtilsMessengerEXT,
 
-    pub fn init(alloc: Allocator, window: *zglfw.Window) !GraphicsCtx {
+    pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !GraphicsCtx {
         const vkb = BaseWrapper.load(getGlfwInstanceProcAddr);
 
         const required_layers = [_][*:0]const u8{ "VK_LAYER_KHRONOS_validation" };
@@ -143,7 +143,7 @@ pub const GraphicsCtx = struct {
 
         const instance = try vkb.createInstance(&.{
             .p_application_info = &.{
-                .p_application_name = "TODO",
+                .p_application_name = app_name,
                 .application_version = vk.makeApiVersion(0, 0, 0, 0).toU32(),
                 .p_engine_name = "Goliath",
                 .engine_version = vk.makeApiVersion(0, 0, 1, 0).toU32(),

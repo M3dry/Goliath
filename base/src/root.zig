@@ -7,6 +7,8 @@ pub const zgui = @import("zgui");
 pub const zmath = @import("zmath");
 pub const pipeline = @import("pipeline.zig");
 pub const compute = @import("compute.zig");
+pub const image_loader = @import("image_loader.zig");
+pub const render_graph = @import("render_graph.zig");
 
 pub const Buffer = @import("buffer.zig").Buffer;
 pub const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
@@ -21,7 +23,24 @@ pub const Sampler = @import("sampler.zig").Sampler;
 pub const Transport = @import("transport.zig").Transport;
 pub const Camera = @import("camera.zig").Camera;
 pub const PushConstant = @import("push_constant.zig").PushConstant;
-pub const image_loader = @import("image_loader.zig");
+pub const RenderGraph = render_graph.RenderGraph;
+pub const GraphicsPassHandle = render_graph.GraphicsPassHandle;
+pub const ComputePassHandle = render_graph.ComputePassHandle;
+pub const ImageRef = render_graph.ImageRef;
+pub const BufferRef = render_graph.BufferRef;
+pub const ImageContract = render_graph.ImageContract;
+pub const BufferContract = render_graph.BufferContract;
+pub const ImageUsage = render_graph.ImageUsage;
+pub const BufferUsage = render_graph.BufferUsage;
+pub const ColorAttachment = render_graph.ColorAttachment;
+pub const DepthAttachment = render_graph.DepthAttachment;
+pub const DrawCall = render_graph.DrawCall;
+pub const DrawIndirect = render_graph.DrawIndirect;
+pub const DispatchCall = render_graph.DispatchCall;
+pub const DispatchIndirect = render_graph.DispatchIndirect;
+pub const GraphicsPass = render_graph.GraphicsPass;
+pub const ComputePass = render_graph.ComputePass;
+pub const Pass = render_graph.Pass;
 
 const std = @import("std");
 const vma = @import("vma.zig").vma;
@@ -54,11 +73,13 @@ pub const Ctx = struct {
 
     descriptor_pools: [frames_in_flight]DescriptorPool,
 
-    pub const WindowOpts = struct {
+    pub const Opts = struct {
         pub const Size = union(enum) {
             dims: struct {u32, u32},
             fullscreen,
         };
+
+        name: [*:0]const u8,
 
         size: Size = .{ .dims = .{0,0} },
         resizable: bool = false,
@@ -68,7 +89,7 @@ pub const Ctx = struct {
         render_format: vk.Format,
     };
 
-    pub fn init(alloc: Allocator, name: [:0]const u8, window_opts: WindowOpts) !Ctx {
+    pub fn init(alloc: Allocator, name: [:0]const u8, window_opts: Opts) !Ctx {
         try zglfw.init();
 
         if (!zglfw.isVulkanSupported()) return error.NoVulkan;
@@ -95,7 +116,7 @@ pub const Ctx = struct {
             .height = @intCast(height),
         };
 
-        const graphics_ctx = try GraphicsCtx.init(alloc, window);
+        const graphics_ctx = try GraphicsCtx.init(alloc, window, window_opts.name);
 
         const frames = try alloc.alloc(Frame, frames_in_flight);
         errdefer alloc.free(frames);

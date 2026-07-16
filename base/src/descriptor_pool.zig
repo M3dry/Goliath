@@ -102,13 +102,13 @@ pub const DescriptorPool = struct {
     pub fn bindSet(
         self: *const DescriptorPool,
         cmd_buf: vk.CommandBuffer,
-        dev: *vk.DeviceProxy,
+        gc: *const GraphicsContext,
         id: u64,
         bind_point: vk.PipelineBindPoint,
         layout: vk.PipelineLayout,
         set: u32,
     ) void {
-        dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
+        gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
     }
 
     pub fn updateSet(
@@ -154,7 +154,7 @@ pub const DescriptorPool = struct {
         self.write_id = std.math.maxInt(u64);
     }
 
-    pub fn updateUbo(self: *DescriptorPool, binding: u32, data: []const u8) void {
+    pub fn updateUbo(self: *DescriptorPool, alloc: std.mem.Allocator, binding: u32, data: []const u8) void {
         if (self.ubo_offset + data.len > ubo_size) return;
 
         @memcpy(self.ubo_buffer.mapped.?[self.ubo_offset..][0..data.len], data);
@@ -166,12 +166,12 @@ pub const DescriptorPool = struct {
         };
         self.ubo_offset += data.len;
 
-        self.write_buffer_infos.append(std.heap.c_allocator, buf_info) catch return;
+        self.write_buffer_infos.append(alloc, buf_info) catch return;
 
         const index = @as(u32, @intCast(self.write_buffer_infos.items.len - 1));
-        self.buffer_write_indices.append(std.heap.c_allocator, index) catch return;
+        self.buffer_write_indices.append(alloc, index) catch return;
 
-        self.write_queue.append(std.heap.c_allocator, .{
+        self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
@@ -185,21 +185,22 @@ pub const DescriptorPool = struct {
 
     pub fn updateSampledImage(
         self: *DescriptorPool,
+        alloc: std.mem.Allocator,
         binding: u32,
         layout: vk.ImageLayout,
         view: vk.ImageView,
         sampler: vk.Sampler,
     ) void {
-        self.write_image_infos.append(std.heap.c_allocator, .{
+        self.write_image_infos.append(alloc, .{
             .image_layout = layout,
             .image_view = view,
             .sampler = sampler,
         }) catch return;
 
         const index = @as(u32, @intCast(self.write_image_infos.items.len - 1));
-        self.image_write_indices.append(std.heap.c_allocator, index) catch return;
+        self.image_write_indices.append(alloc, index) catch return;
 
-        self.write_queue.append(std.heap.c_allocator, .{
+        self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
@@ -213,20 +214,21 @@ pub const DescriptorPool = struct {
 
     pub fn updateStorageImage(
         self: *DescriptorPool,
+        alloc: std.mem.Allocator,
         binding: u32,
         layout: vk.ImageLayout,
         view: vk.ImageView,
     ) void {
-        self.write_image_infos.append(std.heap.c_allocator, .{
+        self.write_image_infos.append(alloc, .{
             .image_layout = layout,
             .image_view = view,
             .sampler = .null_handle,
         }) catch return;
 
         const index = @as(u32, @intCast(self.write_image_infos.items.len - 1));
-        self.image_write_indices.append(std.heap.c_allocator, index) catch return;
+        self.image_write_indices.append(alloc, index) catch return;
 
-        self.write_queue.append(std.heap.c_allocator, .{
+        self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
