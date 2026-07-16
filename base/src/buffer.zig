@@ -80,7 +80,7 @@ pub const Buffer = struct {
 
     pub fn deinit(self: *Buffer, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueBuffer(self.handle, self.allocation);
+            destroy_queue.enqueueBuffer(self.handle, self.allocation) catch @panic("OOM");
             self.handle = .null_handle;
             self.allocation = null;
         }

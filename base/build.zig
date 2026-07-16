@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -90,7 +90,7 @@ pub fn build(b: *std.Build) void {
 
     if (b.option(std.Build.LazyPath, "shader_src", "Path to shader source directory")) |shader_src| {
         const mod_name = b.option([]const u8, "shader_mod_name", "Shader module name") orelse "shaders";
-        compileAndEmbedShaders(b, shader_src, mod_name);
+        try compileAndEmbedShaders(b, shader_src, mod_name);
     }
 
     const check_obj = b.addObject(.{
@@ -138,7 +138,7 @@ fn resolveShaderSrcPath(b: *std.Build, shader_src: std.Build.LazyPath) ![]const 
     };
 }
 
-fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod_name: []const u8) void {
+fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod_name: []const u8) !void {
     const shader_dir_abs = resolveShaderSrcPath(b, shader_src) catch {
         _ = b.addModule(mod_name, .{
             .root_source_file = b.addWriteFiles().add("shaders.zig", emptyModuleSource()),
@@ -211,8 +211,8 @@ fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod_nam
         glslc_run.expectExitCode(0);
         const stdout_lp = glslc_run.captureStdOut(.{});
 
-        captured_stdouts.append(b.allocator, stdout_lp) catch continue;
-        entry_names.append(b.allocator, b.dupe(name_buf[0..name_len])) catch continue;
+        try captured_stdouts.append(b.allocator, stdout_lp);
+        try entry_names.append(b.allocator, b.dupe(name_buf[0..name_len]));
         file_count += 1;
     }
 
@@ -225,8 +225,8 @@ fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod_nam
 
     var names_buf: std.ArrayList(u8) = .empty;
     for (entry_names.items) |name| {
-        names_buf.appendSlice(b.allocator, name) catch @panic("OOM");
-        names_buf.append(b.allocator, '\n') catch @panic("OOM");
+        try names_buf.appendSlice(b.allocator, name);
+        try names_buf.append(b.allocator, '\n');
     }
     const names_lp = b.addWriteFiles().add("shader_names.txt", names_buf.items);
 

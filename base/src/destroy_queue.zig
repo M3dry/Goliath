@@ -35,20 +35,20 @@ pub const DestroyQueue = struct {
         }
     }
 
-    pub fn enqueueBuffer(self: *DestroyQueue, handle: vk.Buffer, allocation: vma.VmaAllocation) void {
-        self.frames[self.current_frame].append(self.alloc, .{ .buffer = .{ .handle = handle, .allocation = allocation } }) catch {};
+    pub fn enqueueBuffer(self: *DestroyQueue, handle: vk.Buffer, allocation: vma.VmaAllocation) !void {
+        try self.frames[self.current_frame].append(self.alloc, .{ .buffer = .{ .handle = handle, .allocation = allocation } });
     }
 
-    pub fn enqueueImage(self: *DestroyQueue, handle: vk.Image, allocation: vma.VmaAllocation) void {
-        self.frames[self.current_frame].append(self.alloc, .{ .image = .{ .handle = handle, .allocation = allocation } }) catch {};
+    pub fn enqueueImage(self: *DestroyQueue, handle: vk.Image, allocation: vma.VmaAllocation) !void {
+        try self.frames[self.current_frame].append(self.alloc, .{ .image = .{ .handle = handle, .allocation = allocation } });
     }
 
-    pub fn enqueueImageView(self: *DestroyQueue, view: vk.ImageView) void {
-        self.frames[self.current_frame].append(self.alloc, .{ .image_view = view }) catch {};
+    pub fn enqueueImageView(self: *DestroyQueue, view: vk.ImageView) !void {
+        try self.frames[self.current_frame].append(self.alloc, .{ .image_view = view });
     }
 
-    pub fn enqueueSampler(self: *DestroyQueue, sampler: vk.Sampler) void {
-        self.frames[self.current_frame].append(self.alloc, .{ .sampler = sampler }) catch {};
+    pub fn enqueueSampler(self: *DestroyQueue, sampler: vk.Sampler) !void {
+        try self.frames[self.current_frame].append(self.alloc, .{ .sampler = sampler });
     }
 
     pub fn flush(self: *DestroyQueue, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy) void {

@@ -72,11 +72,12 @@ pub const DescriptorPool = struct {
         gc: *const GraphicsContext,
         alloc: Allocator,
     ) void {
-        if (self.pool != .null_handle) {
-            gc.dev.destroyDescriptorPool(self.pool, null);
-        }
+        gc.dev.destroyDescriptorPool(self.pool, null);
+
         self.ubo_buffer.deinitNow(gc.vma_alloc);
+
         alloc.free(self.sets);
+
         self.write_buffer_infos.deinit(alloc);
         self.write_image_infos.deinit(alloc);
         self.write_queue.deinit(alloc);
@@ -166,12 +167,12 @@ pub const DescriptorPool = struct {
         };
         self.ubo_offset += data.len;
 
-        self.write_buffer_infos.append(alloc, buf_info) catch return;
+        try self.write_buffer_infos.append(alloc, buf_info);
 
         const index = @as(u32, @intCast(self.write_buffer_infos.items.len - 1));
-        self.buffer_write_indices.append(alloc, index) catch return;
+        try self.buffer_write_indices.append(alloc, index);
 
-        self.write_queue.append(alloc, .{
+        try self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
@@ -180,7 +181,7 @@ pub const DescriptorPool = struct {
             .p_buffer_info = undefined,
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
-        }) catch return;
+        });
     }
 
     pub fn updateSampledImage(
@@ -190,17 +191,17 @@ pub const DescriptorPool = struct {
         layout: vk.ImageLayout,
         view: vk.ImageView,
         sampler: vk.Sampler,
-    ) void {
-        self.write_image_infos.append(alloc, .{
+    ) !void {
+        try self.write_image_infos.append(alloc, .{
             .image_layout = layout,
             .image_view = view,
             .sampler = sampler,
-        }) catch return;
+        });
 
         const index = @as(u32, @intCast(self.write_image_infos.items.len - 1));
-        self.image_write_indices.append(alloc, index) catch return;
+        try self.image_write_indices.append(alloc, index);
 
-        self.write_queue.append(alloc, .{
+        try self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
@@ -209,7 +210,7 @@ pub const DescriptorPool = struct {
             .p_buffer_info = undefined,
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
-        }) catch return;
+        });
     }
 
     pub fn updateStorageImage(
@@ -218,17 +219,17 @@ pub const DescriptorPool = struct {
         binding: u32,
         layout: vk.ImageLayout,
         view: vk.ImageView,
-    ) void {
-        self.write_image_infos.append(alloc, .{
+    ) !void {
+        try self.write_image_infos.append(alloc, .{
             .image_layout = layout,
             .image_view = view,
             .sampler = .null_handle,
-        }) catch return;
+        });
 
         const index = @as(u32, @intCast(self.write_image_infos.items.len - 1));
-        self.image_write_indices.append(alloc, index) catch return;
+        try self.image_write_indices.append(alloc, index);
 
-        self.write_queue.append(alloc, .{
+        try self.write_queue.append(alloc, .{
             .dst_set = .null_handle,
             .dst_binding = binding,
             .dst_array_element = 0,
@@ -237,11 +238,11 @@ pub const DescriptorPool = struct {
             .p_buffer_info = undefined,
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
-        }) catch return;
+        });
     }
 
-    pub fn clear(self: *DescriptorPool, dev: *vk.DeviceProxy) void {
-        _ = dev.resetDescriptorPool(self.pool, .{}) catch {};
+    pub fn clear(self: *DescriptorPool, dev: *vk.DeviceProxy) !void {
+        try dev.resetDescriptorPool(self.pool, .{});
         self.set_count = 0;
         @memset(self.sets, .null_handle);
         self.ubo_offset = 0;

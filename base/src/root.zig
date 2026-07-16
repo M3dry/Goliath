@@ -10,6 +10,8 @@ pub const compute = @import("compute.zig");
 pub const image_loader = @import("image_loader.zig");
 pub const render_graph = @import("render_graph.zig");
 
+pub const util = @import("util/root.zig");
+
 pub const Buffer = @import("buffer.zig").Buffer;
 pub const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
 pub const TexturePool = @import("texture_pool.zig").TexturePool;
@@ -171,8 +173,6 @@ pub const Ctx = struct {
     }
 
     pub fn deinit(self: *Ctx, alloc: Allocator) void {
-        if (self.graphics.dev.deviceWaitIdle()) {} else |_| { return; }
-
         for (&self.descriptor_pools) |*pool| {
             pool.deinit(&self.graphics, alloc);
         }
@@ -236,7 +236,7 @@ pub const Ctx = struct {
         }
 
         frame.acquired_swapchain = acquired.image_index;
-        self.descriptor_pools[self.current_frame].clear(&self.graphics.dev);
+        try self.descriptor_pools[self.current_frame].clear(&self.graphics.dev);
         return .success;
     }
 
@@ -260,13 +260,7 @@ pub const Ctx = struct {
                 .new_layout = .color_attachment_optimal,
                 .src_queue_family_index = self.graphics.graphics_family,
                 .dst_queue_family_index = self.graphics.graphics_family,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = util.fullRange(.{ .color_bit = true }),
                 .image = frame.render_target.handle,
             },
             .{
@@ -278,13 +272,7 @@ pub const Ctx = struct {
                 .new_layout = .transfer_dst_optimal,
                 .src_queue_family_index = self.graphics.graphics_family,
                 .dst_queue_family_index = self.graphics.graphics_family,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = util.fullRange(.{ .color_bit = true }),
                 .image = self.swapchain.images[frame.acquired_swapchain.?].image,
             },
         };
@@ -344,13 +332,7 @@ pub const Ctx = struct {
                 self.swapchain.images[acquired_image].image,
                 .transfer_dst_optimal,
                 &clear_value,
-                &[_]vk.ImageSubresourceRange{.{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                }},
+                &[_]vk.ImageSubresourceRange{util.fullRange(.{ .color_bit = true })},
             );
 
             self.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
@@ -364,13 +346,7 @@ pub const Ctx = struct {
                     .new_layout = .transfer_dst_optimal,
                     .src_queue_family_index = self.graphics.graphics_family,
                     .dst_queue_family_index = self.graphics.graphics_family,
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = vk.REMAINING_MIP_LEVELS,
-                        .base_array_layer = 0,
-                        .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                    },
+                    .subresource_range = util.fullRange(.{ .color_bit = true }),
                     .image = self.swapchain.images[acquired_image].image,
                 })[0..1],
             });
@@ -521,13 +497,13 @@ const Frame = struct {
     }
 
     pub fn deinitRenderTexture(self: *Frame, gc: *const GraphicsCtx) void {
-        self.render_target_view.deinitNow(gc.dev);
+        self.render_target_view.deinitNow(gc);
         self.render_target.deinitNow(gc.vma_alloc);
     }
 
     pub fn deinit(self: *Frame, gc: *const GraphicsCtx) void {
         if (self.render_target.handle != .null_handle) {
-            self.render_target_view.deinitNow(gc.dev);
+            self.render_target_view.deinitNow(gc);
             self.render_target.deinitNow(gc.vma_alloc);
         }
         gc.dev.destroyCommandPool(self.cmd_pool, null);

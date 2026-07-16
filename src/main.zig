@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
     defer ctx.deinit(gpa);
 
     var transport: base.Transport = undefined;
-    try transport.init(&ctx.graphics, gpa);
+    try transport.init(&ctx.graphics, gpa, init.io);
     defer transport.deinit(&ctx.graphics);
 
     const vertex_data = [_]@Vector(4, f32){
@@ -54,9 +54,9 @@ pub fn main(init: std.process.Init) !void {
         @Vector(4, f32){ 0.0, 0.5, 0.0, 1.0 },
     };
     var vertex_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Triangle vertices", @sizeOf(@TypeOf(vertex_data)), .{ .vertex_buffer_bit = true, .transfer_dst_bit = true }, false);
-    defer vertex_buf.deinitNow(ctx.graphics.vma_alloc);
+    defer vertex_buf.deinit(&ctx.destroy_queue);
 
-    const vertex_ticket = transport.uploadBuffer(
+    const vertex_ticket = try transport.uploadBuffer(
         true,
         std.mem.sliceAsBytes(&vertex_data),
         null,
@@ -65,8 +65,9 @@ pub fn main(init: std.process.Init) !void {
         .{ .vertex_input_bit = true },
         .{ .memory_read_bit = true },
     );
-    while (!transport.isReady(vertex_ticket)) {
-        transport.drain(&ctx.graphics);
+    while (!try transport.isReady(vertex_ticket)) {
+        try transport.drain(&ctx.graphics);
+
         std.Thread.yield() catch {};
     }
 
@@ -80,9 +81,9 @@ pub fn main(init: std.process.Init) !void {
         .extent = .{ .width = tex_w, .height = tex_h },
         .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
     });
-    defer texture_image.deinitNow(ctx.graphics.vma_alloc);
+    defer texture_image.deinit(&ctx.destroy_queue);
 
-    const texture_ticket = transport.uploadImage(
+    const texture_ticket = try transport.uploadImage(
         true,
         .r8g8b8a8_srgb,
         .{ .width = tex_w, .height = tex_h, .depth = 1 },
@@ -101,8 +102,8 @@ pub fn main(init: std.process.Init) !void {
         .{ .fragment_shader_bit = true },
         .{ .shader_read_bit = true },
     );
-    while (!transport.isReady(texture_ticket)) {
-        transport.drain(&ctx.graphics);
+    while (!try transport.isReady(texture_ticket)) {
+        try transport.drain(&ctx.graphics);
         std.Thread.yield() catch {};
     }
 
@@ -117,7 +118,7 @@ pub fn main(init: std.process.Init) !void {
             .layer_count = 1,
         },
     });
-    defer texture_view.deinitNow(ctx.graphics.dev);
+    defer texture_view.deinit(&ctx.destroy_queue);
 
     var sampler = try base.Sampler.init(&ctx.graphics, .{
         .mag_filter = .linear,
@@ -127,7 +128,7 @@ pub fn main(init: std.process.Init) !void {
         .address_mode_v = .repeat,
         .address_mode_w = .repeat,
     });
-    defer sampler.deinitNow(&ctx.graphics);
+    defer sampler.deinit(&ctx.destroy_queue);
 
     var input = base.input.InputState{};
     input.init(ctx.window);
@@ -256,7 +257,7 @@ pub fn main(init: std.process.Init) !void {
 
             const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
             dp.beginUpdate(set_id);
-            dp.updateSampledImage(gpa, 0, .read_only_optimal, texture_view.handle, sampler.handle);
+            try dp.updateSampledImage(gpa, 0, .read_only_optimal, texture_view.handle, sampler.handle);
             dp.endUpdate(&ctx.graphics.dev);
 
             var pc_buf: [base.PushConstant.size(PC)]u8 = undefined;

@@ -48,7 +48,7 @@ pub const Sampler = struct {
 
     pub fn deinit(self: *Sampler, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueSampler(self.handle);
+            destroy_queue.enqueueSampler(self.handle) catch @panic("OOM");
             self.handle = .null_handle;
         }
     }

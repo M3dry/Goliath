@@ -3,6 +3,7 @@ const zgui = @import("zgui");
 const vk = @import("vulkan");
 
 const Allocator = std.mem.Allocator;
+const fullRange = @import("util/subresource_range.zig").fullRange;
 
 var vk_loader_instance: vk.Instance = undefined;
 var vk_loader_get_proc: vk.PfnGetInstanceProcAddr = undefined;
@@ -61,7 +62,6 @@ pub const ImguiState = struct {
     }
 
     pub fn deinit(self: *ImguiState, dev: anytype) void {
-        dev.deviceWaitIdle() catch {};
         zgui.backend.deinit();
         zgui.deinit();
         dev.destroyDescriptorPool(self.descriptor_pool, null);
@@ -104,13 +104,7 @@ pub const ImguiState = struct {
                 .new_layout = .color_attachment_optimal,
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = fullRange(.{ .color_bit = true }),
                 .image = swap.image,
             };
             dev.cmdPipelineBarrier2(cmd_buf, &.{
@@ -153,13 +147,7 @@ pub const ImguiState = struct {
                 .new_layout = .present_src_khr,
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = fullRange(.{ .color_bit = true }),
                 .image = swap.image,
             };
             dev.cmdPipelineBarrier2(cmd_buf, &.{

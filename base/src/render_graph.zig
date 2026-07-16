@@ -4,6 +4,8 @@ const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
 const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
 const GraphicsPipeline = @import("pipeline.zig").GraphicsPipeline;
 const ComputePipeline = @import("compute.zig").ComputePipeline;
+const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
+const fullRange = @import("util/subresource_range.zig").fullRange;
 
 const Allocator = std.mem.Allocator;
 
@@ -28,6 +30,7 @@ pub const BufferUsage = struct {
 
 pub const ImageContract = struct {
     image: vk.Image,
+    aspect: vk.ImageAspectFlags = .{ .color_bit = true },
     start_usage: ImageUsage,
     end_usage: ImageUsage,
 };
@@ -96,6 +99,16 @@ pub const DepthAttachment = struct {
     clear_depth: f32 = 1.0,
     clear_stencil: u32 = 0,
     layout: vk.ImageLayout = .depth_stencil_attachment_optimal,
+    has_stencil: bool = false,
+};
+
+pub const StencilAttachment = struct {
+    image: ImageRef,
+    view: vk.ImageView,
+    load_op: vk.AttachmentLoadOp = .clear,
+    store_op: vk.AttachmentStoreOp = .store,
+    clear_stencil: u32 = 0,
+    layout: vk.ImageLayout = .depth_stencil_attachment_optimal,
 };
 
 const ImageRefUsage = struct {
@@ -112,6 +125,7 @@ pub const GraphicsPass = struct {
     pipeline: *GraphicsPipeline,
     color_attachments: []const ColorAttachment = &.{},
     depth_attachment: ?DepthAttachment = null,
+    stencil_attachment: ?StencilAttachment = null,
     render_area: vk.Rect2D,
     descriptor_sets: []const u64 = &.{},
     reads_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
@@ -134,83 +148,48 @@ pub const ComputePass = struct {
     indirect: ?DispatchIndirect = null,
 };
 
-pub const GraphicsPassHandle = struct {
-    rg: *RenderGraph,
-    index: u32,
+pub const PassType = enum { graphics, compute };
 
-    pub fn readImage(self: GraphicsPassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].graphics.reads_images.append(
-            self.rg.alloc,
-            .{ .ref = image, .usage = usage },
-        );
-    }
-    pub fn readBuffer(self: GraphicsPassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].graphics.reads_buffers.append(
-            self.rg.alloc,
-            .{ .ref = buffer, .usage = usage },
-        );
-    }
-    pub fn writeImage(self: GraphicsPassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].graphics.writes_images.append(
-            self.rg.alloc,
-            .{ .ref = image, .usage = usage },
-        );
-    }
-    pub fn writeBuffer(self: GraphicsPassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].graphics.writes_buffers.append(
-            self.rg.alloc,
-            .{ .ref = buffer, .usage = usage },
-        );
-    }
-    pub fn draw(self: GraphicsPassHandle, call: DrawCall) Allocator.Error!void {
-        try self.rg.passes.items[self.index].graphics.draws.append(
-            self.rg.alloc,
-            call,
-        );
-    }
-    pub fn drawIndirect(self: GraphicsPassHandle, indirect: DrawIndirect) void {
-        self.rg.passes.items[self.index].graphics.indirect = indirect;
-    }
-    pub fn drawIndirectCount(self: GraphicsPassHandle, count: DrawIndirectCount) void {
-        self.rg.passes.items[self.index].graphics.indirect_count = count;
-    }
-    pub fn setDescriptorSets(self: GraphicsPassHandle, sets: []const u64) void {
-        self.rg.passes.items[self.index].graphics.descriptor_sets = sets;
-    }
-};
+fn PassHandle(comptime pass_type: PassType) type {
+    return struct {
+        const pass_name: []const u8 = if (pass_type == .graphics) "graphics" else "compute";
 
-pub const ComputePassHandle = struct {
-    rg: *RenderGraph,
-    index: u32,
+        rg: *RenderGraph,
+        index: u32,
 
-    pub fn readImage(self: ComputePassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].compute.reads_images.append(
-            self.rg.alloc,
-            .{ .ref = image, .usage = usage },
-        );
-    }
-    pub fn readBuffer(self: ComputePassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].compute.reads_buffers.append(
-            self.rg.alloc,
-            .{ .ref = buffer, .usage = usage },
-        );
-    }
-    pub fn writeImage(self: ComputePassHandle, image: ImageRef, usage: ImageUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].compute.writes_images.append(
-            self.rg.alloc,
-            .{ .ref = image, .usage = usage },
-        );
-    }
-    pub fn writeBuffer(self: ComputePassHandle, buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
-        try self.rg.passes.items[self.index].compute.writes_buffers.append(
-            self.rg.alloc,
-            .{ .ref = buffer, .usage = usage },
-        );
-    }
-    pub fn setDescriptorSets(self: ComputePassHandle, sets: []const u64) void {
-        self.rg.passes.items[self.index].compute.descriptor_sets = sets;
-    }
-};
+        pub fn readImage(self: @This(), image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+            try @field(self.rg.passes.items[self.index], pass_name).reads_images.append(self.rg.alloc, .{ .ref = image, .usage = usage });
+        }
+        pub fn readBuffer(self: @This(), buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+            try @field(self.rg.passes.items[self.index], pass_name).reads_buffers.append(self.rg.alloc, .{ .ref = buffer, .usage = usage });
+        }
+        pub fn writeImage(self: @This(), image: ImageRef, usage: ImageUsage) Allocator.Error!void {
+            try @field(self.rg.passes.items[self.index], pass_name).writes_images.append(self.rg.alloc, .{ .ref = image, .usage = usage });
+        }
+        pub fn writeBuffer(self: @This(), buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
+            try @field(self.rg.passes.items[self.index], pass_name).writes_buffers.append(self.rg.alloc, .{ .ref = buffer, .usage = usage });
+        }
+        pub fn setDescriptorSets(self: @This(), sets: []const u64) void {
+            @field(self.rg.passes.items[self.index], pass_name).descriptor_sets = sets;
+        }
+
+        pub fn draw(self: @This(), call: DrawCall) Allocator.Error!void {
+            if (pass_type != .graphics) @compileError("draw is only valid on graphics passes");
+            try self.rg.passes.items[self.index].graphics.draws.append(self.rg.alloc, call);
+        }
+        pub fn drawIndirect(self: @This(), indirect: DrawIndirect) void {
+            if (pass_type != .graphics) @compileError("drawIndirect is only valid on graphics passes");
+            self.rg.passes.items[self.index].graphics.indirect = indirect;
+        }
+        pub fn drawIndirectCount(self: @This(), count: DrawIndirectCount) void {
+            if (pass_type != .graphics) @compileError("drawIndirectCount is only valid on graphics passes");
+            self.rg.passes.items[self.index].graphics.indirect_count = count;
+        }
+    };
+}
+
+pub const GraphicsPassHandle = PassHandle(.graphics);
+pub const ComputePassHandle = PassHandle(.compute);
 
 pub const Pass = union(enum) {
     graphics: GraphicsPass,
@@ -245,19 +224,37 @@ fn attachmentLayoutToUsage(layout: vk.ImageLayout) ImageUsage {
             .access = .{ .depth_stencil_attachment_read_bit = true },
             .layout = layout,
         },
+        .shader_read_only_optimal => .{
+            .stage = .{ .fragment_shader_bit = true },
+            .access = .{ .shader_read_bit = true },
+            .layout = layout,
+        },
+        .transfer_src_optimal => .{
+            .stage = .{ .all_transfer_bit = true },
+            .access = .{ .transfer_read_bit = true },
+            .layout = layout,
+        },
+        .transfer_dst_optimal => .{
+            .stage = .{ .all_transfer_bit = true },
+            .access = .{ .transfer_write_bit = true },
+            .layout = layout,
+        },
+        .general => .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_read_bit = true, .memory_write_bit = true },
+            .layout = layout,
+        },
+        .present_src_khr => .{
+            .stage = .{},
+            .access = .{},
+            .layout = layout,
+        },
+        .undefined => .{
+            .stage = .{ .all_commands_bit = true },
+            .access = .{ .memory_write_bit = true },
+            .layout = layout,
+        },
         else => unreachable,
-    };
-}
-
-fn imageAspectFromLayout(layout: vk.ImageLayout) vk.ImageAspectFlags {
-    return switch (layout) {
-        .color_attachment_optimal => .{ .color_bit = true },
-        .depth_stencil_attachment_optimal,
-        .depth_stencil_read_only_optimal,
-        .depth_attachment_optimal,
-        .depth_read_only_optimal,
-        => .{ .depth_bit = true, .stencil_bit = true },
-        else => .{ .color_bit = true },
     };
 }
 
@@ -295,32 +292,35 @@ fn mergeImageUsage(a: ImageUsage, b: ImageUsage) ImageUsage {
     };
 }
 
-fn upsertBuffer(
-    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+fn upsert(
+    comptime V: type,
+    map: *std.AutoArrayHashMapUnmanaged(u32, V),
     idx: u32,
-    usage: BufferUsage,
+    usage: V,
+    comptime mergeFn: fn (V, V) V,
     alloc: Allocator,
 ) Allocator.Error!void {
-    const gop = try pass_buffers.getOrPut(alloc, idx);
+    const gop = try map.getOrPut(alloc, idx);
     if (gop.found_existing) {
-        gop.value_ptr.* = mergeBufferUsage(gop.value_ptr.*, usage);
+        gop.value_ptr.* = mergeFn(gop.value_ptr.*, usage);
     } else {
         gop.value_ptr.* = usage;
     }
 }
 
-fn upsertImage(
+fn collectIoRequirements(
     pass_images: *std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
-    idx: u32,
-    usage: ImageUsage,
+    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    reads_images: []const ImageRefUsage,
+    reads_buffers: []const BufferRefUsage,
+    writes_images: []const ImageRefUsage,
+    writes_buffers: []const BufferRefUsage,
     alloc: Allocator,
 ) Allocator.Error!void {
-    const gop = try pass_images.getOrPut(alloc, idx);
-    if (gop.found_existing) {
-        gop.value_ptr.* = mergeImageUsage(gop.value_ptr.*, usage);
-    } else {
-        gop.value_ptr.* = usage;
-    }
+    for (reads_images) |ri| { try upsert(ImageUsage, pass_images, ri.ref.index, ri.usage, mergeImageUsage, alloc); }
+    for (reads_buffers) |rb| { try upsert(BufferUsage, pass_buffers, rb.ref.index, rb.usage, mergeBufferUsage, alloc); }
+    for (writes_images) |wi| { try upsert(ImageUsage, pass_images, wi.ref.index, wi.usage, mergeImageUsage, alloc); }
+    for (writes_buffers) |wb| { try upsert(BufferUsage, pass_buffers, wb.ref.index, wb.usage, mergeBufferUsage, alloc); }
 }
 
 fn collectPassRequirementsGraphics(
@@ -333,35 +333,26 @@ fn collectPassRequirementsGraphics(
     pass_buffers.clearRetainingCapacity();
 
     for (gp.color_attachments) |att| {
-        try upsertImage(pass_images, att.image.index, attachmentLayoutToUsage(att.layout), alloc);
+        try upsert(ImageUsage, pass_images, att.image.index, attachmentLayoutToUsage(att.layout), mergeImageUsage, alloc);
     }
     if (gp.depth_attachment) |att| {
-        try upsertImage(pass_images, att.image.index, attachmentLayoutToUsage(att.layout), alloc);
+        try upsert(ImageUsage, pass_images, att.image.index, attachmentLayoutToUsage(att.layout), mergeImageUsage, alloc);
+    }
+    if (gp.stencil_attachment) |att| {
+        try upsert(ImageUsage, pass_images, att.image.index, attachmentLayoutToUsage(att.layout), mergeImageUsage, alloc);
     }
 
-    for (gp.reads_images.items) |ri| {
-        try upsertImage(pass_images, ri.ref.index, ri.usage, alloc);
-    }
-    for (gp.reads_buffers.items) |rb| {
-        try upsertBuffer(pass_buffers, rb.ref.index, rb.usage, alloc);
-    }
-
-    for (gp.writes_images.items) |wi| {
-        try upsertImage(pass_images, wi.ref.index, wi.usage, alloc);
-    }
-    for (gp.writes_buffers.items) |wb| {
-        try upsertBuffer(pass_buffers, wb.ref.index, wb.usage, alloc);
-    }
+    try collectIoRequirements(pass_images, pass_buffers, gp.reads_images.items, gp.reads_buffers.items, gp.writes_images.items, gp.writes_buffers.items, alloc);
 
     const indirect_stage = vk.PipelineStageFlags2{ .draw_indirect_bit = true };
     const indirect_access = vk.AccessFlags2{ .indirect_command_read_bit = true };
 
     if (gp.indirect) |ind| {
-        try upsertBuffer(pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+        try upsert(BufferUsage, pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, mergeBufferUsage, alloc);
     }
     if (gp.indirect_count) |ic| {
-        try upsertBuffer(pass_buffers, ic.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
-        try upsertBuffer(pass_buffers, ic.count_buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+        try upsert(BufferUsage, pass_buffers, ic.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, mergeBufferUsage, alloc);
+        try upsert(BufferUsage, pass_buffers, ic.count_buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, mergeBufferUsage, alloc);
     }
 }
 
@@ -374,25 +365,13 @@ fn collectPassRequirementsCompute(
     pass_images.clearRetainingCapacity();
     pass_buffers.clearRetainingCapacity();
 
-    for (cp.reads_images.items) |ri| {
-        try upsertImage(pass_images, ri.ref.index, ri.usage, alloc);
-    }
-    for (cp.reads_buffers.items) |rb| {
-        try upsertBuffer(pass_buffers, rb.ref.index, rb.usage, alloc);
-    }
-
-    for (cp.writes_images.items) |wi| {
-        try upsertImage(pass_images, wi.ref.index, wi.usage, alloc);
-    }
-    for (cp.writes_buffers.items) |wb| {
-        try upsertBuffer(pass_buffers, wb.ref.index, wb.usage, alloc);
-    }
+    try collectIoRequirements(pass_images, pass_buffers, cp.reads_images.items, cp.reads_buffers.items, cp.writes_images.items, cp.writes_buffers.items, alloc);
 
     const indirect_stage = vk.PipelineStageFlags2{ .draw_indirect_bit = true };
     const indirect_access = vk.AccessFlags2{ .indirect_command_read_bit = true };
 
     if (cp.indirect) |ind| {
-        try upsertBuffer(pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, alloc);
+        try upsert(BufferUsage, pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, mergeBufferUsage, alloc);
     }
 }
 
@@ -424,13 +403,7 @@ fn emitPassBarriers(
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
                 .image = contracts[idx].image,
-                .subresource_range = .{
-                    .aspect_mask = imageAspectFromLayout(req.layout),
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = fullRange(contracts[idx].aspect),
             });
             cur.* = .{
                 .layout = req.layout,
@@ -516,9 +489,10 @@ fn recordGraphicsPass(
     cmd_buf: vk.CommandBuffer,
     dp: *DescriptorPool,
     buf_contracts: []const BufferContract,
-) void {
+    alloc: Allocator,
+) Allocator.Error!void {
     const dev = &gc.dev;
-    beginRendering(gp, dev, cmd_buf);
+    try beginRendering(gp, dev, cmd_buf, alloc);
     recordGraphicsCommands(gp, gc, cmd_buf, dp, buf_contracts);
     dev.cmdEndRendering(cmd_buf);
 }
@@ -533,6 +507,11 @@ fn renderTargetsEqual(a: *const GraphicsPass, b: *const GraphicsPass) bool {
         const db = b.depth_attachment.?;
         if (da.view != db.view or da.layout != db.layout) return false;
     }
+    if ((a.stencil_attachment != null) != (b.stencil_attachment != null)) return false;
+    if (a.stencil_attachment) |sa| {
+        const sb = b.stencil_attachment.?;
+        if (sa.view != sb.view or sa.layout != sb.layout) return false;
+    }
     return a.render_area.offset.x == b.render_area.offset.x and
         a.render_area.offset.y == b.render_area.offset.y and
         a.render_area.extent.width == b.render_area.extent.width and
@@ -543,12 +522,14 @@ fn beginRendering(
     gp: *const GraphicsPass,
     dev: *const vk.DeviceProxy,
     cmd_buf: vk.CommandBuffer,
-) void {
-    var color_attachment_infos: [8]vk.RenderingAttachmentInfo = undefined;
-    std.debug.assert(gp.color_attachments.len <= color_attachment_infos.len);
+    alloc: Allocator,
+) Allocator.Error!void {
+    var color_buf: SmallBuffer(vk.RenderingAttachmentInfo, 16) = .{};
+    defer color_buf.deinit(alloc);
+    const colors = try color_buf.get(alloc, gp.color_attachments.len);
 
     for (gp.color_attachments, 0..) |att, i| {
-        color_attachment_infos[i] = .{
+        colors[i] = .{
             .image_view = att.view,
             .image_layout = att.layout,
             .resolve_mode = .{},
@@ -573,14 +554,30 @@ fn beginRendering(
         break :blk &depth_attachment_info;
     } else null;
 
+    var stencil_attachment_info: vk.RenderingAttachmentInfo = undefined;
+    const p_stencil: ?*const vk.RenderingAttachmentInfo = if (gp.stencil_attachment) |*att| blk: {
+        stencil_attachment_info = .{
+            .image_view = att.view,
+            .image_layout = att.layout,
+            .resolve_mode = .{},
+            .resolve_image_layout = .undefined,
+            .load_op = att.load_op,
+            .store_op = att.store_op,
+            .clear_value = .{ .depth_stencil = .{ .depth = 0, .stencil = att.clear_stencil } },
+        };
+        break :blk &stencil_attachment_info;
+    } else if (gp.depth_attachment) |att| blk: {
+        if (att.has_stencil) break :blk p_depth else break :blk null;
+    } else null;
+
     dev.cmdBeginRendering(cmd_buf, &.{
         .render_area = gp.render_area,
         .layer_count = 1,
         .view_mask = 0,
         .color_attachment_count = @intCast(gp.color_attachments.len),
-        .p_color_attachments = &color_attachment_infos,
+        .p_color_attachments = colors.ptr,
         .p_depth_attachment = p_depth,
-        .p_stencil_attachment = p_depth,
+        .p_stencil_attachment = p_stencil,
     });
 }
 
@@ -635,14 +632,14 @@ fn emitFinalBarriers(
     qf: u32,
     dev: *vk.DeviceProxy,
     cmd_buf: vk.CommandBuffer,
-    arena_alloc: Allocator,
+    alloc: Allocator,
 ) Allocator.Error!void {
     var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
     var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
 
-    for (self.images.items, image_states, 0..) |contract, state, i| {
+    for (self.images.items, image_states) |contract, state| {
         if (!imageUsageEqual(state, contract.end_usage)) {
-            try img_bars.append(arena_alloc, .{
+            try img_bars.append(alloc, .{
                 .src_stage_mask = state.stage,
                 .src_access_mask = state.access,
                 .dst_stage_mask = contract.end_usage.stage,
@@ -652,21 +649,14 @@ fn emitFinalBarriers(
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
                 .image = contract.image,
-                .subresource_range = .{
-                    .aspect_mask = imageAspectFromLayout(contract.end_usage.layout),
-                    .base_mip_level = 0,
-                    .level_count = vk.REMAINING_MIP_LEVELS,
-                    .base_array_layer = 0,
-                    .layer_count = vk.REMAINING_ARRAY_LAYERS,
-                },
+                .subresource_range = fullRange(contract.aspect),
             });
-            _ = i;
         }
     }
 
-    for (self.buffers.items, buffer_states, 0..) |contract, state, i| {
+    for (self.buffers.items, buffer_states) |contract, state| {
         if (!bufferUsageEqual(state, contract.end_usage)) {
-            try buf_bars.append(arena_alloc, .{
+            try buf_bars.append(alloc, .{
                 .src_stage_mask = state.stage,
                 .src_access_mask = state.access,
                 .dst_stage_mask = contract.end_usage.stage,
@@ -677,13 +667,12 @@ fn emitFinalBarriers(
                 .offset = contract.offset,
                 .size = contract.size,
             });
-            _ = i;
         }
     }
 
     flushBarriers(dev, cmd_buf, img_bars, buf_bars);
-    img_bars.deinit(arena_alloc);
-    buf_bars.deinit(arena_alloc);
+    img_bars.deinit(alloc);
+    buf_bars.deinit(alloc);
 }
 
 pub const RenderGraph = struct {
@@ -738,6 +727,7 @@ pub const RenderGraph = struct {
             .pipeline = desc.pipeline,
             .color_attachments = desc.color_attachments,
             .depth_attachment = desc.depth_attachment,
+            .stencil_attachment = desc.stencil_attachment,
             .render_area = desc.render_area,
             .descriptor_sets = desc.descriptor_sets,
             .indirect = desc.indirect,
@@ -756,9 +746,9 @@ pub const RenderGraph = struct {
         return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
     }
 
+    /// Consumes `other` by merging its passes into `self`.
+    /// After this call `other` is undefined and must not be used.
     pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
-        if (other.images.items.len == 0 and other.buffers.items.len == 0 and other.passes.items.len == 0) return;
-
         var image_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
         defer image_remap.deinit(self.alloc);
 
@@ -802,9 +792,17 @@ pub const RenderGraph = struct {
         for (other.passes.items) |*o_pass| {
             switch (o_pass.*) {
                 .graphics => |*o_gp| {
+                    var color_attachments: []const ColorAttachment = &.{};
+                    if (o_gp.color_attachments.len > 0) {
+                        color_attachments = try self.alloc.dupe(ColorAttachment, o_gp.color_attachments);
+                        for (color_attachments) |*ca| {
+                            ca.image.index = image_remap.get(ca.image.index) orelse @panic("merge: dangling ImageRef");
+                        }
+                    }
+
                     var new_gp = GraphicsPass{
                         .pipeline = o_gp.pipeline,
-                        .color_attachments = o_gp.color_attachments,
+                        .color_attachments = color_attachments,
                         .depth_attachment = if (o_gp.depth_attachment) |da| DepthAttachment{
                             .image = .{ .index = image_remap.get(da.image.index) orelse @panic("merge: dangling ImageRef") },
                             .view = da.view,
@@ -813,6 +811,15 @@ pub const RenderGraph = struct {
                             .clear_depth = da.clear_depth,
                             .clear_stencil = da.clear_stencil,
                             .layout = da.layout,
+                            .has_stencil = da.has_stencil,
+                        } else null,
+                        .stencil_attachment = if (o_gp.stencil_attachment) |sa| StencilAttachment{
+                            .image = .{ .index = image_remap.get(sa.image.index) orelse @panic("merge: dangling ImageRef") },
+                            .view = sa.view,
+                            .load_op = sa.load_op,
+                            .store_op = sa.store_op,
+                            .clear_stencil = sa.clear_stencil,
+                            .layout = sa.layout,
                         } else null,
                         .render_area = o_gp.render_area,
                         .descriptor_sets = o_gp.descriptor_sets,
@@ -890,7 +897,7 @@ pub const RenderGraph = struct {
         }
 
         other.deinit();
-        other.* = init(self.alloc);
+        other.* = undefined;
     }
 
     pub fn run(
@@ -904,7 +911,7 @@ pub const RenderGraph = struct {
 
         var arena = std.heap.ArenaAllocator.init(self.alloc);
         defer arena.deinit();
-        const arena_alloc = arena.allocator();
+        const alloc = arena.allocator();
 
         const num_images = self.images.items.len;
         const num_buffers = self.buffers.items.len;
@@ -913,7 +920,7 @@ pub const RenderGraph = struct {
         var buffer_states: []BufferTrackedState = &.{};
 
         if (num_images > 0) {
-            image_states = try arena_alloc.alloc(ImageTrackedState, num_images);
+            image_states = try alloc.alloc(ImageTrackedState, num_images);
             for (self.images.items, 0..) |contract, i| {
                 image_states[i] = .{
                     .layout = contract.start_usage.layout,
@@ -924,7 +931,7 @@ pub const RenderGraph = struct {
         }
 
         if (num_buffers > 0) {
-            buffer_states = try arena_alloc.alloc(BufferTrackedState, num_buffers);
+            buffer_states = try alloc.alloc(BufferTrackedState, num_buffers);
             for (self.buffers.items, 0..) |contract, i| {
                 buffer_states[i] = .{
                     .stage = contract.start_usage.stage,
@@ -935,9 +942,9 @@ pub const RenderGraph = struct {
 
         const max_capacity = @max(num_images, num_buffers) * 2 + 16;
         var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
-        try pass_images.ensureTotalCapacity(arena_alloc, max_capacity);
+        try pass_images.ensureTotalCapacity(alloc, max_capacity);
         var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
-        try pass_buffers.ensureTotalCapacity(arena_alloc, max_capacity);
+        try pass_buffers.ensureTotalCapacity(alloc, max_capacity);
 
         var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
         var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
@@ -948,7 +955,7 @@ pub const RenderGraph = struct {
         for (self.passes.items) |*pass| {
             switch (pass.*) {
                 .graphics => |*gp| {
-                    try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, arena_alloc);
+                    try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
                     try emitPassBarriers(
                         pass_images,
                         pass_buffers,
@@ -959,7 +966,7 @@ pub const RenderGraph = struct {
                         qf,
                         &img_bars,
                         &buf_bars,
-                        arena_alloc,
+                        alloc,
                     );
 
                     const can_merge = if (prev_gp) |prev| blk: {
@@ -974,7 +981,7 @@ pub const RenderGraph = struct {
                         flushBarriers(dev, cmd_buf, img_bars, buf_bars);
                         img_bars.clearRetainingCapacity();
                         buf_bars.clearRetainingCapacity();
-                        beginRendering(gp, dev, cmd_buf);
+                        try beginRendering(gp, dev, cmd_buf, alloc);
                         recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
                     }
                     prev_gp = gp;
@@ -984,7 +991,7 @@ pub const RenderGraph = struct {
                         dev_proxy.cmdEndRendering(cmd_buf);
                         prev_gp = null;
                     }
-                    try collectPassRequirementsCompute(&pass_images, &pass_buffers, cp, arena_alloc);
+                    try collectPassRequirementsCompute(&pass_images, &pass_buffers, cp, alloc);
                     try emitPassBarriers(
                         pass_images,
                         pass_buffers,
@@ -995,7 +1002,7 @@ pub const RenderGraph = struct {
                         qf,
                         &img_bars,
                         &buf_bars,
-                        arena_alloc,
+                        alloc,
                     );
                     flushBarriers(dev, cmd_buf, img_bars, buf_bars);
                     img_bars.clearRetainingCapacity();
@@ -1007,7 +1014,7 @@ pub const RenderGraph = struct {
 
         if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
 
-        try emitFinalBarriers(self, image_states, buffer_states, qf, dev, cmd_buf, arena_alloc);
+        try emitFinalBarriers(self, image_states, buffer_states, qf, dev, cmd_buf, alloc);
     }
 };
 
@@ -1367,7 +1374,6 @@ test "merge: two disjoint graphs concatenate cleanly" {
     });
 
     var rg2 = RenderGraph.init(alloc);
-    defer rg2.deinit();
 
     const img2: vk.Image = @enumFromInt(2);
     const buf2: vk.Buffer = @enumFromInt(200);
@@ -1428,7 +1434,6 @@ test "merge: overlapping image dedup and end_usage inheritance" {
     pa.draw(.{ .vertex_count = 3 });
 
     var rg2 = RenderGraph.init(alloc);
-    defer rg2.deinit();
 
     _ = rg2.addImage(.{
         .image = shared_img,
@@ -1479,7 +1484,6 @@ test "merge: empty other is a no-op" {
     });
 
     var empty = RenderGraph.init(alloc);
-    defer empty.deinit();
 
     rg1.merge(&empty);
 
@@ -1510,7 +1514,6 @@ test "merge: refs are correctly rebased through dedup" {
     });
 
     var rg2 = RenderGraph.init(alloc);
-    defer rg2.init(alloc);
 
     const b = rg2.addImage(.{
         .image = shared,
@@ -1555,7 +1558,6 @@ test "merge: indirect BufferRef is rebased" {
     });
 
     var rg2 = RenderGraph.init(alloc);
-    defer rg2.deinit();
 
     const ind_buf = rg2.addBuffer(.{
         .buffer = buf, .offset = 0, .size = 256,

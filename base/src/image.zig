@@ -69,11 +69,11 @@ pub const Image2D = struct {
         );
         if (res < 0) return error.VmaImageError;
 
-        gc.dev.setDebugUtilsObjectNameEXT(&.{
+        try gc.dev.setDebugUtilsObjectNameEXT(&.{
             .object_type = .image,
             .object_handle = @intFromEnum(img.handle),
             .p_object_name = name,
-        }) catch {};
+        });
 
         img.format = desc.format;
         img.extent = desc.extent;
@@ -85,7 +85,7 @@ pub const Image2D = struct {
 
     pub fn deinit(self: *Image2D, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueImage(self.handle, self.allocation);
+            destroy_queue.enqueueImage(self.handle, self.allocation) catch @panic("OOM");
             self.handle = .null_handle;
             self.allocation = null;
         }
@@ -150,14 +150,14 @@ pub const ImageView = struct {
 
     pub fn deinit(self: *ImageView, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueImageView(self.handle);
+            destroy_queue.enqueueImageView(self.handle) catch @panic("OOM");
             self.handle = .null_handle;
         }
     }
 
-    pub fn deinitNow(self: *ImageView, dev: vk.DeviceProxy) void {
+    pub fn deinitNow(self: *ImageView, gc: *const GraphicsContext) void {
         if (self.handle != .null_handle) {
-            dev.destroyImageView(self.handle, null);
+            gc.dev.destroyImageView(self.handle, null);
             self.handle = .null_handle;
         }
     }
