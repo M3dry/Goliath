@@ -1,9 +1,12 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
-const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
-const Buffer = @import("buffer.zig").Buffer;
+
+const GraphicsCtx = @import("GraphicsCtx.zig");
+const Buffer = @import("Buffer.zig");
+
 const Allocator = std.mem.Allocator;
+const RingBuffer = @import("util/ring_buffer.zig").RingBuffer;
 
 const FormatInfo = struct {
     bytes_per_block: u32,
@@ -80,11 +83,6 @@ const TaskDst = union(enum) {
 };
 
 
-const TaskNode = struct {
-    node: std.DoublyLinkedList.Node = .{},
-    data: Task,
-};
-
 const Task = struct {
     dst: TaskDst,
     src: [*]const u8,
@@ -132,7 +130,7 @@ const Task = struct {
         }
     }
 
-    fn split(self: *Task, budget: u32, rest: *std.ArrayListUnmanaged(Task), transport: *Transport) !bool {
+    fn split(self: *Task, budget: u32, rest: *std.ArrayListUnmanaged(Task), transport: *Self) !bool {
         switch (self.dst) {
             .buffer_dst => |*dst| {
                 if (dst.src_size <= budget) return true;
@@ -267,7 +265,7 @@ const Task = struct {
         }
     }
 
-    fn recordReleaseBarrier(self: *const Task, state: *Transport) !void {
+    fn recordReleaseBarrier(self: *const Task, state: *Self) !void {
         switch (self.dst) {
             .buffer_dst => |dst| {
                 try state.transport_buffer_barriers.append(state.alloc, .{
@@ -305,7 +303,7 @@ const Task = struct {
         }
     }
 
-    fn recordSameQueueBarrier(self: *const Task, state: *Transport) !void {
+    fn recordSameQueueBarrier(self: *const Task, state: *Self) !void {
         switch (self.dst) {
             .buffer_dst => |dst| {
                 try state.transport_buffer_barriers.append(state.alloc, .{
@@ -360,281 +358,277 @@ const PendingSubmission = struct {
     valid: bool = false,
 };
 
-pub const Transport = struct {
-    const staging_buffer_size = 8_000_000;
-    const num_frames = 2;
+const Self = @This();
 
-    alloc: Allocator,
-    has_dedicated_transport: bool,
+const staging_buffer_size = 8_000_000;
+const num_frames = 2;
 
-    dev: vk.DeviceProxy,
-    transport_queue: vk.Queue,
-    graphics_queue: vk.Queue,
-    vma_alloc: vma.VmaAllocator,
-    transport_family: u32,
-    graphics_family: u32,
+alloc: Allocator,
+has_dedicated_transport: bool,
 
-    staging_buffers: [num_frames]Buffer,
-    staging_ptrs: [num_frames][*]u8,
-    flush_staging: bool,
+dev: vk.DeviceProxy,
+transport_queue: vk.Queue,
+graphics_queue: vk.Queue,
+vma_alloc: vma.VmaAllocator,
+transport_family: u32,
+graphics_family: u32,
 
-    cmd_pool: vk.CommandPool,
-    current_cmd_buf: u32,
-    cmd_bufs: [num_frames]vk.CommandBuffer,
-    cmd_buf_fences: [num_frames]vk.Fence,
+staging_buffers: [num_frames]Buffer,
+staging_ptrs: [num_frames][*]u8,
+flush_staging: bool,
 
-    transport_graphics_semaphores: [num_frames]vk.Semaphore,
-    timeline_semaphore: vk.Semaphore,
-    timeline_counter: u64,
-    finished_timeline: u64,
+cmd_pool: vk.CommandPool,
+current_cmd_buf: u32,
+cmd_bufs: [num_frames]vk.CommandBuffer,
+cmd_buf_fences: [num_frames]vk.Fence,
 
-    current_task_queue: u32,
-    task_queues: [num_frames]std.DoublyLinkedList,
-    task_queue_lock: std.Io.Mutex,
+transport_graphics_semaphores: [num_frames]vk.Semaphore,
+timeline_semaphore: vk.Semaphore,
+timeline_counter: u64,
+finished_timeline: u64,
 
-    transport_buffer_barriers: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
-    transport_image_barriers: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
-    barrier_lock: std.Io.Mutex,
-    full_upload_lock: std.Io.Mutex,
+current_task_queue: u32,
+    task_queues: [num_frames]RingBuffer(Task),
+task_queue_lock: std.Io.Mutex,
 
-    io: std.Io,
-    stop_worker: bool,
-    worker: ?std.Thread,
+transport_buffer_barriers: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
+transport_image_barriers: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
+barrier_lock: std.Io.Mutex,
+full_upload_lock: std.Io.Mutex,
 
-    ticket_mutex: std.Io.Mutex,
-    ticket_timelines: std.ArrayListUnmanaged(TicketEntry),
-    free_tickets: std.ArrayListUnmanaged(Ticket),
-    ticket_condition: std.Io.Condition = std.Io.Condition.init,
+io: std.Io,
+stop_worker: bool,
+worker: ?std.Thread,
 
-    pending_mutex: std.Io.Mutex,
-    pending_submissions: std.ArrayListUnmanaged(PendingSubmission),
+ticket_mutex: std.Io.Mutex,
+ticket_timelines: std.ArrayListUnmanaged(TicketEntry),
+free_tickets: std.ArrayListUnmanaged(Ticket),
+ticket_condition: std.Io.Condition = std.Io.Condition.init,
 
-    drain_cmd_pool: vk.CommandPool,
-    drain_cmd_buf: vk.CommandBuffer,
-    drain_fence: vk.Fence,
+pending_mutex: std.Io.Mutex,
+pending_submissions: std.ArrayListUnmanaged(PendingSubmission),
 
-    pub fn init(self: *Transport, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !void {
-        self.alloc = alloc;
-        self.has_dedicated_transport = gc.has_dedicated_transport;
-        self.dev = gc.dev;
-        self.transport_queue = gc.transport_queue;
-        self.graphics_queue = gc.graphics_queue;
-        self.vma_alloc = gc.vma_alloc;
-        self.transport_family = gc.transport_family;
-        self.graphics_family = gc.graphics_family;
-        self.current_cmd_buf = 0;
-        self.timeline_counter = 0;
-        self.finished_timeline = 0;
-        self.current_task_queue = 0;
-        self.stop_worker = false;
-        self.worker = null;
-        self.flush_staging = false;
-        self.io = io;
-        self.task_queue_lock = std.Io.Mutex.init;
-        self.barrier_lock = std.Io.Mutex.init;
-        self.full_upload_lock = std.Io.Mutex.init;
-        self.ticket_mutex = std.Io.Mutex.init;
-        self.pending_mutex = std.Io.Mutex.init;
-        self.ticket_timelines = .empty;
-        self.free_tickets = .empty;
-        self.pending_submissions = .empty;
-        self.transport_buffer_barriers = .empty;
-        self.transport_image_barriers = .empty;
-        for (&self.task_queues) |*q| q.* = .{};
+drain_cmd_pool: vk.CommandPool,
+drain_cmd_buf: vk.CommandBuffer,
+drain_fence: vk.Fence,
 
-        var staging_created: u32 = 0;
-        errdefer for (self.staging_buffers[0..staging_created]) |*buf| buf.deinitNow(gc.vma_alloc);
-        for (0..num_frames) |i| {
-            self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, true);
-            staging_created += 1;
-            self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse @panic("staging buffer not mapped");
-        }
-        self.flush_staging = !self.staging_buffers[0].coherent;
+pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !void {
+    self.alloc = alloc;
+    self.has_dedicated_transport = gc.has_dedicated_transport;
+    self.dev = gc.dev;
+    self.transport_queue = gc.transport_queue;
+    self.graphics_queue = gc.graphics_queue;
+    self.vma_alloc = gc.vma_alloc;
+    self.transport_family = gc.transport_family;
+    self.graphics_family = gc.graphics_family;
+    self.current_cmd_buf = 0;
+    self.timeline_counter = 0;
+    self.finished_timeline = 0;
+    self.current_task_queue = 0;
+    self.stop_worker = false;
+    self.worker = null;
+    self.flush_staging = false;
+    self.io = io;
+    self.task_queue_lock = std.Io.Mutex.init;
+    self.barrier_lock = std.Io.Mutex.init;
+    self.full_upload_lock = std.Io.Mutex.init;
+    self.ticket_mutex = std.Io.Mutex.init;
+    self.pending_mutex = std.Io.Mutex.init;
+    self.ticket_timelines = .empty;
+    self.free_tickets = .empty;
+    self.pending_submissions = .empty;
+    self.transport_buffer_barriers = .empty;
+    self.transport_image_barriers = .empty;
+    for (&self.task_queues) |*q| q.* = .{};
 
-        self.cmd_pool = try gc.dev.createCommandPool(&.{
-            .flags = .{ .reset_command_buffer_bit = true },
-            .queue_family_index = gc.transport_family,
-        }, null);
-        errdefer gc.dev.destroyCommandPool(self.cmd_pool, null);
-        var cmd_bufs: [num_frames]vk.CommandBuffer = undefined;
-        try gc.dev.allocateCommandBuffers(&.{
-            .command_pool = self.cmd_pool,
-            .level = .primary,
-            .command_buffer_count = num_frames,
-        }, &cmd_bufs);
-        self.cmd_bufs = cmd_bufs;
+    var staging_created: u32 = 0;
+    errdefer for (self.staging_buffers[0..staging_created]) |*buf| buf.deinitNow(gc.vma_alloc);
+    for (0..num_frames) |i| {
+        self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, true);
+        staging_created += 1;
+        self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse @panic("staging buffer not mapped");
+    }
+    self.flush_staging = !self.staging_buffers[0].coherent;
 
-        var fences_created: u32 = 0;
-        errdefer for (self.cmd_buf_fences[0..fences_created]) |f| gc.dev.destroyFence(f, null);
-        for (&self.cmd_buf_fences) |*fence| {
-            fence.* = try gc.dev.createFence(&.{
-                .flags = .{ .signaled_bit = true },
-            }, null);
-            fences_created += 1;
-        }
-        var sem_created: u32 = 0;
-        errdefer for (self.transport_graphics_semaphores[0..sem_created]) |s| gc.dev.destroySemaphore(s, null);
-        for (&self.transport_graphics_semaphores) |*sem| {
-            sem.* = try gc.dev.createSemaphore(&.{}, null);
-            sem_created += 1;
-        }
+    self.cmd_pool = try gc.dev.createCommandPool(&.{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = gc.transport_family,
+    }, null);
+    errdefer gc.dev.destroyCommandPool(self.cmd_pool, null);
+    var cmd_bufs: [num_frames]vk.CommandBuffer = undefined;
+    try gc.dev.allocateCommandBuffers(&.{
+        .command_pool = self.cmd_pool,
+        .level = .primary,
+        .command_buffer_count = num_frames,
+    }, &cmd_bufs);
+    self.cmd_bufs = cmd_bufs;
 
-        self.timeline_semaphore = try gc.dev.createSemaphore(&.{
-            .p_next = &vk.SemaphoreTypeCreateInfo{
-                .initial_value = 0,
-                .semaphore_type = .timeline,
-            },
-        }, null);
-        errdefer gc.dev.destroySemaphore(self.timeline_semaphore, null);
-
-        self.drain_cmd_pool = try gc.dev.createCommandPool(&.{
-            .flags = .{ .reset_command_buffer_bit = true },
-            .queue_family_index = gc.graphics_family,
-        }, null);
-        errdefer gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
-        var drain_cmd_buf: vk.CommandBuffer = undefined;
-        try gc.dev.allocateCommandBuffers(&.{
-            .command_pool = self.drain_cmd_pool,
-            .level = .primary,
-            .command_buffer_count = 1,
-        }, (&drain_cmd_buf)[0..1]);
-        self.drain_cmd_buf = drain_cmd_buf;
-
-        self.drain_fence = try gc.dev.createFence(&.{
+    var fences_created: u32 = 0;
+    errdefer for (self.cmd_buf_fences[0..fences_created]) |f| gc.dev.destroyFence(f, null);
+    for (&self.cmd_buf_fences) |*fence| {
+        fence.* = try gc.dev.createFence(&.{
             .flags = .{ .signaled_bit = true },
         }, null);
-
-        self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, gc });
+        fences_created += 1;
+    }
+    var sem_created: u32 = 0;
+    errdefer for (self.transport_graphics_semaphores[0..sem_created]) |s| gc.dev.destroySemaphore(s, null);
+    for (&self.transport_graphics_semaphores) |*sem| {
+        sem.* = try gc.dev.createSemaphore(&.{}, null);
+        sem_created += 1;
     }
 
-    pub fn deinit(self: *Transport, gc: *const GraphicsCtx) void {
-        @atomicStore(bool, &self.stop_worker, true, .monotonic);
-        if (self.worker) |w| w.join();
+    self.timeline_semaphore = try gc.dev.createSemaphore(&.{
+        .p_next = &vk.SemaphoreTypeCreateInfo{
+            .initial_value = 0,
+            .semaphore_type = .timeline,
+        },
+    }, null);
+    errdefer gc.dev.destroySemaphore(self.timeline_semaphore, null);
 
-        for (&self.staging_buffers) |*buf| buf.deinitNow(gc.vma_alloc);
+    self.drain_cmd_pool = try gc.dev.createCommandPool(&.{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = gc.graphics_family,
+    }, null);
+    errdefer gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
+    var drain_cmd_buf: vk.CommandBuffer = undefined;
+    try gc.dev.allocateCommandBuffers(&.{
+        .command_pool = self.drain_cmd_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    }, (&drain_cmd_buf)[0..1]);
+    self.drain_cmd_buf = drain_cmd_buf;
 
-        gc.dev.destroyCommandPool(self.cmd_pool, null);
-        gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
+    self.drain_fence = try gc.dev.createFence(&.{
+        .flags = .{ .signaled_bit = true },
+    }, null);
 
-        gc.dev.destroyFence(self.drain_fence, null);
-        for (self.cmd_buf_fences) |f| gc.dev.destroyFence(f, null);
+    self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, gc });
+}
 
-        for (self.transport_graphics_semaphores) |s| gc.dev.destroySemaphore(s, null);
-        gc.dev.destroySemaphore(self.timeline_semaphore, null);
+pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
+    @atomicStore(bool, &self.stop_worker, true, .monotonic);
+    if (self.worker) |w| w.join();
 
-        for (&self.task_queues) |*q| {
-            while (q.popFirst()) |node| {
-                const tn: *TaskNode = @fieldParentPtr("node", node);
-                self.alloc.destroy(tn);
-            }
-        }
+    for (&self.staging_buffers) |*buf| buf.deinitNow(gc.vma_alloc);
 
-        self.transport_buffer_barriers.deinit(self.alloc);
-        self.transport_image_barriers.deinit(self.alloc);
-        self.ticket_timelines.deinit(self.alloc);
-        self.free_tickets.deinit(self.alloc);
+    gc.dev.destroyCommandPool(self.cmd_pool, null);
+    gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
 
-        for (self.pending_submissions.items) |*ps| {
-            ps.buffer_barriers.deinit(self.alloc);
-            ps.image_barriers.deinit(self.alloc);
-            ps.ticket_ids.deinit(self.alloc);
-        }
+    gc.dev.destroyFence(self.drain_fence, null);
+    for (self.cmd_buf_fences) |f| gc.dev.destroyFence(f, null);
 
-        self.pending_submissions.deinit(self.alloc);
+    for (self.transport_graphics_semaphores) |s| gc.dev.destroySemaphore(s, null);
+    gc.dev.destroySemaphore(self.timeline_semaphore, null);
+
+    for (&self.task_queues) |*q| q.deinit(self.alloc);
+
+    self.transport_buffer_barriers.deinit(self.alloc);
+    self.transport_image_barriers.deinit(self.alloc);
+    self.ticket_timelines.deinit(self.alloc);
+    self.free_tickets.deinit(self.alloc);
+
+    for (self.pending_submissions.items) |*ps| {
+        ps.buffer_barriers.deinit(self.alloc);
+        ps.image_barriers.deinit(self.alloc);
+        ps.ticket_ids.deinit(self.alloc);
     }
 
-    pub fn uploadBuffer(
-        self: *Transport,
-        priority: bool,
-        src: []const u8,
-        owning: ?FreeFn,
-        dst: vk.Buffer,
-        dst_offset: u32,
-        dst_stage: vk.PipelineStageFlags2,
-        dst_access: vk.AccessFlags2,
-    ) !Ticket {
-        const ticket = try self.getFreeTicket();
-        const src_len: u32 = @intCast(src.len);
-        const task = Task{
-            .dst = .{ .buffer_dst = .{
-                .src_size = src_len,
-                .buffer = dst,
-                .offset = dst_offset,
-                .initial_offset = dst_offset,
-            } },
-            .src = src.ptr,
-            .src_offset = 0,
-            .full_src_size = src_len,
-            .ticket_id = ticket.id(),
-            .owning = owning,
-            .last = true,
-            .dst_stage = dst_stage,
-            .dst_access = dst_access,
-        };
-        self.task_queue_lock.lockUncancelable(self.io);
-        defer self.task_queue_lock.unlock(self.io);
-        const q = &self.task_queues[self.current_task_queue];
-        const node = try self.alloc.create(TaskNode);
-        node.* = .{ .data = task };
-        if (priority) q.prepend(&node.node) else q.append(&node.node);
-        return ticket;
-    }
+    self.pending_submissions.deinit(self.alloc);
+}
 
-    pub fn uploadImage(
-        self: *Transport,
-        priority: bool,
-        format: vk.Format,
-        dimension: vk.Extent3D,
-        src: []const u8,
-        owning: ?FreeFn,
-        dst: vk.Image,
-        dst_layers: vk.ImageSubresourceLayers,
-        dst_offset: vk.Offset3D,
-        current_layout: vk.ImageLayout,
-        new_layout: vk.ImageLayout,
-        dst_stage: vk.PipelineStageFlags2,
-        dst_access: vk.AccessFlags2,
-    ) !Ticket {
-        const ticket = try self.getFreeTicket();
+pub fn uploadBuffer(
+    self: *Self,
+    priority: bool,
+    src: []const u8,
+    owning: ?FreeFn,
+    dst: vk.Buffer,
+    dst_offset: u32,
+    dst_stage: vk.PipelineStageFlags2,
+    dst_access: vk.AccessFlags2,
+) !Ticket {
+    const ticket = try self.getFreeTicket();
+    const src_len: u32 = @intCast(src.len);
+    const task = Task{
+        .dst = .{ .buffer_dst = .{
+            .src_size = src_len,
+            .buffer = dst,
+            .offset = dst_offset,
+            .initial_offset = dst_offset,
+        } },
+        .src = src.ptr,
+        .src_offset = 0,
+        .full_src_size = src_len,
+        .ticket_id = ticket.id(),
+        .owning = owning,
+        .last = true,
+        .dst_stage = dst_stage,
+        .dst_access = dst_access,
+    };
+    self.task_queue_lock.lockUncancelable(self.io);
+    defer self.task_queue_lock.unlock(self.io);
+    const q = &self.task_queues[self.current_task_queue];
+    if (priority) try q.prepend(self.alloc, task) else try q.append(self.alloc, task);
+    return ticket;
+}
 
-        self.full_upload_lock.lockUncancelable(self.io);
-        defer self.full_upload_lock.unlock(self.io);
+pub fn uploadImage(
+    self: *Self,
+    priority: bool,
+    format: vk.Format,
+    dimension: vk.Extent3D,
+    src: []const u8,
+    owning: ?FreeFn,
+    dst: vk.Image,
+    dst_layers: vk.ImageSubresourceLayers,
+    dst_offset: vk.Offset3D,
+    current_layout: vk.ImageLayout,
+    new_layout: vk.ImageLayout,
+    dst_stage: vk.PipelineStageFlags2,
+    dst_access: vk.AccessFlags2,
+) !Ticket {
+    const ticket = try self.getFreeTicket();
 
-        try self.transport_image_barriers.append(self.alloc, .{
-            .src_stage_mask = .{},
-            .src_access_mask = .{},
-            .dst_stage_mask = .{ .all_transfer_bit = true },
-            .dst_access_mask = .{ .transfer_write_bit = true },
-            .old_layout = current_layout,
-            .new_layout = .transfer_dst_optimal,
-            .src_queue_family_index = self.transport_family,
-            .dst_queue_family_index = self.transport_family,
-            .image = dst,
-            .subresource_range = .{
-                .aspect_mask = dst_layers.aspect_mask,
-                .base_mip_level = dst_layers.mip_level,
-                .level_count = 1,
-                .base_array_layer = dst_layers.base_array_layer,
-                .layer_count = dst_layers.layer_count,
-            },
-        });
+    self.full_upload_lock.lockUncancelable(self.io);
+    defer self.full_upload_lock.unlock(self.io);
 
-        const info = try getFormatInfo(format);
-        const layer_size = dimension.width * dimension.height * dimension.depth * info.bytes_per_block;
-        const num_layers = dst_layers.layer_count;
-        const total_size = layer_size * num_layers;
+    try self.transport_image_barriers.append(self.alloc, .{
+        .src_stage_mask = .{},
+        .src_access_mask = .{},
+        .dst_stage_mask = .{ .all_transfer_bit = true },
+        .dst_access_mask = .{ .transfer_write_bit = true },
+        .old_layout = current_layout,
+        .new_layout = .transfer_dst_optimal,
+        .src_queue_family_index = self.transport_family,
+        .dst_queue_family_index = self.transport_family,
+        .image = dst,
+        .subresource_range = .{
+            .aspect_mask = dst_layers.aspect_mask,
+            .base_mip_level = dst_layers.mip_level,
+            .level_count = 1,
+            .base_array_layer = dst_layers.base_array_layer,
+            .layer_count = dst_layers.layer_count,
+        },
+    });
 
-        self.task_queue_lock.lockUncancelable(self.io);
-        defer self.task_queue_lock.unlock(self.io);
-        const q = &self.task_queues[self.current_task_queue];
+    const info = try getFormatInfo(format);
+    const layer_size = dimension.width * dimension.height * dimension.depth * info.bytes_per_block;
+    const num_layers = dst_layers.layer_count;
+    const total_size = layer_size * num_layers;
 
-        var nodes: [128]*TaskNode = undefined;
-        const count = @min(@as(usize, num_layers), nodes.len);
+    self.task_queue_lock.lockUncancelable(self.io);
+    defer self.task_queue_lock.unlock(self.io);
+    const q = &self.task_queues[self.current_task_queue];
 
-        for (0..count) |i| {
+    const count = @min(@as(usize, num_layers), 128);
+
+    try q.ensureUnusedCapacity(self.alloc, count);
+    if (priority) {
+        var i: usize = count;
+        while (i > 0) {
+            i -= 1;
             const is_last = i == count - 1;
-            const node = try self.alloc.create(TaskNode);
-            node.* = .{ .data = .{
+            q.prependOneAssumeCapacity().* = .{
                 .dst = .{ .image_dst = .{
                     .image = dst,
                     .subresource = .{
@@ -658,250 +652,263 @@ pub const Transport = struct {
                 .last = is_last,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
-            } };
-            nodes[i] = node;
+            };
         }
+    } else {
+        for (0..count) |i| {
+            const is_last = i == count - 1;
+            q.appendAssumeCapacity(.{
+                .dst = .{ .image_dst = .{
+                    .image = dst,
+                    .subresource = .{
+                        .aspect_mask = dst_layers.aspect_mask,
+                        .mip_level = dst_layers.mip_level,
+                        .base_array_layer = dst_layers.base_array_layer + @as(u32, @intCast(i)),
+                        .layer_count = 1,
+                    },
+                    .initial_base_array_layer = dst_layers.base_array_layer,
+                    .offset = dst_offset,
+                    .extent = dimension,
+                    .src_row_length = dimension.width,
+                    .format = format,
+                    .new_layout = new_layout,
+                } },
+                .src = src.ptr,
+                .src_offset = @as(u32, @intCast(i * layer_size)),
+                .full_src_size = total_size,
+                .ticket_id = ticket.id(),
+                .owning = if (is_last) owning else null,
+                .last = is_last,
+                .dst_stage = dst_stage,
+                .dst_access = dst_access,
+            });
+        }
+    }
 
-        if (priority) {
-            var i: usize = count;
-            while (i > 0) {
-                i -= 1;
-                q.prepend(&nodes[i].node);
+    return ticket;
+}
+
+pub fn isReady(self: *Self, t: Ticket) !bool {
+    if (!t.isValid()) return false;
+    self.ticket_mutex.lockUncancelable(self.io);
+    defer self.ticket_mutex.unlock(self.io);
+
+    if (t.id() >= self.ticket_timelines.items.len) return false;
+
+    const entry = self.ticket_timelines.items[t.id()];
+    if (!entry.used) return false;
+    if (entry.generation > t.gen()) return true;
+    if (entry.timeline == 0) return false;
+
+    return try self.isTimelineReady(entry.timeline);
+}
+
+pub fn waitOn(self: *Self, tickets: []const Ticket) vk.SemaphoreSubmitInfo {
+    var largest: u64 = 0;
+    for (tickets) |t| {
+        if (!t.isValid()) continue;
+        var timeline: u64 = 0;
+        {
+            self.ticket_mutex.lockUncancelable(self.io);
+            defer self.ticket_mutex.unlock(self.io);
+            if (t.id() < self.ticket_timelines.items.len) {
+                const e = self.ticket_timelines.items[t.id()];
+                if (!e.used or e.generation > t.gen()) continue;
+                timeline = e.timeline;
             }
-        } else {
-            for (0..count) |i| q.append(&nodes[i].node);
         }
-
-        return ticket;
-    }
-
-    pub fn isReady(self: *Transport, t: Ticket) !bool {
-        if (!t.isValid()) return false;
-        self.ticket_mutex.lockUncancelable(self.io);
-        defer self.ticket_mutex.unlock(self.io);
-
-        if (t.id() >= self.ticket_timelines.items.len) return false;
-
-        const entry = self.ticket_timelines.items[t.id()];
-        if (!entry.used) return false;
-        if (entry.generation > t.gen()) return true;
-        if (entry.timeline == 0) return false;
-
-        return try self.isTimelineReady(entry.timeline);
-    }
-
-    pub fn waitOn(self: *Transport, tickets: []const Ticket) vk.SemaphoreSubmitInfo {
-        var largest: u64 = 0;
-        for (tickets) |t| {
-            if (!t.isValid()) continue;
-            var timeline: u64 = 0;
-            {
-                self.ticket_mutex.lockUncancelable(self.io);
-                defer self.ticket_mutex.unlock(self.io);
+        if (timeline == 0) {
+            self.ticket_mutex.lockUncancelable(self.io);
+            defer self.ticket_mutex.unlock(self.io);
+            while (true) {
                 if (t.id() < self.ticket_timelines.items.len) {
                     const e = self.ticket_timelines.items[t.id()];
-                    if (!e.used or e.generation > t.gen()) continue;
-                    timeline = e.timeline;
-                }
-            }
-            if (timeline == 0) {
-                self.ticket_mutex.lockUncancelable(self.io);
-                defer self.ticket_mutex.unlock(self.io);
-                while (true) {
-                    if (t.id() < self.ticket_timelines.items.len) {
-                        const e = self.ticket_timelines.items[t.id()];
-                        if (!e.used or e.generation > t.gen()) {
-                            timeline = std.math.maxInt(u64);
-                            break;
-                        }
-                        if (e.timeline != 0) {
-                            timeline = e.timeline;
-                            break;
-                        }
-                    } else {
+                    if (!e.used or e.generation > t.gen()) {
                         timeline = std.math.maxInt(u64);
                         break;
                     }
-                    self.ticket_condition.waitUncancelable(self.io, &self.ticket_mutex);
-                }
-            }
-            if (timeline != std.math.maxInt(u64)) largest = @max(largest, timeline);
-        }
-        return .{
-            .semaphore = self.timeline_semaphore,
-            .value = largest,
-            .stage_mask = .{ .all_commands_bit = true },
-            .device_index = 0,
-        };
-    }
-
-    pub fn unqueue(self: *Transport, t: Ticket, free_src: bool) void {
-        const check_queues = struct {
-            fn find(tr: *Transport, q: *std.DoublyLinkedList, ticket: Ticket, free_it: bool) bool {
-                var it = q.first;
-                while (it) |node| {
-                    const tn: *TaskNode = @fieldParentPtr("node", node);
-                    if (tn.data.ticket_id == ticket.id()) {
-                        const gen = blk: {
-                            tr.ticket_mutex.lockUncancelable(tr.io);
-                            defer tr.ticket_mutex.unlock(tr.io);
-                            if (ticket.id() < tr.ticket_timelines.items.len) break :blk tr.ticket_timelines.items[ticket.id()].generation;
-                            break :blk 0;
-                        };
-                        if (gen == ticket.gen()) {
-                            q.remove(node);
-                            if (free_it and tn.data.owning) |fn_| fn_(@ptrCast(tn.data.src));
-                            tr.alloc.destroy(tn);
-                        }
-                        return true;
+                    if (e.timeline != 0) {
+                        timeline = e.timeline;
+                        break;
                     }
-                    it = node.next;
+                } else {
+                    timeline = std.math.maxInt(u64);
+                    break;
                 }
-                return false;
+                self.ticket_condition.waitUncancelable(self.io, &self.ticket_mutex);
             }
-        }.find;
-
-        self.full_upload_lock.lockUncancelable(self.io);
-        defer self.full_upload_lock.unlock(self.io);
-        self.task_queue_lock.lockUncancelable(self.io);
-        defer self.task_queue_lock.unlock(self.io);
-        _ = check_queues(self, &self.task_queues[self.current_task_queue], t, free_src);
-        const other = (self.current_task_queue + 1) % num_frames;
-        _ = check_queues(self, &self.task_queues[other], t, free_src);
+        }
+        if (timeline != std.math.maxInt(u64)) largest = @max(largest, timeline);
     }
+    return .{
+        .semaphore = self.timeline_semaphore,
+        .value = largest,
+        .stage_mask = .{ .all_commands_bit = true },
+        .device_index = 0,
+    };
+}
 
-    pub fn drain(self: *Transport, gc: *const GraphicsCtx) !void {
-        self.pending_mutex.lockUncancelable(self.io);
-        defer self.pending_mutex.unlock(self.io);
+pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
+    self.full_upload_lock.lockUncancelable(self.io);
+    defer self.full_upload_lock.unlock(self.io);
+    self.task_queue_lock.lockUncancelable(self.io);
+    defer self.task_queue_lock.unlock(self.io);
 
-        for (self.pending_submissions.items) |*sub| {
-            if (!sub.valid) continue;
-
-            _ = try gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64));
-            try gc.dev.resetFences(&[_]vk.Fence{self.drain_fence});
-
-            try gc.dev.resetCommandBuffer(self.drain_cmd_buf, .{});
-            try gc.dev.beginCommandBuffer(self.drain_cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
-
-            if (sub.buffer_barriers.items.len > 0 or sub.image_barriers.items.len > 0) {
-                gc.dev.cmdPipelineBarrier2(self.drain_cmd_buf, &.{
-                    .buffer_memory_barrier_count = @intCast(sub.buffer_barriers.items.len),
-                    .p_buffer_memory_barriers = sub.buffer_barriers.items.ptr,
-                    .image_memory_barrier_count = @intCast(sub.image_barriers.items.len),
-                    .p_image_memory_barriers = sub.image_barriers.items.ptr,
-                });
+    for (&self.task_queues) |*q| {
+        var i: usize = 0;
+        while (i < q.count()) {
+            const task_ptr = q.get(i).?;
+            if (task_ptr.ticket_id == t.id()) {
+                const gen = blk: {
+                    self.ticket_mutex.lockUncancelable(self.io);
+                    defer self.ticket_mutex.unlock(self.io);
+                    if (t.id() < self.ticket_timelines.items.len) break :blk self.ticket_timelines.items[t.id()].generation;
+                    break :blk 0;
+                };
+                if (gen == t.gen()) {
+                    const src_ptr = task_ptr.src;
+                    const owning_fn = task_ptr.owning;
+                    _ = q.orderedRemove(i);
+                    if (free_src and owning_fn) |fn_| fn_(@ptrCast(src_ptr));
+                }
+                return;
             }
+            i += 1;
+        }
+    }
+}
 
-            try gc.dev.endCommandBuffer(self.drain_cmd_buf);
+pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
+    self.pending_mutex.lockUncancelable(self.io);
+    defer self.pending_mutex.unlock(self.io);
 
-            if (self.has_dedicated_transport) {
-                try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
-                    .wait_semaphore_info_count = 1,
-                    .p_wait_semaphore_infos = (&vk.SemaphoreSubmitInfo{
-                        .semaphore = sub.wait_semaphore,
-                        .value = 0,
-                        .stage_mask = .{ .all_commands_bit = true },
-                        .device_index = 0,
-                    })[0..1],
-                    .command_buffer_info_count = 1,
-                    .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
-                        .command_buffer = self.drain_cmd_buf,
-                        .device_mask = 0,
-                    })[0..1],
-                    .signal_semaphore_info_count = 1,
-                    .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
-                        .semaphore = self.timeline_semaphore,
-                        .value = sub.timeline_value,
-                        .stage_mask = .{ .all_commands_bit = true },
-                        .device_index = 0,
-                    })[0..1],
-                })[0..1], self.drain_fence);
-            } else {
-                try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
-                    .command_buffer_info_count = 1,
-                    .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
-                        .command_buffer = sub.cmd_buf,
-                        .device_mask = 0,
-                    })[0..1],
-                    .signal_semaphore_info_count = 1,
-                    .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
-                        .semaphore = self.timeline_semaphore,
-                        .value = sub.timeline_value,
-                        .stage_mask = .{ .all_commands_bit = true },
-                        .device_index = 0,
-                    })[0..1],
-                })[0..1], self.drain_fence);
-            }
+    for (self.pending_submissions.items) |*sub| {
+        if (!sub.valid) continue;
 
-            {
-                self.ticket_mutex.lockUncancelable(self.io);
-                defer self.ticket_mutex.unlock(self.io);
-                for (sub.ticket_ids.items) |tid| {
-                    if (tid < self.ticket_timelines.items.len) {
-                        self.ticket_timelines.items[tid].timeline = sub.timeline_value;
-                    }
+        _ = try gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64));
+        try gc.dev.resetFences(&[_]vk.Fence{self.drain_fence});
+
+        try gc.dev.resetCommandBuffer(self.drain_cmd_buf, .{});
+        try gc.dev.beginCommandBuffer(self.drain_cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
+
+        if (sub.buffer_barriers.items.len > 0 or sub.image_barriers.items.len > 0) {
+            gc.dev.cmdPipelineBarrier2(self.drain_cmd_buf, &.{
+                .buffer_memory_barrier_count = @intCast(sub.buffer_barriers.items.len),
+                .p_buffer_memory_barriers = sub.buffer_barriers.items.ptr,
+                .image_memory_barrier_count = @intCast(sub.image_barriers.items.len),
+                .p_image_memory_barriers = sub.image_barriers.items.ptr,
+            });
+        }
+
+        try gc.dev.endCommandBuffer(self.drain_cmd_buf);
+
+        if (self.has_dedicated_transport) {
+            try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
+                .wait_semaphore_info_count = 1,
+                .p_wait_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+                    .semaphore = sub.wait_semaphore,
+                    .value = 0,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                })[0..1],
+                .command_buffer_info_count = 1,
+                .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
+                    .command_buffer = self.drain_cmd_buf,
+                    .device_mask = 0,
+                })[0..1],
+                .signal_semaphore_info_count = 1,
+                .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+                    .semaphore = self.timeline_semaphore,
+                    .value = sub.timeline_value,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                })[0..1],
+            })[0..1], self.drain_fence);
+        } else {
+            try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
+                .command_buffer_info_count = 1,
+                .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
+                    .command_buffer = sub.cmd_buf,
+                    .device_mask = 0,
+                })[0..1],
+                .signal_semaphore_info_count = 1,
+                .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+                    .semaphore = self.timeline_semaphore,
+                    .value = sub.timeline_value,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                })[0..1],
+            })[0..1], self.drain_fence);
+        }
+
+        {
+            self.ticket_mutex.lockUncancelable(self.io);
+            defer self.ticket_mutex.unlock(self.io);
+            for (sub.ticket_ids.items) |tid| {
+                if (tid < self.ticket_timelines.items.len) {
+                    self.ticket_timelines.items[tid].timeline = sub.timeline_value;
                 }
             }
-            self.ticket_condition.broadcast(self.io);
         }
-
-        for (self.pending_submissions.items) |*ps| {
-            ps.buffer_barriers.deinit(self.alloc);
-            ps.image_barriers.deinit(self.alloc);
-            ps.ticket_ids.deinit(self.alloc);
-        }
-        self.pending_submissions.clearRetainingCapacity();
+        self.ticket_condition.broadcast(self.io);
     }
 
-    pub fn getTimeline(self: *const Transport) u64 {
-        var v: u64 = undefined;
-        self.dev.getSemaphoreCounterValue(self.timeline_semaphore, &v);
-        return v;
+    for (self.pending_submissions.items) |*ps| {
+        ps.buffer_barriers.deinit(self.alloc);
+        ps.image_barriers.deinit(self.alloc);
+        ps.ticket_ids.deinit(self.alloc);
     }
+    self.pending_submissions.clearRetainingCapacity();
+}
 
-    fn isTimelineReady(self: *Transport, timeline: u64) !bool {
-        const finished = @atomicLoad(u64, &self.finished_timeline, .monotonic);
-        if (finished >= timeline) return true;
-        const info = vk.SemaphoreWaitInfo{
-            .semaphore_count = 1,
-            .p_semaphores = @ptrCast(&self.timeline_semaphore),
-            .p_values = @ptrCast(&timeline),
-        };
-        if (try self.dev.waitSemaphores(&info, 0) == .success) {
-            const cur = @atomicLoad(u64, &self.finished_timeline, .monotonic);
-            if (timeline > cur) @atomicStore(u64, &self.finished_timeline, timeline, .monotonic);
-            return true;
+pub fn getTimeline(self: *const Self) u64 {
+    var v: u64 = undefined;
+    self.dev.getSemaphoreCounterValue(self.timeline_semaphore, &v);
+    return v;
+}
+
+fn isTimelineReady(self: *Self, timeline: u64) !bool {
+    const finished = @atomicLoad(u64, &self.finished_timeline, .monotonic);
+    if (finished >= timeline) return true;
+    const info = vk.SemaphoreWaitInfo{
+        .semaphore_count = 1,
+        .p_semaphores = @ptrCast(&self.timeline_semaphore),
+        .p_values = @ptrCast(&timeline),
+    };
+    if (try self.dev.waitSemaphores(&info, 0) == .success) {
+        const cur = @atomicLoad(u64, &self.finished_timeline, .monotonic);
+        if (timeline > cur) @atomicStore(u64, &self.finished_timeline, timeline, .monotonic);
+        return true;
+    }
+    return false;
+}
+
+fn getFreeTicket(self: *Self) !Ticket {
+    self.ticket_mutex.lockUncancelable(self.io);
+    defer self.ticket_mutex.unlock(self.io);
+
+    if (self.free_tickets.items.len > 0) return self.free_tickets.pop().?;
+
+    for (self.ticket_timelines.items, 0..) |*entry, i| {
+        if (!entry.used) continue;
+        if (entry.timeline == 0) continue;
+
+        if (try self.isTimelineReady(entry.timeline)) {
+            entry.generation +%= 1;
+            entry.timeline = 0;
+            try self.free_tickets.append(self.alloc, Ticket.init(entry.generation, @intCast(i)));
         }
-        return false;
     }
 
-    fn getFreeTicket(self: *Transport) !Ticket {
-        self.ticket_mutex.lockUncancelable(self.io);
-        defer self.ticket_mutex.unlock(self.io);
+    if (self.free_tickets.items.len > 0) return self.free_tickets.pop().?;
 
-        if (self.free_tickets.items.len > 0) return self.free_tickets.pop().?;
+    const id = @as(u32, @intCast(self.ticket_timelines.items.len));
+    try self.ticket_timelines.append(self.alloc, .{ .generation = 0, .timeline = 0, .used = true });
 
-        for (self.ticket_timelines.items, 0..) |*entry, i| {
-            if (!entry.used) continue;
-            if (entry.timeline == 0) continue;
+    return Ticket.init(0, id);
+}
 
-            if (try self.isTimelineReady(entry.timeline)) {
-                entry.generation +%= 1;
-                entry.timeline = 0;
-                try self.free_tickets.append(self.alloc, Ticket.init(entry.generation, @intCast(i)));
-            }
-        }
-
-        if (self.free_tickets.items.len > 0) return self.free_tickets.pop().?;
-
-        const id = @as(u32, @intCast(self.ticket_timelines.items.len));
-        try self.ticket_timelines.append(self.alloc, .{ .generation = 0, .timeline = 0, .used = true });
-
-        return Ticket.init(0, id);
-    }
-};
-
-fn workerThread(self: *Transport, gc: *const GraphicsCtx) !void {
+fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
     var cmd_buf_idx: u32 = 0;
 
     while (!@atomicLoad(bool, &self.stop_worker, .monotonic)) {
@@ -910,17 +917,17 @@ fn workerThread(self: *Transport, gc: *const GraphicsCtx) !void {
 
         self.task_queue_lock.lockUncancelable(self.io);
         const process_idx = self.current_task_queue;
-        self.current_task_queue = (self.current_task_queue + 1) % Transport.num_frames;
+        self.current_task_queue = (self.current_task_queue + 1) % Self.num_frames;
         self.task_queue_lock.unlock(self.io);
 
         var queue = &self.task_queues[process_idx];
-        if (queue.first == null) {
+        if (queue.first() == null) {
             std.Thread.yield() catch {};
             continue;
         }
 
         const slot = cmd_buf_idx;
-        cmd_buf_idx = (cmd_buf_idx + 1) % Transport.num_frames;
+        cmd_buf_idx = (cmd_buf_idx + 1) % Self.num_frames;
 
         const cmd_buf = self.cmd_bufs[slot];
         const fence = self.cmd_buf_fences[slot];
@@ -954,12 +961,11 @@ fn workerThread(self: *Transport, gc: *const GraphicsCtx) !void {
         var batch: std.ArrayListUnmanaged(Task) = .empty;
         defer batch.deinit(self.alloc);
 
-        while (queue.first) |first| {
-            const budget = Transport.staging_buffer_size - size;
+        while (queue.first()) |first_ptr| {
+            const budget = Self.staging_buffer_size - size;
             if (budget == 0) break;
 
-            const task_node: *TaskNode = @fieldParentPtr("node", first);
-            var task = task_node.data;
+            var task = first_ptr.*;
 
             var rest: std.ArrayListUnmanaged(Task) = .empty;
             defer rest.deinit(self.alloc);
@@ -967,19 +973,15 @@ fn workerThread(self: *Transport, gc: *const GraphicsCtx) !void {
             if (budget < try task.requiredSize()) {
                 if (try task.split(budget, &rest, self)) break;
 
-                queue.remove(first);
-                self.alloc.destroy(task_node);
+                _ = queue.popFirst();
 
                 var i: usize = rest.items.len;
                 while (i > 0) {
                     i -= 1;
-                    const n = try self.alloc.create(TaskNode);
-                    n.* = .{ .data = rest.items[i] };
-                    queue.prepend(&n.node);
+                    try queue.prepend(self.alloc, rest.items[i]);
                 }
             } else {
-                queue.remove(first);
-                self.alloc.destroy(task_node);
+                _ = queue.popFirst();
             }
 
             try task.uploadToStaging(staging_ptr + size);
@@ -987,7 +989,7 @@ fn workerThread(self: *Transport, gc: *const GraphicsCtx) !void {
             try batch.append(self.alloc, task);
         }
 
-        if (self.flush_staging) staging_buf.flush(self.vma_alloc, 0, Transport.staging_buffer_size);
+        if (self.flush_staging) staging_buf.flush(self.vma_alloc, 0, Self.staging_buffer_size);
 
         var copy_offset: u32 = 0;
         for (batch.items) |*t| {

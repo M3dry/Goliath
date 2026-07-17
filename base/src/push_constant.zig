@@ -2,28 +2,28 @@ const std = @import("std");
 const testing = std.testing;
 const layout = @import("layout.zig");
 
-pub const PushConstant = struct {
-    pub fn size(comptime T: type) usize {
-        return comptime layout.size(T);
-    }
+const Self = @This();
 
-    pub fn write(comptime T: type, buffer: []u8, values: T) void {
-        const off = comptime layout.fieldOffsets(T);
-        inline for (std.meta.fields(T), 0..) |field, i| {
-            @memcpy(buffer[off[i]..][0..@sizeOf(field.type)], std.mem.asBytes(&@field(values, field.name)));
-        }
+pub fn size(comptime T: type) usize {
+    return comptime layout.size(T);
+}
+
+pub fn write(comptime T: type, buffer: []u8, values: T) void {
+    const off = comptime layout.fieldOffsets(T);
+    inline for (std.meta.fields(T), 0..) |field, i| {
+        @memcpy(buffer[off[i]..][0..@sizeOf(field.type)], std.mem.asBytes(&@field(values, field.name)));
     }
-};
+}
 
 test "size matches layout.size" {
     const S = struct { a: f32, b: @Vector(4, f32) };
-    try testing.expectEqual(layout.size(S), PushConstant.size(S));
+    try testing.expectEqual(layout.size(S), Self.size(S));
 }
 
 test "write consecutive scalars" {
     const S = struct { a: u32, b: u32 };
-    var buf: [PushConstant.size(S)]u8 = undefined;
-    PushConstant.write(S, &buf, .{ .a = 0xAABB, .b = 0xCCDD });
+    var buf: [Self.size(S)]u8 = undefined;
+    Self.write(S, &buf, .{ .a = 0xAABB, .b = 0xCCDD });
 
     const a = std.mem.readInt(u32, buf[0..4], .little);
     const b = std.mem.readInt(u32, buf[4..8], .little);
@@ -33,8 +33,8 @@ test "write consecutive scalars" {
 
 test "write with padding between fields" {
     const S = struct { a: f32, b: @Vector(4, f32) };
-    var buf: [PushConstant.size(S)]u8 = undefined;
-    PushConstant.write(S, &buf, .{ .a = 1.0, .b = .{ 2.0, 3.0, 4.0, 5.0 } });
+    var buf: [Self.size(S)]u8 = undefined;
+    Self.write(S, &buf, .{ .a = 1.0, .b = .{ 2.0, 3.0, 4.0, 5.0 } });
 
     const a_val = std.mem.readInt(u32, buf[0..4], .little);
     try testing.expectEqual(@as(u32, @bitCast(@as(f32, 1.0))), a_val);
@@ -48,10 +48,10 @@ test "write with padding between fields" {
 
 test "write mat4 struct" {
     const S = struct { vp: [4]@Vector(4, f32) };
-    try testing.expectEqual(@as(usize, 64), PushConstant.size(S));
+    try testing.expectEqual(@as(usize, 64), Self.size(S));
 
-    var buf: [PushConstant.size(S)]u8 = undefined;
-    PushConstant.write(S, &buf, .{ .vp = .{
+    var buf: [Self.size(S)]u8 = undefined;
+    Self.write(S, &buf, .{ .vp = .{
         @Vector(4, f32){ 1, 0, 0, 0 },
         @Vector(4, f32){ 0, 1, 0, 0 },
         @Vector(4, f32){ 0, 0, 1, 0 },
@@ -68,9 +68,9 @@ test "write mat4 struct" {
 
 test "write preserves untouched bytes" {
     const S = struct { a: f32, b: f32 };
-    var buf: [PushConstant.size(S)]u8 = undefined;
+    var buf: [Self.size(S)]u8 = undefined;
     @memset(&buf, 0xFF);
-    PushConstant.write(S, &buf, .{ .a = 0, .b = 0 });
+    Self.write(S, &buf, .{ .a = 0, .b = 0 });
 
     try testing.expectEqual(@as(u8, 0), buf[0]);
     try testing.expectEqual(@as(u8, 0), buf[4]);

@@ -130,11 +130,11 @@ pub fn main(init: std.process.Init) !void {
     });
     defer sampler.deinit(&ctx.destroy_queue);
 
-    var input = base.input.InputState{};
+    var input = base.Input{};
     input.init(ctx.window);
     defer input.deinit(ctx.window);
 
-    var imgui = try base.imgui.ImguiState.init(gpa, &ctx);
+    var imgui = try base.Imgui.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
     const vert = shaders.get(.vertex_test);
@@ -170,7 +170,7 @@ pub fn main(init: std.process.Init) !void {
         .fragment = frag_mod,
         .set_layouts = &.{set_layout},
         .color_attachments = &.{.{ .format = render_format }},
-        .push_constant_size = @intCast(base.PushConstant.size(PC)),
+        .push_constant_size = @intCast(base.push_constant.size(PC)),
     });
     defer pipeline.deinit(&ctx);
 
@@ -260,8 +260,8 @@ pub fn main(init: std.process.Init) !void {
             try dp.updateSampledImage(gpa, 0, .read_only_optimal, texture_view.handle, sampler.handle);
             dp.endUpdate(&ctx.graphics.dev);
 
-            var pc_buf: [base.PushConstant.size(PC)]u8 = undefined;
-            base.PushConstant.write(PC, &pc_buf, .{ .vp = (cam.view_projection), .vertex_buffer_addr = vertex_buf.address });
+            var pc_buf: [base.push_constant.size(PC)]u8 = undefined;
+            base.push_constant.write(PC, &pc_buf, .{ .vp = (cam.view_projection), .vertex_buffer_addr = vertex_buf.address });
 
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();

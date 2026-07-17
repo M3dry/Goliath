@@ -1,52 +1,34 @@
 pub const vk = @import("vulkan");
 pub const zglfw = @import("zglfw");
-pub const timing = @import("timing.zig");
-pub const input = @import("input.zig");
-pub const imgui = @import("imgui.zig");
 pub const zgui = @import("zgui");
 pub const zmath = @import("zmath");
-pub const pipeline = @import("pipeline.zig");
-pub const compute = @import("compute.zig");
+
+pub const timing = @import("timing.zig");
 pub const image_loader = @import("image_loader.zig");
-pub const render_graph = @import("render_graph.zig");
+pub const push_constant = @import("push_constant.zig");
+pub const util = @import("util.zig");
 
-pub const util = @import("util/root.zig");
+pub const Input = @import("Input.zig");
+pub const Imgui = @import("Imgui.zig");
+pub const Buffer = @import("Buffer.zig");
+pub const DescriptorPool = @import("DescriptorPool.zig");
+pub const TexturePool = @import("TexturePool.zig");
+pub const DestroyQueue = @import("DestroyQueue.zig");
+pub const ShaderModule = @import("Shader.zig");
+pub const GraphicsPipeline = @import("GraphicsPipeline.zig");
+pub const ComputePipeline = @import("ComputePipeline.zig");
+pub const Sampler = @import("Sampler.zig");
+pub const Transport = @import("Transport.zig");
+pub const Camera = @import("Camera.zig");
+pub const RenderGraph = @import("RenderGraph.zig");
 
-pub const Buffer = @import("buffer.zig").Buffer;
-pub const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
-pub const TexturePool = @import("texture_pool.zig").TexturePool;
-pub const DestroyQueue = @import("destroy_queue.zig").DestroyQueue;
-pub const ShaderModule = @import("shader.zig").ShaderModule;
-pub const GraphicsPipeline = pipeline.GraphicsPipeline;
-pub const ComputePipeline = compute.ComputePipeline;
 pub const Image2D = @import("image.zig").Image2D;
 pub const ImageView = @import("image.zig").ImageView;
-pub const Sampler = @import("sampler.zig").Sampler;
-pub const Transport = @import("transport.zig").Transport;
-pub const Camera = @import("camera.zig").Camera;
-pub const PushConstant = @import("push_constant.zig").PushConstant;
-pub const RenderGraph = render_graph.RenderGraph;
-pub const GraphicsPassHandle = render_graph.GraphicsPassHandle;
-pub const ComputePassHandle = render_graph.ComputePassHandle;
-pub const ImageRef = render_graph.ImageRef;
-pub const BufferRef = render_graph.BufferRef;
-pub const ImageContract = render_graph.ImageContract;
-pub const BufferContract = render_graph.BufferContract;
-pub const ImageUsage = render_graph.ImageUsage;
-pub const BufferUsage = render_graph.BufferUsage;
-pub const ColorAttachment = render_graph.ColorAttachment;
-pub const DepthAttachment = render_graph.DepthAttachment;
-pub const DrawCall = render_graph.DrawCall;
-pub const DrawIndirect = render_graph.DrawIndirect;
-pub const DispatchCall = render_graph.DispatchCall;
-pub const DispatchIndirect = render_graph.DispatchIndirect;
-pub const GraphicsPass = render_graph.GraphicsPass;
-pub const ComputePass = render_graph.ComputePass;
-pub const Pass = render_graph.Pass;
+
+const GraphicsCtx = @import("GraphicsCtx.zig");
 
 const std = @import("std");
 const vma = @import("vma.zig").vma;
-const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
 
 const Allocator = std.mem.Allocator;
 
@@ -666,3 +648,11 @@ const Swapchain = struct {
         self.* = try initRecycle(alloc, gc, extent, self.handle);
     }
 };
+
+// ponytail: import forces test runner to discover test blocks in sub-modules
+test {
+    _ = @import("push_constant.zig");
+    _ = @import("layout.zig");
+    _ = @import("util/ring_buffer.zig");
+    _ = @import("RenderGraph.zig");
+}

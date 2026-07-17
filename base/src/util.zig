@@ -1,3 +1,6 @@
+pub const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
+pub const RingBuffer = @import("util/ring_buffer.zig").RingBuffer;
+
 const vk = @import("vulkan");
 
 pub fn fullRange(aspect: vk.ImageAspectFlags) vk.ImageSubresourceRange {

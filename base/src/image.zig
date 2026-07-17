@@ -2,8 +2,8 @@ const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
-const DestroyQueue = @import("destroy_queue.zig").DestroyQueue;
-const GraphicsContext = @import("graphics_ctx.zig").GraphicsCtx;
+const DestroyQueue = @import("DestroyQueue.zig");
+const GraphicsCtx = @import("GraphicsCtx.zig");
 
 fn aspectFromFormat(format: vk.Format) vk.ImageAspectFlags {
     return switch (format) {
@@ -31,7 +31,7 @@ pub const Image2D = struct {
     };
 
     pub fn init(
-        gc: *const GraphicsContext,
+        gc: *const GraphicsCtx,
         vma_alloc: vma.VmaAllocator,
         name: [:0]const u8,
         desc: Description,
@@ -136,7 +136,7 @@ pub const ImageView = struct {
         }
     };
 
-    pub fn init(gc: *const GraphicsContext, desc: Description) !ImageView {
+    pub fn init(gc: *const GraphicsCtx, desc: Description) !ImageView {
         const handle = try gc.dev.createImageView(&.{
             .image = desc.image,
             .view_type = desc.view_type,
@@ -155,7 +155,7 @@ pub const ImageView = struct {
         }
     }
 
-    pub fn deinitNow(self: *ImageView, gc: *const GraphicsContext) void {
+    pub fn deinitNow(self: *ImageView, gc: *const GraphicsCtx) void {
         if (self.handle != .null_handle) {
             gc.dev.destroyImageView(self.handle, null);
             self.handle = .null_handle;

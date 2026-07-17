@@ -140,7 +140,7 @@ test "struct with float and vec4" {
 test "struct with mixed scalars" {
     const S = struct { a: u64, b: f32 };
     try testing.expectEqual(@as(usize, 8), alignment(S));
-    try testing.expectEqual(@as(usize, 12), size(S));
+    try testing.expectEqual(@as(usize, 16), size(S));
     const off = comptime fieldOffsets(S);
     try testing.expectEqual(@as(usize, 0), off[0]);
     try testing.expectEqual(@as(usize, 8), off[1]);

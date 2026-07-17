@@ -1,11 +1,14 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const GraphicsCtx = @import("graphics_ctx.zig").GraphicsCtx;
-const DescriptorPool = @import("descriptor_pool.zig").DescriptorPool;
-const GraphicsPipeline = @import("pipeline.zig").GraphicsPipeline;
-const ComputePipeline = @import("compute.zig").ComputePipeline;
+const util = @import("util.zig");
+
+const GraphicsCtx = @import("GraphicsCtx.zig");
+const DescriptorPool = @import("DescriptorPool.zig");
+const GraphicsPipeline = @import("GraphicsPipeline.zig");
+const ComputePipeline = @import("ComputePipeline.zig");
 const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
-const fullRange = @import("util/subresource_range.zig").fullRange;
+
+const RenderGraph = @This();
 
 const Allocator = std.mem.Allocator;
 
@@ -403,7 +406,7 @@ fn emitPassBarriers(
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
                 .image = contracts[idx].image,
-                .subresource_range = fullRange(contracts[idx].aspect),
+                .subresource_range = util.fullRange(contracts[idx].aspect),
             });
             cur.* = .{
                 .layout = req.layout,
@@ -611,13 +614,13 @@ fn recordComputePass(
 }
 
 fn flushBarriers(
-    dev: *vk.DeviceProxy,
+    gc: *const GraphicsCtx,
     cmd_buf: vk.CommandBuffer,
     img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
     buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
 ) void {
     if (img_bars.items.len == 0 and buf_bars.items.len == 0) return;
-    dev.cmdPipelineBarrier2(cmd_buf, &.{
+    gc.dev.cmdPipelineBarrier2(cmd_buf, &.{
         .buffer_memory_barrier_count = @intCast(buf_bars.items.len),
         .p_buffer_memory_barriers = buf_bars.items.ptr,
         .image_memory_barrier_count = @intCast(img_bars.items.len),
@@ -630,7 +633,7 @@ fn emitFinalBarriers(
     image_states: []ImageTrackedState,
     buffer_states: []BufferTrackedState,
     qf: u32,
-    dev: *vk.DeviceProxy,
+    gc: *const GraphicsCtx,
     cmd_buf: vk.CommandBuffer,
     alloc: Allocator,
 ) Allocator.Error!void {
@@ -649,7 +652,7 @@ fn emitFinalBarriers(
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
                 .image = contract.image,
-                .subresource_range = fullRange(contract.aspect),
+                .subresource_range = util.fullRange(contract.aspect),
             });
         }
     }
@@ -670,353 +673,353 @@ fn emitFinalBarriers(
         }
     }
 
-    flushBarriers(dev, cmd_buf, img_bars, buf_bars);
+    flushBarriers(gc, cmd_buf, img_bars, buf_bars);
     img_bars.deinit(alloc);
     buf_bars.deinit(alloc);
 }
 
-pub const RenderGraph = struct {
-    alloc: Allocator,
-    images: std.ArrayListUnmanaged(ImageContract),
-    buffers: std.ArrayListUnmanaged(BufferContract),
-    passes: std.ArrayListUnmanaged(Pass),
+alloc: Allocator,
+images: std.ArrayListUnmanaged(ImageContract),
+buffers: std.ArrayListUnmanaged(BufferContract),
+passes: std.ArrayListUnmanaged(Pass),
 
-    pub fn init(alloc: Allocator) RenderGraph {
-        return .{
-            .alloc = alloc,
-            .images = .empty,
-            .buffers = .empty,
-            .passes = .empty,
-        };
+pub fn init(alloc: Allocator) RenderGraph {
+    return .{
+        .alloc = alloc,
+        .images = .empty,
+        .buffers = .empty,
+        .passes = .empty,
+    };
+}
+pub fn deinit(self: *RenderGraph) void {
+    for (self.passes.items) |*pass| {
+        switch (pass.*) {
+            .graphics => |*gp| {
+                self.alloc.free(gp.color_attachments);
+                gp.reads_images.deinit(self.alloc);
+                gp.reads_buffers.deinit(self.alloc);
+                gp.writes_images.deinit(self.alloc);
+                gp.writes_buffers.deinit(self.alloc);
+                gp.draws.deinit(self.alloc);
+            },
+            .compute => |*cp| {
+                cp.reads_images.deinit(self.alloc);
+                cp.reads_buffers.deinit(self.alloc);
+                cp.writes_images.deinit(self.alloc);
+                cp.writes_buffers.deinit(self.alloc);
+            },
+        }
     }
-    pub fn deinit(self: *RenderGraph) void {
-        for (self.passes.items) |*pass| {
-            switch (pass.*) {
-                .graphics => |*gp| {
-                    gp.reads_images.deinit(self.alloc);
-                    gp.reads_buffers.deinit(self.alloc);
-                    gp.writes_images.deinit(self.alloc);
-                    gp.writes_buffers.deinit(self.alloc);
-                    gp.draws.deinit(self.alloc);
-                },
-                .compute => |*cp| {
-                    cp.reads_images.deinit(self.alloc);
-                    cp.reads_buffers.deinit(self.alloc);
-                    cp.writes_images.deinit(self.alloc);
-                    cp.writes_buffers.deinit(self.alloc);
-                },
+    self.passes.deinit(self.alloc);
+    self.buffers.deinit(self.alloc);
+    self.images.deinit(self.alloc);
+}
+
+pub fn addImage(self: *RenderGraph, contract: ImageContract) Allocator.Error!ImageRef {
+    try self.images.append(self.alloc, contract);
+    return .{ .index = @intCast(self.images.items.len - 1) };
+}
+
+pub fn addBuffer(self: *RenderGraph, contract: BufferContract) Allocator.Error!BufferRef {
+    try self.buffers.append(self.alloc, contract);
+    return .{ .index = @intCast(self.buffers.items.len - 1) };
+}
+
+pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!GraphicsPassHandle {
+    const color_attachments = try self.alloc.dupe(ColorAttachment, desc.color_attachments);
+    try self.passes.append(self.alloc, .{ .graphics = .{
+        .pipeline = desc.pipeline,
+        .color_attachments = color_attachments,
+        .depth_attachment = desc.depth_attachment,
+        .stencil_attachment = desc.stencil_attachment,
+        .render_area = desc.render_area,
+        .descriptor_sets = desc.descriptor_sets,
+        .indirect = desc.indirect,
+        .indirect_count = desc.indirect_count,
+    } });
+    return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
+}
+
+pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!ComputePassHandle {
+    try self.passes.append(self.alloc, .{ .compute = .{
+        .pipeline = desc.pipeline,
+        .descriptor_sets = desc.descriptor_sets,
+        .dispatch = desc.dispatch,
+        .indirect = desc.indirect,
+    } });
+    return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
+}
+
+/// Consumes `other` by merging its passes into `self`.
+/// After this call `other` is undefined and must not be used.
+pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
+    var image_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
+    defer image_remap.deinit(self.alloc);
+
+    for (other.images.items, 0..) |o_img, o_idx| {
+        var found = false;
+        for (self.images.items, 0..) |s_img, s_idx| {
+            if (s_img.image == o_img.image) {
+                try image_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
+                self.images.items[s_idx].end_usage = o_img.end_usage;
+                found = true;
+                break;
             }
         }
-        self.passes.deinit(self.alloc);
-        self.buffers.deinit(self.alloc);
-        self.images.deinit(self.alloc);
+        if (!found) {
+            const new_idx = self.images.items.len;
+            try self.images.append(self.alloc, o_img);
+            try image_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
+        }
     }
 
-    pub fn addImage(self: *RenderGraph, contract: ImageContract) Allocator.Error!ImageRef {
-        try self.images.append(self.alloc, contract);
-        return .{ .index = @intCast(self.images.items.len - 1) };
+    var buffer_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
+    defer buffer_remap.deinit(self.alloc);
+
+    for (other.buffers.items, 0..) |o_buf, o_idx| {
+        var found = false;
+        for (self.buffers.items, 0..) |s_buf, s_idx| {
+            if (s_buf.buffer == o_buf.buffer) {
+                try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
+                self.buffers.items[s_idx].end_usage = o_buf.end_usage;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            const new_idx = self.buffers.items.len;
+            try self.buffers.append(self.alloc, o_buf);
+            try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
+        }
     }
 
-    pub fn addBuffer(self: *RenderGraph, contract: BufferContract) Allocator.Error!BufferRef {
-        try self.buffers.append(self.alloc, contract);
-        return .{ .index = @intCast(self.buffers.items.len - 1) };
-    }
-
-    pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!GraphicsPassHandle {
-        try self.passes.append(self.alloc, .{ .graphics = .{
-            .pipeline = desc.pipeline,
-            .color_attachments = desc.color_attachments,
-            .depth_attachment = desc.depth_attachment,
-            .stencil_attachment = desc.stencil_attachment,
-            .render_area = desc.render_area,
-            .descriptor_sets = desc.descriptor_sets,
-            .indirect = desc.indirect,
-            .indirect_count = desc.indirect_count,
-        } });
-        return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
-    }
-
-    pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!ComputePassHandle {
-        try self.passes.append(self.alloc, .{ .compute = .{
-            .pipeline = desc.pipeline,
-            .descriptor_sets = desc.descriptor_sets,
-            .dispatch = desc.dispatch,
-            .indirect = desc.indirect,
-        } });
-        return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
-    }
-
-    /// Consumes `other` by merging its passes into `self`.
-    /// After this call `other` is undefined and must not be used.
-    pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
-        var image_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
-        defer image_remap.deinit(self.alloc);
-
-        for (other.images.items, 0..) |o_img, o_idx| {
-            var found = false;
-            for (self.images.items, 0..) |s_img, s_idx| {
-                if (s_img.image == o_img.image) {
-                    try image_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
-                    self.images.items[s_idx].end_usage = o_img.end_usage;
-                    found = true;
-                    break;
+    for (other.passes.items) |*o_pass| {
+        switch (o_pass.*) {
+            .graphics => |*o_gp| {
+                var color_attachments: []ColorAttachment = &.{};
+                if (o_gp.color_attachments.len > 0) {
+                    color_attachments = try self.alloc.dupe(ColorAttachment, o_gp.color_attachments);
+                    for (color_attachments) |*ca| {
+                        ca.image.index = image_remap.get(ca.image.index) orelse @panic("merge: dangling ImageRef");
+                    }
                 }
-            }
-            if (!found) {
-                const new_idx = self.images.items.len;
-                try self.images.append(self.alloc, o_img);
-                try image_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
-            }
-        }
 
-        var buffer_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
-        defer buffer_remap.deinit(self.alloc);
+                var new_gp = GraphicsPass{
+                    .pipeline = o_gp.pipeline,
+                    .color_attachments = color_attachments,
+                    .depth_attachment = if (o_gp.depth_attachment) |da| DepthAttachment{
+                        .image = .{ .index = image_remap.get(da.image.index) orelse @panic("merge: dangling ImageRef") },
+                        .view = da.view,
+                        .load_op = da.load_op,
+                        .store_op = da.store_op,
+                        .clear_depth = da.clear_depth,
+                        .clear_stencil = da.clear_stencil,
+                        .layout = da.layout,
+                        .has_stencil = da.has_stencil,
+                    } else null,
+                    .stencil_attachment = if (o_gp.stencil_attachment) |sa| StencilAttachment{
+                        .image = .{ .index = image_remap.get(sa.image.index) orelse @panic("merge: dangling ImageRef") },
+                        .view = sa.view,
+                        .load_op = sa.load_op,
+                        .store_op = sa.store_op,
+                        .clear_stencil = sa.clear_stencil,
+                        .layout = sa.layout,
+                    } else null,
+                    .render_area = o_gp.render_area,
+                    .descriptor_sets = o_gp.descriptor_sets,
+                    .reads_images = .empty,
+                    .reads_buffers = .empty,
+                    .writes_images = .empty,
+                    .writes_buffers = .empty,
+                    .draws = .empty,
+                    .indirect = if (o_gp.indirect) |ind| DrawIndirect{
+                        .push_constant = ind.push_constant,
+                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .offset = ind.offset,
+                        .draw_count = ind.draw_count,
+                        .stride = ind.stride,
+                    } else null,
+                    .indirect_count = if (o_gp.indirect_count) |ic| DrawIndirectCount{
+                        .push_constant = ic.push_constant,
+                        .buffer = .{ .index = buffer_remap.get(ic.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .offset = ic.offset,
+                        .count_buffer = .{ .index = buffer_remap.get(ic.count_buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .count_offset = ic.count_offset,
+                        .max_draw_count = ic.max_draw_count,
+                        .stride = ic.stride,
+                    } else null,
+                };
 
-        for (other.buffers.items, 0..) |o_buf, o_idx| {
-            var found = false;
-            for (self.buffers.items, 0..) |s_buf, s_idx| {
-                if (s_buf.buffer == o_buf.buffer) {
-                    try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
-                    self.buffers.items[s_idx].end_usage = o_buf.end_usage;
-                    found = true;
-                    break;
+                for (o_gp.reads_images.items) |item| {
+                    try new_gp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
                 }
-            }
-            if (!found) {
-                const new_idx = self.buffers.items.len;
-                try self.buffers.append(self.alloc, o_buf);
-                try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(new_idx));
-            }
+                for (o_gp.reads_buffers.items) |item| {
+                    try new_gp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                }
+                for (o_gp.writes_images.items) |item| {
+                    try new_gp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                }
+                for (o_gp.writes_buffers.items) |item| {
+                    try new_gp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                }
+                try new_gp.draws.appendSlice(self.alloc, o_gp.draws.items);
+
+                try self.passes.append(self.alloc, .{ .graphics = new_gp });
+            },
+            .compute => |*o_cp| {
+                var new_cp = ComputePass{
+                    .pipeline = o_cp.pipeline,
+                    .descriptor_sets = o_cp.descriptor_sets,
+                    .reads_images = .empty,
+                    .reads_buffers = .empty,
+                    .writes_images = .empty,
+                    .writes_buffers = .empty,
+                    .dispatch = o_cp.dispatch,
+                    .indirect = if (o_cp.indirect) |ind| DispatchIndirect{
+                        .push_constant = ind.push_constant,
+                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .offset = ind.offset,
+                    } else null,
+                };
+
+                for (o_cp.reads_images.items) |item| {
+                    try new_cp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                }
+                for (o_cp.reads_buffers.items) |item| {
+                    try new_cp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                }
+                for (o_cp.writes_images.items) |item| {
+                    try new_cp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                }
+                for (o_cp.writes_buffers.items) |item| {
+                    try new_cp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                }
+
+                try self.passes.append(self.alloc, .{ .compute = new_cp });
+            },
         }
-
-        for (other.passes.items) |*o_pass| {
-            switch (o_pass.*) {
-                .graphics => |*o_gp| {
-                    var color_attachments: []const ColorAttachment = &.{};
-                    if (o_gp.color_attachments.len > 0) {
-                        color_attachments = try self.alloc.dupe(ColorAttachment, o_gp.color_attachments);
-                        for (color_attachments) |*ca| {
-                            ca.image.index = image_remap.get(ca.image.index) orelse @panic("merge: dangling ImageRef");
-                        }
-                    }
-
-                    var new_gp = GraphicsPass{
-                        .pipeline = o_gp.pipeline,
-                        .color_attachments = color_attachments,
-                        .depth_attachment = if (o_gp.depth_attachment) |da| DepthAttachment{
-                            .image = .{ .index = image_remap.get(da.image.index) orelse @panic("merge: dangling ImageRef") },
-                            .view = da.view,
-                            .load_op = da.load_op,
-                            .store_op = da.store_op,
-                            .clear_depth = da.clear_depth,
-                            .clear_stencil = da.clear_stencil,
-                            .layout = da.layout,
-                            .has_stencil = da.has_stencil,
-                        } else null,
-                        .stencil_attachment = if (o_gp.stencil_attachment) |sa| StencilAttachment{
-                            .image = .{ .index = image_remap.get(sa.image.index) orelse @panic("merge: dangling ImageRef") },
-                            .view = sa.view,
-                            .load_op = sa.load_op,
-                            .store_op = sa.store_op,
-                            .clear_stencil = sa.clear_stencil,
-                            .layout = sa.layout,
-                        } else null,
-                        .render_area = o_gp.render_area,
-                        .descriptor_sets = o_gp.descriptor_sets,
-                        .reads_images = .empty,
-                        .reads_buffers = .empty,
-                        .writes_images = .empty,
-                        .writes_buffers = .empty,
-                        .draws = .empty,
-                        .indirect = if (o_gp.indirect) |ind| DrawIndirect{
-                            .push_constant = ind.push_constant,
-                            .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
-                            .offset = ind.offset,
-                            .draw_count = ind.draw_count,
-                            .stride = ind.stride,
-                        } else null,
-                        .indirect_count = if (o_gp.indirect_count) |ic| DrawIndirectCount{
-                            .push_constant = ic.push_constant,
-                            .buffer = .{ .index = buffer_remap.get(ic.buffer.index) orelse @panic("merge: dangling BufferRef") },
-                            .offset = ic.offset,
-                            .count_buffer = .{ .index = buffer_remap.get(ic.count_buffer.index) orelse @panic("merge: dangling BufferRef") },
-                            .count_offset = ic.count_offset,
-                            .max_draw_count = ic.max_draw_count,
-                            .stride = ic.stride,
-                        } else null,
-                    };
-
-                    for (o_gp.reads_images.items) |item| {
-                        try new_gp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
-                    }
-                    for (o_gp.reads_buffers.items) |item| {
-                        try new_gp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
-                    }
-                    for (o_gp.writes_images.items) |item| {
-                        try new_gp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
-                    }
-                    for (o_gp.writes_buffers.items) |item| {
-                        try new_gp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
-                    }
-                    try new_gp.draws.appendSlice(self.alloc, o_gp.draws.items);
-
-                    try self.passes.append(self.alloc, .{ .graphics = new_gp });
-                },
-                .compute => |*o_cp| {
-                    var new_cp = ComputePass{
-                        .pipeline = o_cp.pipeline,
-                        .descriptor_sets = o_cp.descriptor_sets,
-                        .reads_images = .empty,
-                        .reads_buffers = .empty,
-                        .writes_images = .empty,
-                        .writes_buffers = .empty,
-                        .dispatch = o_cp.dispatch,
-                        .indirect = if (o_cp.indirect) |ind| DispatchIndirect{
-                            .push_constant = ind.push_constant,
-                            .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
-                            .offset = ind.offset,
-                        } else null,
-                    };
-
-                    for (o_cp.reads_images.items) |item| {
-                        try new_cp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
-                    }
-                    for (o_cp.reads_buffers.items) |item| {
-                        try new_cp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
-                    }
-                    for (o_cp.writes_images.items) |item| {
-                        try new_cp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
-                    }
-                    for (o_cp.writes_buffers.items) |item| {
-                        try new_cp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
-                    }
-
-                    try self.passes.append(self.alloc, .{ .compute = new_cp });
-                },
-            }
-        }
-
-        other.deinit();
-        other.* = undefined;
     }
 
-    pub fn run(
-        self: *const RenderGraph,
-        gc: *GraphicsCtx,
-        cmd_buf: vk.CommandBuffer,
-        dp: *DescriptorPool,
-    ) Allocator.Error!void {
-        const dev = &gc.dev;
-        const qf = gc.graphics_family;
+    other.deinit();
+    other.* = undefined;
+}
 
-        var arena = std.heap.ArenaAllocator.init(self.alloc);
-        defer arena.deinit();
-        const alloc = arena.allocator();
+pub fn run(
+    self: *const RenderGraph,
+    gc: *const GraphicsCtx,
+    cmd_buf: vk.CommandBuffer,
+    dp: *DescriptorPool,
+) Allocator.Error!void {
+    const dev = &gc.dev;
+    const qf = gc.graphics_family;
 
-        const num_images = self.images.items.len;
-        const num_buffers = self.buffers.items.len;
+    var arena = std.heap.ArenaAllocator.init(self.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
-        var image_states: []ImageTrackedState = &.{};
-        var buffer_states: []BufferTrackedState = &.{};
+    const num_images = self.images.items.len;
+    const num_buffers = self.buffers.items.len;
 
-        if (num_images > 0) {
-            image_states = try alloc.alloc(ImageTrackedState, num_images);
-            for (self.images.items, 0..) |contract, i| {
-                image_states[i] = .{
-                    .layout = contract.start_usage.layout,
-                    .stage = contract.start_usage.stage,
-                    .access = contract.start_usage.access,
-                };
-            }
+    var image_states: []ImageTrackedState = &.{};
+    var buffer_states: []BufferTrackedState = &.{};
+
+    if (num_images > 0) {
+        image_states = try alloc.alloc(ImageTrackedState, num_images);
+        for (self.images.items, 0..) |contract, i| {
+            image_states[i] = .{
+                .layout = contract.start_usage.layout,
+                .stage = contract.start_usage.stage,
+                .access = contract.start_usage.access,
+            };
         }
+    }
 
-        if (num_buffers > 0) {
-            buffer_states = try alloc.alloc(BufferTrackedState, num_buffers);
-            for (self.buffers.items, 0..) |contract, i| {
-                buffer_states[i] = .{
-                    .stage = contract.start_usage.stage,
-                    .access = contract.start_usage.access,
-                };
-            }
+    if (num_buffers > 0) {
+        buffer_states = try alloc.alloc(BufferTrackedState, num_buffers);
+        for (self.buffers.items, 0..) |contract, i| {
+            buffer_states[i] = .{
+                .stage = contract.start_usage.stage,
+                .access = contract.start_usage.access,
+            };
         }
+    }
 
-        const max_capacity = @max(num_images, num_buffers) * 2 + 16;
-        var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
-        try pass_images.ensureTotalCapacity(alloc, max_capacity);
-        var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
-        try pass_buffers.ensureTotalCapacity(alloc, max_capacity);
+    const max_capacity = @max(num_images, num_buffers) * 2 + 16;
+    var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
+    try pass_images.ensureTotalCapacity(alloc, max_capacity);
+    var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
+    try pass_buffers.ensureTotalCapacity(alloc, max_capacity);
 
-        var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
-        var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+    var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+    var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
 
-        var prev_gp: ?*const GraphicsPass = null;
-        const dev_proxy = dev;
+    var prev_gp: ?*const GraphicsPass = null;
+    const dev_proxy = dev;
 
-        for (self.passes.items) |*pass| {
-            switch (pass.*) {
-                .graphics => |*gp| {
-                    try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
-                    try emitPassBarriers(
-                        pass_images,
-                        pass_buffers,
-                        image_states,
-                        buffer_states,
-                        self.images.items,
-                        self.buffers.items,
-                        qf,
-                        &img_bars,
-                        &buf_bars,
-                        alloc,
-                    );
+    for (self.passes.items) |*pass| {
+        switch (pass.*) {
+            .graphics => |*gp| {
+                try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
+                try emitPassBarriers(
+                    pass_images,
+                    pass_buffers,
+                    image_states,
+                    buffer_states,
+                    self.images.items,
+                    self.buffers.items,
+                    qf,
+                    &img_bars,
+                    &buf_bars,
+                    alloc,
+                );
 
-                    const can_merge = if (prev_gp) |prev| blk: {
-                        if (img_bars.items.len > 0 or buf_bars.items.len > 0) break :blk false;
-                        break :blk renderTargetsEqual(prev, gp);
-                    } else false;
+                const can_merge = if (prev_gp) |prev| blk: {
+                    if (img_bars.items.len > 0 or buf_bars.items.len > 0) break :blk false;
+                    break :blk renderTargetsEqual(prev, gp);
+                } else false;
 
-                    if (can_merge) {
-                        recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
-                    } else {
-                        if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
-                        flushBarriers(dev, cmd_buf, img_bars, buf_bars);
-                        img_bars.clearRetainingCapacity();
-                        buf_bars.clearRetainingCapacity();
-                        try beginRendering(gp, dev, cmd_buf, alloc);
-                        recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
-                    }
-                    prev_gp = gp;
-                },
-                .compute => |*cp| {
-                    if (prev_gp != null) {
-                        dev_proxy.cmdEndRendering(cmd_buf);
-                        prev_gp = null;
-                    }
-                    try collectPassRequirementsCompute(&pass_images, &pass_buffers, cp, alloc);
-                    try emitPassBarriers(
-                        pass_images,
-                        pass_buffers,
-                        image_states,
-                        buffer_states,
-                        self.images.items,
-                        self.buffers.items,
-                        qf,
-                        &img_bars,
-                        &buf_bars,
-                        alloc,
-                    );
-                    flushBarriers(dev, cmd_buf, img_bars, buf_bars);
+                if (can_merge) {
+                    recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                } else {
+                    if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
+                    flushBarriers(gc, cmd_buf, img_bars, buf_bars);
                     img_bars.clearRetainingCapacity();
                     buf_bars.clearRetainingCapacity();
-                    recordComputePass(cp, gc, cmd_buf, dp, self.buffers.items);
-                },
-            }
+                    try beginRendering(gp, dev, cmd_buf, alloc);
+                    recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                }
+                prev_gp = gp;
+            },
+            .compute => |*cp| {
+                if (prev_gp != null) {
+                    dev_proxy.cmdEndRendering(cmd_buf);
+                    prev_gp = null;
+                }
+                try collectPassRequirementsCompute(&pass_images, &pass_buffers, cp, alloc);
+                try emitPassBarriers(
+                    pass_images,
+                    pass_buffers,
+                    image_states,
+                    buffer_states,
+                    self.images.items,
+                    self.buffers.items,
+                    qf,
+                    &img_bars,
+                    &buf_bars,
+                    alloc,
+                );
+                flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+                img_bars.clearRetainingCapacity();
+                buf_bars.clearRetainingCapacity();
+                recordComputePass(cp, gc, cmd_buf, dp, self.buffers.items);
+            },
         }
-
-        if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
-
-        try emitFinalBarriers(self, image_states, buffer_states, qf, dev, cmd_buf, alloc);
     }
-};
+
+    if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
+
+    try emitFinalBarriers(self, image_states, buffer_states, qf, gc, cmd_buf, alloc);
+}
 
 test "builder: add images, buffers, passes and deinit" {
     const alloc = std.testing.allocator;
@@ -1031,7 +1034,7 @@ test "builder: add images, buffers, passes and deinit" {
     const vb: vk.Buffer = @enumFromInt(0);
     const count_buf: vk.Buffer = @enumFromInt(1);
 
-    const rt = rg.addImage(.{
+    const rt = try rg.addImage(.{
         .image = rt_img,
         .start_usage = .{
             .stage = .{ .all_commands_bit = true },
@@ -1046,7 +1049,7 @@ test "builder: add images, buffers, passes and deinit" {
     });
     try std.testing.expectEqual(@as(u32, 0), rt.index);
 
-    const depth = rg.addImage(.{
+    const depth = try rg.addImage(.{
         .image = depth_img,
         .start_usage = .{
             .stage = .{ .all_commands_bit = true },
@@ -1061,7 +1064,7 @@ test "builder: add images, buffers, passes and deinit" {
     });
     try std.testing.expectEqual(@as(u32, 1), depth.index);
 
-    const buf_a = rg.addBuffer(.{
+    const buf_a = try rg.addBuffer(.{
         .buffer = vb,
         .offset = 0,
         .size = 64,
@@ -1076,7 +1079,7 @@ test "builder: add images, buffers, passes and deinit" {
     });
     try std.testing.expectEqual(@as(u32, 0), buf_a.index);
 
-    const buf_b = rg.addBuffer(.{
+    const buf_b = try rg.addBuffer(.{
         .buffer = count_buf,
         .offset = 0,
         .size = 16,
@@ -1098,19 +1101,19 @@ test "builder: add images, buffers, passes and deinit" {
         .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1920, .height = 1080 } },
     };
 
-    const gp_handle = rg.addGraphicsPass(gp_desc);
+    const gp_handle = try rg.addGraphicsPass(gp_desc);
     try std.testing.expectEqual(@as(u32, 0), gp_handle.index);
 
-    gp_handle.readBuffer(buf_a, .{
+    try gp_handle.readBuffer(buf_a, .{
         .stage = .{ .vertex_input_bit = true },
         .access = .{ .memory_read_bit = true },
     });
-    gp_handle.writeImage(rt, .{
+    try gp_handle.writeImage(rt, .{
         .stage = .{ .color_attachment_output_bit = true },
         .access = .{ .color_attachment_write_bit = true },
         .layout = .color_attachment_optimal,
     });
-    gp_handle.draw(.{ .vertex_count = 3 });
+    try gp_handle.draw(.{ .vertex_count = 3 });
     gp_handle.setDescriptorSets(&.{ 7 });
 
     try std.testing.expectEqual(@as(usize, 2), rg.images.items.len);
@@ -1140,15 +1143,15 @@ test "builder: add images, buffers, passes and deinit" {
         .indirect = null,
     };
 
-    const cp_handle = rg.addComputePass(cp_desc);
+    const cp_handle = try rg.addComputePass(cp_desc);
     try std.testing.expectEqual(@as(u32, 1), cp_handle.index);
 
-    cp_handle.readImage(rt, .{
+    try cp_handle.readImage(rt, .{
         .stage = .{ .compute_shader_bit = true },
         .access = .{ .shader_read_bit = true },
         .layout = .read_only_optimal,
     });
-    cp_handle.writeImage(rt, .{
+    try cp_handle.writeImage(rt, .{
         .stage = .{ .compute_shader_bit = true },
         .access = .{ .shader_write_bit = true },
         .layout = .general,
@@ -1175,20 +1178,20 @@ test "indirect: drawIndirect and drawIndirectCount with BufferRef" {
     const vb: vk.Buffer = @enumFromInt(100);
     const cb: vk.Buffer = @enumFromInt(200);
 
-    const ind_buf = rg.addBuffer(.{
+    const ind_buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
-    const cnt_buf = rg.addBuffer(.{
+    const cnt_buf = try rg.addBuffer(.{
         .buffer = cb, .offset = 0, .size = 16,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
 
-    const pass = rg.addGraphicsPass(.{
+    const pass = try rg.addGraphicsPass(.{
         .pipeline = undefined,
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
 
     pass.drawIndirect(.{
@@ -1219,13 +1222,13 @@ test "indirect: dispatchIndirect with BufferRef" {
 
     const vb: vk.Buffer = @enumFromInt(100);
 
-    const ind_buf = rg.addBuffer(.{
+    const ind_buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 64,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
 
-    _ = rg.addComputePass(.{
+    _ = try rg.addComputePass(.{
         .pipeline = undefined,
         .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
         .indirect = .{
@@ -1248,24 +1251,24 @@ test "merge: explicit read + indirect draw merge into one barrier" {
     const rt_view: vk.ImageView = @enumFromInt(0);
     const vb: vk.Buffer = @enumFromInt(100);
 
-    const rt = rg.addImage(.{
+    const rt = try rg.addImage(.{
         .image = rt_img,
         .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
     });
-    const ind_buf = rg.addBuffer(.{
+    const ind_buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
 
-    const pass = rg.addGraphicsPass(.{
+    const pass = try rg.addGraphicsPass(.{
         .pipeline = undefined,
         .color_attachments = &.{.{ .image = rt, .view = rt_view }},
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
 
-    pass.readBuffer(ind_buf, .{
+    try pass.readBuffer(ind_buf, .{
         .stage = .{ .vertex_shader_bit = true },
         .access = .{ .shader_read_bit = true },
     });
@@ -1278,7 +1281,7 @@ test "merge: explicit read + indirect draw merge into one barrier" {
     var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
 
     const gp = &rg.passes.items[0].graphics;
-    collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
+    try collectPassRequirementsGraphics(&pass_images, &pass_buffers, gp, alloc);
     defer {
         pass_images.deinit(alloc);
         pass_buffers.deinit(alloc);
@@ -1358,19 +1361,19 @@ test "merge: two disjoint graphs concatenate cleanly" {
     const img1: vk.Image = @enumFromInt(1);
     const buf1: vk.Buffer = @enumFromInt(100);
 
-    _ = rg1.addImage(.{
+    _ = try rg1.addImage(.{
         .image = img1,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
     });
-    _ = rg1.addBuffer(.{
+    _ = try rg1.addBuffer(.{
         .buffer = buf1, .offset = 0, .size = 64,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
-    _ = rg1.addGraphicsPass(.{
+    _ = try rg1.addGraphicsPass(.{
         .pipeline = undefined,
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
 
     var rg2 = RenderGraph.init(alloc);
@@ -1378,22 +1381,22 @@ test "merge: two disjoint graphs concatenate cleanly" {
     const img2: vk.Image = @enumFromInt(2);
     const buf2: vk.Buffer = @enumFromInt(200);
 
-    _ = rg2.addImage(.{
+    _ = try rg2.addImage(.{
         .image = img2,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
         .end_usage = .{ .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true }, .layout = .color_attachment_optimal },
     });
-    _ = rg2.addBuffer(.{
+    _ = try rg2.addBuffer(.{
         .buffer = buf2, .offset = 0, .size = 128,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
-    _ = rg2.addComputePass(.{
+    _ = try rg2.addComputePass(.{
         .pipeline = undefined,
         .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
     });
 
-    rg1.merge(&rg2);
+    try rg1.merge(&rg2);
 
     try std.testing.expectEqual(@as(usize, 2), rg1.images.items.len);
     try std.testing.expectEqual(@as(usize, 2), rg1.buffers.items.len);
@@ -1417,41 +1420,41 @@ test "merge: overlapping image dedup and end_usage inheritance" {
     const shared_img: vk.Image = @enumFromInt(42);
     const shared_buf: vk.Buffer = @enumFromInt(7);
 
-    _ = rg1.addImage(.{
+    _ = try rg1.addImage(.{
         .image = shared_img,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true }, .layout = .undefined },
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
     });
-    _ = rg1.addBuffer(.{
+    _ = try rg1.addBuffer(.{
         .buffer = shared_buf, .offset = 0, .size = 32,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
         .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
     });
-    const pa = rg1.addGraphicsPass(.{
+    const pa = try rg1.addGraphicsPass(.{
         .pipeline = undefined,
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
-    pa.draw(.{ .vertex_count = 3 });
+    try pa.draw(.{ .vertex_count = 3 });
 
     var rg2 = RenderGraph.init(alloc);
 
-    _ = rg2.addImage(.{
+    _ = try rg2.addImage(.{
         .image = shared_img,
         .start_usage = .{ .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true }, .layout = .color_attachment_optimal },
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .present_src_khr },
     });
-    _ = rg2.addBuffer(.{
+    _ = try rg2.addBuffer(.{
         .buffer = shared_buf, .offset = 0, .size = 32,
         .start_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
         .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
     });
-    const pb = rg2.addGraphicsPass(.{
+    const pb = try rg2.addGraphicsPass(.{
         .pipeline = undefined,
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
-    pb.draw(.{ .vertex_count = 5 });
+    try pb.draw(.{ .vertex_count = 5 });
 
-    rg1.merge(&rg2);
+    try rg1.merge(&rg2);
 
     try std.testing.expectEqual(@as(usize, 1), rg1.images.items.len);
     try std.testing.expectEqual(@as(usize, 1), rg1.buffers.items.len);
@@ -1477,7 +1480,7 @@ test "merge: empty other is a no-op" {
     defer rg1.deinit();
 
     const img: vk.Image = @enumFromInt(1);
-    _ = rg1.addImage(.{
+    _ = try rg1.addImage(.{
         .image = img,
         .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
@@ -1485,7 +1488,7 @@ test "merge: empty other is a no-op" {
 
     var empty = RenderGraph.init(alloc);
 
-    rg1.merge(&empty);
+    try rg1.merge(&empty);
 
     try std.testing.expectEqual(@as(usize, 1), rg1.images.items.len);
     try std.testing.expectEqual(@as(usize, 0), rg1.buffers.items.len);
@@ -1502,37 +1505,37 @@ test "merge: refs are correctly rebased through dedup" {
     const other_img: vk.Image = @enumFromInt(88);
     const view: vk.ImageView = @enumFromInt(77);
 
-    const a = rg1.addImage(.{
+    const a = try rg1.addImage(.{
         .image = shared,
         .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
     });
-    _ = rg1.addGraphicsPass(.{
+    _ = try rg1.addGraphicsPass(.{
         .pipeline = undefined,
         .color_attachments = &.{.{ .image = a, .view = view }},
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
 
     var rg2 = RenderGraph.init(alloc);
 
-    const b = rg2.addImage(.{
+    const b = try rg2.addImage(.{
         .image = shared,
         .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
     });
-    const c = rg2.addImage(.{
+    const c = try rg2.addImage(.{
         .image = other_img,
         .start_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
     });
-    const p2 = rg2.addGraphicsPass(.{
+    const p2 = try rg2.addGraphicsPass(.{
         .pipeline = undefined,
         .color_attachments = &.{ .{ .image = b, .view = view }, .{ .image = c, .view = view } },
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
-    p2.readImage(c, .{ .stage = .{}, .access = .{}, .layout = .undefined });
+    try p2.readImage(c, .{ .stage = .{}, .access = .{}, .layout = .undefined });
 
-    rg1.merge(&rg2);
+    try rg1.merge(&rg2);
 
     try std.testing.expectEqual(@as(usize, 2), rg1.images.items.len);
     try std.testing.expectEqual(shared, rg1.images.items[0].image);
@@ -1551,7 +1554,7 @@ test "merge: indirect BufferRef is rebased" {
     defer rg1.deinit();
 
     const buf: vk.Buffer = @enumFromInt(10);
-    _ = rg1.addBuffer(.{
+    _ = try rg1.addBuffer(.{
         .buffer = buf, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
@@ -1559,18 +1562,18 @@ test "merge: indirect BufferRef is rebased" {
 
     var rg2 = RenderGraph.init(alloc);
 
-    const ind_buf = rg2.addBuffer(.{
+    const ind_buf = try rg2.addBuffer(.{
         .buffer = buf, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
-    const p = rg2.addGraphicsPass(.{
+    const p = try rg2.addGraphicsPass(.{
         .pipeline = undefined,
-        .render_area = .{ .offset = .{}, .extent = .{ .width = 1, .height = 1 } },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = 1, .height = 1 } },
     });
     p.drawIndirect(.{ .buffer = ind_buf, .draw_count = 10 });
 
-    rg1.merge(&rg2);
+    try rg1.merge(&rg2);
 
     try std.testing.expectEqual(@as(usize, 1), rg1.buffers.items.len);
     const merged = &rg1.passes.items[0].graphics;
