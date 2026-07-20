@@ -11,9 +11,13 @@ pub fn build(b: *std.Build) !void {
         .shader_mod_name = "shaders",
     });
 
-    const base = base_dep.module("base");
     const base_tests = base_dep.artifact("test");
-    const shaders = base_dep.module("shaders");
+    const shaders_mod = base_dep.module("shaders");
+
+    const runtime_mod = b.dependency("runtime", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("runtime");
 
     const exe_opts: std.Build.ExecutableOptions = .{
         .name = "Demo",
@@ -22,8 +26,8 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "base", .module = base },
-                .{ .name = "shaders", .module = shaders },
+                .{ .name = "shaders", .module = shaders_mod },
+                .{ .name = "runtime", .module = runtime_mod },
             },
         }),
     };

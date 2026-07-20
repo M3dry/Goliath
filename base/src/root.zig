@@ -8,6 +8,7 @@ pub const image_loader = @import("image_loader.zig");
 pub const push_constant = @import("push_constant.zig");
 pub const util = @import("util.zig");
 
+pub const GraphicsCtx = @import("GraphicsCtx.zig");
 pub const Input = @import("Input.zig");
 pub const Imgui = @import("Imgui.zig");
 pub const Buffer = @import("Buffer.zig");
@@ -25,7 +26,6 @@ pub const RenderGraph = @import("RenderGraph.zig");
 pub const Image2D = @import("image.zig").Image2D;
 pub const ImageView = @import("image.zig").ImageView;
 
-const GraphicsCtx = @import("GraphicsCtx.zig");
 
 const std = @import("std");
 const vma = @import("vma.zig").vma;
@@ -108,14 +108,18 @@ pub const Ctx = struct {
         {
             var i: usize = 0;
             var rt_idx: usize = 0;
+            var depth_idx: usize = 0;
             errdefer for (frames[0..i]) |*frame| frame.deinit(&graphics_ctx);
             errdefer for (frames[0..rt_idx]) |*f| f.deinitRenderTexture(&graphics_ctx);
+            errdefer for (frames[0..depth_idx]) |*f| f.deinitDepthTexture(&graphics_ctx);
 
             for (frames) |_| {
                 frames[i] = try Frame.init(&graphics_ctx);
                 i += 1;
                 try frames[rt_idx].initRenderTexture(&graphics_ctx, window_opts.render_extent, window_opts.render_format);
                 rt_idx += 1;
+                try frames[depth_idx].initDepthTexture(&graphics_ctx, window_opts.render_extent);
+                depth_idx += 1;
             }
         }
 
@@ -178,6 +182,11 @@ pub const Ctx = struct {
     pub fn renderTarget(self: Ctx) struct { image: vk.Image, view: vk.ImageView } {
         const frame = self.frames[self.current_frame];
         return .{ .image = frame.render_target.handle, .view = frame.render_target_view.handle };
+    }
+
+    pub fn depthTarget(self: Ctx) struct { image: vk.Image, view: vk.ImageView } {
+        const frame = self.frames[self.current_frame];
+        return .{ .image = frame.depth_target.handle, .view = frame.depth_target_view.handle };
     }
 
     pub fn descriptorPool(self: *Ctx) *DescriptorPool {
@@ -257,9 +266,21 @@ pub const Ctx = struct {
                 .subresource_range = util.fullRange(.{ .color_bit = true }),
                 .image = self.swapchain.images[frame.acquired_swapchain.?].image,
             },
+            .{
+                .src_stage_mask = .{ .all_commands_bit = true },
+                .src_access_mask = .{ .memory_write_bit = true },
+                .dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+                .dst_access_mask = .{ .depth_stencil_attachment_read_bit = true, .depth_stencil_attachment_write_bit = true },
+                .old_layout = .undefined,
+                .new_layout = .depth_stencil_attachment_optimal,
+                .src_queue_family_index = self.graphics.graphics_family,
+                .dst_queue_family_index = self.graphics.graphics_family,
+                .subresource_range = util.fullRange(.{ .depth_bit = true }),
+                .image = frame.depth_target.handle,
+            },
         };
         self.graphics.dev.cmdPipelineBarrier2(frame.cmd_buf, &.{
-            .image_memory_barrier_count = 2,
+            .image_memory_barrier_count = 3,
             .p_image_memory_barriers = &barriers,
         });
     }
@@ -427,6 +448,8 @@ const Frame = struct {
 
     render_target: Image2D = .{},
     render_target_view: ImageView = .{},
+    depth_target: Image2D = .{},
+    depth_target_view: ImageView = .{},
 
     pub fn init(gc: *const GraphicsCtx) !Frame {
         const cmd_pool = try gc.dev.createCommandPool(&.{
@@ -483,10 +506,41 @@ const Frame = struct {
         self.render_target.deinitNow(gc.vma_alloc);
     }
 
+    pub fn initDepthTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
+        self.depth_target = try Image2D.init(gc, gc.vma_alloc, "depth_target", .{
+            .format = .d32_sfloat,
+            .extent = extent,
+            .usage = .{ .depth_stencil_attachment_bit = true },
+        });
+        errdefer self.depth_target.deinitNow(gc.vma_alloc);
+
+        self.depth_target_view = try ImageView.init(gc, .{
+            .image = self.depth_target.handle,
+            .format = .d32_sfloat,
+            .subresource_range = .{
+                .aspect_mask = .{ .depth_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        });
+        errdefer self.depth_target_view.deinitNow(gc.dev);
+    }
+
+    pub fn deinitDepthTexture(self: *Frame, gc: *const GraphicsCtx) void {
+        self.depth_target_view.deinitNow(gc);
+        self.depth_target.deinitNow(gc.vma_alloc);
+    }
+
     pub fn deinit(self: *Frame, gc: *const GraphicsCtx) void {
         if (self.render_target.handle != .null_handle) {
             self.render_target_view.deinitNow(gc);
             self.render_target.deinitNow(gc.vma_alloc);
+        }
+        if (self.depth_target.handle != .null_handle) {
+            self.depth_target_view.deinitNow(gc);
+            self.depth_target.deinitNow(gc.vma_alloc);
         }
         gc.dev.destroyCommandPool(self.cmd_pool, null);
         gc.dev.destroySemaphore(self.semaphore, null);

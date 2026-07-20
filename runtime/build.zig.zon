@@ -1,13 +1,10 @@
 .{
-    .name = .goliath,
+    .name = .runtime,
     .version = "0.0.1",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .base = .{
-            .path = "base",
-        },
-        .runtime = .{
-            .path = "runtime",
+            .path = "../base",
         },
     },
     .paths = .{
@@ -15,5 +12,5 @@
         "build.zig.zon",
         "src",
     },
-    .fingerprint = 0x711cc6d0b2f8ef86, // Changing this has security and trust implications.
+    .fingerprint = 0xd5a60c7b6d03abe9,
 }

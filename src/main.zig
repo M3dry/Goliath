@@ -1,5 +1,7 @@
 const std = @import("std");
-const base = @import("base");
+const runtime = @import("runtime");
+
+const base = runtime.base;
 const zgui = base.zgui;
 const zm = base.zmath;
 
@@ -48,87 +50,30 @@ pub fn main(init: std.process.Init) !void {
     try transport.init(&ctx.graphics, gpa, init.io);
     defer transport.deinit(&ctx.graphics);
 
-    const vertex_data = [_]@Vector(4, f32){
-        @Vector(4, f32){ -0.5, -0.5, 0.0, 1.0 },
-        @Vector(4, f32){ 0.5, -0.5, 0.0, 1.0 },
-        @Vector(4, f32){ 0.0, 0.5, 0.0, 1.0 },
-    };
-    var vertex_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Triangle vertices", @sizeOf(@TypeOf(vertex_data)), .{ .vertex_buffer_bit = true, .transfer_dst_bit = true }, false);
-    defer vertex_buf.deinit(&ctx.destroy_queue);
+    var mh = runtime.MeshHandler.empty;
+    defer mh.deinit(gpa, &ctx.destroy_queue, &transport);
 
-    const vertex_ticket = try transport.uploadBuffer(
-        true,
-        std.mem.sliceAsBytes(&vertex_data),
-        null,
-        vertex_buf.handle,
-        0,
-        .{ .vertex_input_bit = true },
-        .{ .memory_read_bit = true },
-    );
-    while (!try transport.isReady(vertex_ticket)) {
-        try transport.drain(&ctx.graphics);
+    const result = try runtime.Mesh.createTestMesh(gpa);
+    var test_mesh = result.@"0";
+    const mesh_source = result.@"1";
+    defer test_mesh.deinit(gpa);
+    defer gpa.free(mesh_source);
+    defer mh.unregisterMesh(&test_mesh, &ctx.destroy_queue, &transport);
 
-        std.Thread.yield() catch {};
+    try mh.registerMesh(&test_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
+    try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &transport);
+
+    {
+        const geo_buf = test_mesh.lods[0].geometry_buffer.?;
+        while (!try transport.isReady(geo_buf.@"1")) {
+            try transport.drain(&ctx.graphics);
+            std.Thread.yield() catch {};
+        }
     }
-
-    const tex_w = 256;
-    const tex_h = 256;
-    var texture_data = try generateCheckerboard(gpa, tex_w, tex_h, 32);
-    defer texture_data.deinit(gpa);
-
-    var texture_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "checkerboard", .{
-        .format = .r8g8b8a8_srgb,
-        .extent = .{ .width = tex_w, .height = tex_h },
-        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
-    });
-    defer texture_image.deinit(&ctx.destroy_queue);
-
-    const texture_ticket = try transport.uploadImage(
-        true,
-        .r8g8b8a8_srgb,
-        .{ .width = tex_w, .height = tex_h, .depth = 1 },
-        texture_data.pixels,
-        null,
-        texture_image.handle,
-        .{
-            .aspect_mask = .{ .color_bit = true },
-            .mip_level = 0,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-        .{ .x = 0, .y = 0, .z = 0 },
-        .undefined,
-        .read_only_optimal,
-        .{ .fragment_shader_bit = true },
-        .{ .shader_read_bit = true },
-    );
-    while (!try transport.isReady(texture_ticket)) {
+    while (!try transport.isReady(mh.ticket)) {
         try transport.drain(&ctx.graphics);
         std.Thread.yield() catch {};
     }
-
-    var texture_view = try base.ImageView.init(&ctx.graphics, .{
-        .image = texture_image.handle,
-        .format = .r8g8b8a8_srgb,
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    });
-    defer texture_view.deinit(&ctx.destroy_queue);
-
-    var sampler = try base.Sampler.init(&ctx.graphics, .{
-        .mag_filter = .linear,
-        .min_filter = .linear,
-        .mipmap_mode = .linear,
-        .address_mode_u = .repeat,
-        .address_mode_v = .repeat,
-        .address_mode_w = .repeat,
-    });
-    defer sampler.deinit(&ctx.destroy_queue);
 
     var input = base.Input{};
     input.init(ctx.window);
@@ -137,13 +82,61 @@ pub fn main(init: std.process.Init) !void {
     var imgui = try base.Imgui.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
-    const vert = shaders.get(.vertex_test);
-    const vert_mod = try base.ShaderModule.init(&ctx, vert);
-    defer vert_mod.deinit(&ctx);
+    const tex_width = 256;
+    const tex_height = 256;
+    const tex_format = base.vk.Format.r8g8b8a8_srgb;
 
-    const frag = shaders.get(.fragment_test);
-    const frag_mod = try base.ShaderModule.init(&ctx, frag);
-    defer frag_mod.deinit(&ctx);
+    const tex_data = try generateCheckerboard(gpa, tex_width, tex_height, 32);
+    defer gpa.free(tex_data.pixels);
+
+    var checker_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "checkerboard", .{
+        .format = tex_format,
+        .extent = .{ .width = tex_width, .height = tex_height },
+        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
+    });
+    defer checker_image.deinit(&ctx.destroy_queue);
+
+    {
+        const tick = try transport.uploadImage(
+            false,
+            tex_format,
+            .{ .width = tex_width, .height = tex_height, .depth = 1 },
+            tex_data.pixels,
+            null,
+            checker_image.handle,
+            .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .{ .x = 0, .y = 0, .z = 0 },
+            .undefined,
+            .shader_read_only_optimal,
+            .{ .fragment_shader_bit = true },
+            .{ .shader_read_bit = true },
+        );
+        while (!try transport.isReady(tick)) {
+            try transport.drain(&ctx.graphics);
+            std.Thread.yield() catch {};
+        }
+    }
+
+    var checker_view = try base.ImageView.init(&ctx.graphics, .{
+        .image = checker_image.handle,
+        .format = tex_format,
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    });
+    defer checker_view.deinit(&ctx.destroy_queue);
+
+    var sampler = try base.Sampler.init(&ctx.graphics, .{});
+    defer sampler.deinit(&ctx.destroy_queue);
 
     const set_layout = try ctx.graphics.dev.createDescriptorSetLayout(&.{
         .flags = .{ .update_after_bind_pool_bit = true },
@@ -160,9 +153,17 @@ pub fn main(init: std.process.Init) !void {
     }, null);
     defer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
 
+    const vert = shaders.get(.vertex_mesh_test);
+    const vert_mod = try base.ShaderModule.init(&ctx, vert);
+    defer vert_mod.deinit(&ctx);
+
+    const frag = shaders.get(.fragment_mesh_test);
+    const frag_mod = try base.ShaderModule.init(&ctx, frag);
+    defer frag_mod.deinit(&ctx);
+
     const PC = struct {
         vp: zm.Mat,
-        vertex_buffer_addr: u64,
+        geometry_address: u64,
     };
 
     var pipeline = try base.GraphicsPipeline.init(&ctx, .{
@@ -170,8 +171,12 @@ pub fn main(init: std.process.Init) !void {
         .fragment = frag_mod,
         .set_layouts = &.{set_layout},
         .color_attachments = &.{.{ .format = render_format }},
+        .depth_format = .d32_sfloat,
         .push_constant_size = @intCast(base.push_constant.size(PC)),
     });
+    pipeline.depth_test_enable = .true;
+    pipeline.depth_write_enable = .true;
+    pipeline.depth_compare_op = .less;
     defer pipeline.deinit(&ctx);
 
     const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
@@ -253,15 +258,11 @@ pub fn main(init: std.process.Init) !void {
 
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();
-            const dp = ctx.descriptorPool();
+            const dt = ctx.depthTarget();
 
-            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
-            dp.beginUpdate(set_id);
-            try dp.updateSampledImage(gpa, 0, .read_only_optimal, texture_view.handle, sampler.handle);
-            dp.endUpdate(&ctx.graphics.dev);
-
+            const geo_buf = test_mesh.lods[0].geometry_buffer.?;
             var pc_buf: [base.push_constant.size(PC)]u8 = undefined;
-            base.push_constant.write(PC, &pc_buf, .{ .vp = (cam.view_projection), .vertex_buffer_addr = vertex_buf.address });
+            base.push_constant.write(PC, &pc_buf, .{ .vp = cam.view_projection, .geometry_address = geo_buf.@"0".address });
 
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();
@@ -280,13 +281,35 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
+            const depth_ref = try rg.addImage(.{
+                .image = dt.image,
+                .aspect = .{ .depth_bit = true },
+                .start_usage = .{
+                    .stage = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+                    .access = .{ .depth_stencil_attachment_read_bit = true, .depth_stencil_attachment_write_bit = true },
+                    .layout = .depth_stencil_attachment_optimal,
+                },
+                .end_usage = .{
+                    .stage = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+                    .access = .{ .depth_stencil_attachment_read_bit = true, .depth_stencil_attachment_write_bit = true },
+                    .layout = .depth_stencil_attachment_optimal,
+                },
+            });
+
+            const dp = ctx.descriptorPool();
+            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
+            dp.beginUpdate(set_id);
+            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, checker_view.handle, sampler.handle);
+            dp.endUpdate(&ctx.graphics.dev);
+
             const gpass = try rg.addGraphicsPass(.{
                 .pipeline = &pipeline,
                 .color_attachments = &.{.{ .image = rt_ref, .view = rt.view, .load_op = .clear, .store_op = .store, .clear_color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } }},
+                .depth_attachment = .{ .image = depth_ref, .view = dt.view },
                 .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
+                .descriptor_sets = &.{set_id},
             });
-            gpass.setDescriptorSets(&.{set_id});
-            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = 3 });
+            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = test_mesh.lods[0].vertex_count });
 
             try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
 
@@ -295,8 +318,6 @@ pub fn main(init: std.process.Init) !void {
             imgui.render(&ctx);
         }
 
-        if (try ctx.end_frame(gpa) == .recreated) {
-            // rebuild user frame structures
-        }
+        if (try ctx.end_frame(gpa) == .recreated) {}
     }
 }

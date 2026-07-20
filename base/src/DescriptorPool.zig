@@ -55,7 +55,7 @@ pub fn init(
         "DescriptorPool UBO",
         ubo_size,
         .{ .uniform_buffer_bit = true },
-        true,
+        .cpu_to_gpu_staging,
     );
 
     dp.write_buffer_infos = try std.ArrayListUnmanaged(vk.DescriptorBufferInfo).initCapacity(alloc, 64);

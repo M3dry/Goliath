@@ -88,11 +88,15 @@ const Task = struct {
     src: [*]const u8,
     src_offset: u32,
     full_src_size: u32,
+    parent_ticket_id: u32,
     ticket_id: u32,
     owning: ?FreeFn,
-    last: bool,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
+
+    fn isLast(self: *const Task) bool {
+        return self.ticket_id == self.parent_ticket_id;
+    }
 
     fn requiredSize(self: *const Task) !u32 {
         return switch (self.dst) {
@@ -145,18 +149,17 @@ const Task = struct {
                     .src = self.src,
                     .src_offset = self.src_offset + budget,
                     .full_src_size = self.full_src_size,
+                    .parent_ticket_id = self.parent_ticket_id,
                     .ticket_id = self.ticket_id,
                     .owning = self.owning,
-                    .last = self.last,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
                 };
                 try rest.append(transport.alloc, remainder);
 
                 dst.src_size = budget;
-                self.ticket_id = (try transport.getFreeTicket()).id();
+                self.ticket_id = Ticket.none.id();
                 self.owning = null;
-                self.last = false;
 
                 return false;
             },
@@ -178,6 +181,15 @@ const Task = struct {
                 const sub1_offset = self.src_offset + w * texel_size;
                 const sub2_offset = self.src_offset + h * dst.src_row_length * texel_size;
 
+                const sub1_active = h1 > 0 and w1 > 0;
+                const sub2_active = h2 > 0 and w2 > 0;
+
+                if (!sub1_active and !sub2_active) return true;
+
+                // Last-queued sub-task inherits the original ticket_id (isLast identity)
+                const original_ticket_id = self.ticket_id;
+                const sub2_is_last = sub2_active;
+
                 const sub1 = Task{
                     .dst = .{ .image_dst = .{
                         .image = dst.image,
@@ -192,9 +204,9 @@ const Task = struct {
                     .src = self.src,
                     .src_offset = sub1_offset,
                     .full_src_size = self.full_src_size,
-                    .ticket_id = (try transport.getFreeTicket()).id(),
+                    .parent_ticket_id = self.parent_ticket_id,
+                    .ticket_id = if (sub2_is_last) Ticket.none.id() else original_ticket_id,
                     .owning = null,
-                    .last = false,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
                 };
@@ -212,29 +224,20 @@ const Task = struct {
                     .src = self.src,
                     .src_offset = sub2_offset,
                     .full_src_size = self.full_src_size,
-                    .ticket_id = self.ticket_id,
-                    .owning = self.owning,
-                    .last = self.last,
+                    .parent_ticket_id = self.parent_ticket_id,
+                    .ticket_id = if (sub2_is_last) original_ticket_id else Ticket.none.id(),
+                    .owning = if (sub2_is_last) self.owning else null,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
                 };
 
-                self.ticket_id = (try transport.getFreeTicket()).id();
+                self.ticket_id = Ticket.none.id();
                 self.owning = null;
-                self.last = false;
                 dst.extent.width = w;
                 dst.extent.height = h;
 
-                if ((h1 == 0 or w1 == 0) and (h2 == 0 or w2 == 0)) return true;
-
-                if (h1 == 0 or w1 == 0) {
-                    try rest.append(transport.alloc, sub2);
-                } else if (h2 == 0 or w2 == 0) {
-                    try rest.append(transport.alloc, sub1);
-                } else {
-                    try rest.append(transport.alloc, sub1);
-                    try rest.append(transport.alloc, sub2);
-                }
+                if (sub1_active) try rest.append(transport.alloc, sub1);
+                if (sub2_active) try rest.append(transport.alloc, sub2);
 
                 return false;
             },
@@ -277,7 +280,7 @@ const Task = struct {
                     .dst_queue_family_index = state.graphics_family,
                     .buffer = dst.buffer,
                     .offset = dst.initial_offset,
-                    .size = dst.initial_offset + self.full_src_size,
+                    .size = self.full_src_size,
                 });
             },
             .image_dst => |dst| {
@@ -315,7 +318,7 @@ const Task = struct {
                     .dst_queue_family_index = state.graphics_family,
                     .buffer = dst.buffer,
                     .offset = dst.initial_offset,
-                    .size = dst.initial_offset + self.full_src_size,
+                    .size = self.full_src_size,
                 });
             },
             .image_dst => |dst| {
@@ -388,7 +391,7 @@ timeline_counter: u64,
 finished_timeline: u64,
 
 current_task_queue: u32,
-    task_queues: [num_frames]RingBuffer(Task),
+task_queues: [num_frames]RingBuffer(Task),
 task_queue_lock: std.Io.Mutex,
 
 transport_buffer_barriers: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
@@ -444,7 +447,7 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
     var staging_created: u32 = 0;
     errdefer for (self.staging_buffers[0..staging_created]) |*buf| buf.deinitNow(gc.vma_alloc);
     for (0..num_frames) |i| {
-        self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, true);
+        self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, .cpu_to_gpu_staging);
         staging_created += 1;
         self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse @panic("staging buffer not mapped");
     }
@@ -559,9 +562,9 @@ pub fn uploadBuffer(
         .src = src.ptr,
         .src_offset = 0,
         .full_src_size = src_len,
+        .parent_ticket_id = ticket.id(),
         .ticket_id = ticket.id(),
         .owning = owning,
-        .last = true,
         .dst_stage = dst_stage,
         .dst_access = dst_access,
     };
@@ -587,8 +590,6 @@ pub fn uploadImage(
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
 ) !Ticket {
-    const ticket = try self.getFreeTicket();
-
     self.full_upload_lock.lockUncancelable(self.io);
     defer self.full_upload_lock.unlock(self.io);
 
@@ -622,6 +623,8 @@ pub fn uploadImage(
 
     const count = @min(@as(usize, num_layers), 128);
 
+    const parent_ticket = try self.getFreeTicket();
+
     try q.ensureUnusedCapacity(self.alloc, count);
     if (priority) {
         var i: usize = count;
@@ -647,9 +650,9 @@ pub fn uploadImage(
                 .src = src.ptr,
                 .src_offset = @as(u32, @intCast(i * layer_size)),
                 .full_src_size = total_size,
-                .ticket_id = ticket.id(),
+                .parent_ticket_id = parent_ticket.id(),
+                .ticket_id = if (is_last) parent_ticket.id() else Ticket.none.id(),
                 .owning = if (is_last) owning else null,
-                .last = is_last,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
             };
@@ -676,16 +679,16 @@ pub fn uploadImage(
                 .src = src.ptr,
                 .src_offset = @as(u32, @intCast(i * layer_size)),
                 .full_src_size = total_size,
-                .ticket_id = ticket.id(),
+                .parent_ticket_id = parent_ticket.id(),
+                .ticket_id = if (is_last) parent_ticket.id() else Ticket.none.id(),
                 .owning = if (is_last) owning else null,
-                .last = is_last,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
             });
         }
     }
 
-    return ticket;
+    return parent_ticket;
 }
 
 pub fn isReady(self: *Self, t: Ticket) !bool {
@@ -749,16 +752,20 @@ pub fn waitOn(self: *Self, tickets: []const Ticket) vk.SemaphoreSubmitInfo {
 }
 
 pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
+    if (!t.isValid()) return;
+    if (self.isReady(t) catch true) return;
+
     self.full_upload_lock.lockUncancelable(self.io);
     defer self.full_upload_lock.unlock(self.io);
     self.task_queue_lock.lockUncancelable(self.io);
     defer self.task_queue_lock.unlock(self.io);
 
+    var removed_any = false;
     for (&self.task_queues) |*q| {
         var i: usize = 0;
-        while (i < q.count()) {
+        while (i < q.items.len) {
             const task_ptr = q.get(i).?;
-            if (task_ptr.ticket_id == t.id()) {
+            if (task_ptr.parent_ticket_id == t.id()) {
                 const gen = blk: {
                     self.ticket_mutex.lockUncancelable(self.io);
                     defer self.ticket_mutex.unlock(self.io);
@@ -766,14 +773,28 @@ pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
                     break :blk 0;
                 };
                 if (gen == t.gen()) {
-                    const src_ptr = task_ptr.src;
                     const owning_fn = task_ptr.owning;
                     _ = q.orderedRemove(i);
-                    if (free_src and owning_fn) |fn_| fn_(@ptrCast(src_ptr));
+                    removed_any = true;
+                    if (free_src and owning_fn != null) owning_fn.?(@ptrCast(@constCast(task_ptr.src)));
+                } else {
+                    i += 1;
                 }
-                return;
+            } else {
+                i += 1;
             }
-            i += 1;
+        }
+    }
+
+    if (removed_any) {
+        self.ticket_mutex.lockUncancelable(self.io);
+        defer self.ticket_mutex.unlock(self.io);
+        if (t.id() < self.ticket_timelines.items.len) {
+            var entry = &self.ticket_timelines.items[t.id()];
+            if (entry.generation == t.gen()) {
+                entry.generation +%= 1;
+                self.free_tickets.append(self.alloc, Ticket.init(entry.generation, @intCast(t.id()))) catch {};
+            }
         }
     }
 }
@@ -1005,7 +1026,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
             var has_graphics_work = false;
 
             for (batch.items) |*t| {
-                if (!t.last) continue;
+                if (!t.isLast()) continue;
                 has_graphics_work = true;
                 try t.recordReleaseBarrier(self);
                 try ticket_ids.append(self.alloc, t.ticket_id);
@@ -1019,12 +1040,12 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                             .dst_access_mask = t.dst_access,
                             .src_queue_family_index = self.transport_family,
                             .dst_queue_family_index = self.graphics_family,
-                            .buffer = dst.buffer,
-                            .offset = dst.initial_offset,
-                            .size = dst.initial_offset + t.full_src_size,
-                        });
-                    },
-                    .image_dst => |dst| {
+                    .buffer = dst.buffer,
+                    .offset = dst.initial_offset,
+                    .size = t.full_src_size,
+                });
+            },
+            .image_dst => |dst| {
                         try img_bars.append(self.alloc, .{
                             .src_stage_mask = .{},
                             .src_access_mask = .{},
@@ -1099,7 +1120,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
             }
         } else {
             for (batch.items) |*t| {
-                if (!t.last) continue;
+                if (!t.isLast()) continue;
                 try t.recordSameQueueBarrier(self);
                 try ticket_ids.append(self.alloc, t.ticket_id);
             }
