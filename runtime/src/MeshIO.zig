@@ -7,10 +7,10 @@ const Mesh = @import("Mesh.zig");
 
 const MeshIO = @This();
 
-/// Converts a zmesh.Shape (indexed, with positions/normals/texcoords) into
-/// our GMSH binary format and returns a Mesh + its backing allocation.
-/// The caller owns both; free the source (alloc.free) before deinit-ing Mesh.
-pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !struct { Mesh, []u8 } {
+source: []u8,
+
+/// Converts a zmesh.Shape (indexed, with positions/normals/texcoords) into our GMSH binary format
+pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !MeshIO {
     const has_normals = shape.normals != null;
     const has_texcoords = shape.texcoords != null;
     const vertex_count: u32 = @intCast(shape.indices.len);
@@ -52,16 +52,7 @@ pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !struct { Mesh, []u8 } {
     }
 
     // AABB
-    var aabb_min = [_]f32{ std.math.floatMax(f32), std.math.floatMax(f32), std.math.floatMax(f32) };
-    var aabb_max = [_]f32{ -std.math.floatMax(f32), -std.math.floatMax(f32), -std.math.floatMax(f32) };
-    for (shape.positions) |pos| {
-        aabb_min[0] = @min(aabb_min[0], pos[0]);
-        aabb_min[1] = @min(aabb_min[1], pos[1]);
-        aabb_min[2] = @min(aabb_min[2], pos[2]);
-        aabb_max[0] = @max(aabb_max[0], pos[0]);
-        aabb_max[1] = @max(aabb_max[1], pos[1]);
-        aabb_max[2] = @max(aabb_max[2], pos[2]);
-    }
+    const aabb=  shape.computeAabb();
 
     // GMSH binary: [Header][LODEntry][GeometryMeta][geo.data]
     const hdr_size = @as(usize, @sizeOf(Mesh.Header));
@@ -76,8 +67,8 @@ pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !struct { Mesh, []u8 } {
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&[_]u8{ 'G', 'M', 'S', 'H' }));
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&@as(u32, 0)));
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&@as(u32, 1)));
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb_min));
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb_max));
+    buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb[0..3]));
+    buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb[3..6]));
 
     // LODEntry
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&vertex_count));
@@ -102,6 +93,11 @@ pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !struct { Mesh, []u8 } {
     const source = try buf.toOwnedSlice(alloc);
     errdefer alloc.free(source);
 
-    const mesh = try Mesh.init(alloc, source);
-    return .{ mesh, source };
+    return .{
+        .source = source,
+    };
+}
+
+pub fn deinit(self: *const MeshIO, alloc: Allocator) void {
+    alloc.free(self.source);
 }

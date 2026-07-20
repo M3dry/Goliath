@@ -62,14 +62,15 @@ pub fn main(init: std.process.Init) !void {
     defer shape.deinit();
     shape.computeNormals();
 
-    const result = try runtime.MeshIO.fromShape(gpa, shape);
-    var test_mesh = result.@"0";
-    const mesh_source = result.@"1";
+    const mesh_io = try runtime.MeshIO.fromShape(gpa, shape);
+    defer mesh_io.deinit(gpa);
+
+    var test_mesh = try runtime.Mesh.init(gpa, mesh_io.source);
     defer test_mesh.deinit(gpa);
-    defer gpa.free(mesh_source);
-    defer mh.unregisterMesh(&test_mesh, &ctx.destroy_queue, &transport);
 
     try mh.registerMesh(&test_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
+    defer mh.unregisterMesh(&test_mesh, &ctx.destroy_queue, &transport);
+
     try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &transport);
 
     {
