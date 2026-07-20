@@ -5,6 +5,8 @@ const base = runtime.base;
 const zgui = base.zgui;
 const zm = base.zmath;
 
+const zmesh = runtime.zmesh;
+
 const shaders = @import("shaders");
 
 fn generateCheckerboard(allocator: std.mem.Allocator, width: u32, height: u32, cell_size: u32) !base.image_loader.ImageData {
@@ -53,7 +55,14 @@ pub fn main(init: std.process.Init) !void {
     var mh = runtime.MeshHandler.empty;
     defer mh.deinit(gpa, &ctx.destroy_queue, &transport);
 
-    const result = try runtime.Mesh.createTestMesh(gpa);
+    zmesh.init(gpa);
+    defer zmesh.deinit();
+
+    var shape = zmesh.Shape.initTorus(32, 32, 0.3);
+    defer shape.deinit();
+    shape.computeNormals();
+
+    const result = try runtime.MeshIO.fromShape(gpa, shape);
     var test_mesh = result.@"0";
     const mesh_source = result.@"1";
     defer test_mesh.deinit(gpa);

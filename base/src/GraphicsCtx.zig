@@ -136,8 +136,8 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
     defer extensions.deinit(alloc);
 
     try extensions.append(alloc, vk.extensions.ext_debug_utils.name);
-    // try extensions.append(alloc, vk.extensions.khr_portability_enumeration.name);
-    // try extensions.append(alloc, vk.extensions.khr_get_physical_device_properties_2.name);
+    try extensions.append(alloc, vk.extensions.khr_portability_enumeration.name);
+    try extensions.append(alloc, vk.extensions.khr_get_physical_device_properties_2.name);
 
     const glfw_exts = try zglfw.getRequiredInstanceExtensions();
     try extensions.appendSlice(alloc, glfw_exts);
@@ -227,6 +227,7 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
         .runtime_descriptor_array = .true,
         .draw_indirect_count = .true,
         .timeline_semaphore = .true,
+        .scalar_block_layout = .true,
     };
     var features11: vk.PhysicalDeviceVulkan11Features = .{
         .p_next = &features12,

@@ -54,7 +54,6 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
             .geometry_buffer = null,
             .on_gpu = false,
             .vertex_count = entry.vertex_count,
-            .index_count = entry.index_count,
             .material_schema = 0,
             .material_instance = 0,
             .error_metric = entry.error_metric,
@@ -88,7 +87,6 @@ pub fn writeHeader(self: *const Mesh, w: *std.Io.Writer, geometry_offsets: []con
     for (self.lods, geometry_offsets) |*lod, offset| {
         try w.writeStruct(LODEntry{
             .vertex_count = lod.vertex_count,
-            .index_count = lod.index_count,
             .error_metric = lod.error_metric,
             .geometry_offset = offset,
         }, .little);
@@ -110,7 +108,6 @@ pub fn createTestMesh(alloc: Allocator) !struct { Mesh, []u8 } {
     const geo_off: isize = @intCast(@sizeOf(Header) + @sizeOf(LODEntry));
     try buf.appendSlice(alloc, std.mem.asBytes(&LODEntry{
         .vertex_count = 36,
-        .index_count = 0,
         .error_metric = 0,
         .geometry_offset = geo_off,
     }));
@@ -159,7 +156,6 @@ pub const Lod = struct {
     on_gpu: bool,
 
     vertex_count: u32,
-    index_count: u32,
     material_schema: u32,
     material_instance: u32,
     error_metric: f32,
@@ -257,7 +253,6 @@ pub const GPUMeshDesc = struct {
 pub const GPULODEntry = struct {
     buffer_adress: u64 = 0,
     vertex_count: u32 = 0,
-    index_count: u32 = 0,
     material_schema: u32 = 0,
     material_instance: u32 = 0,
     error_metric: f32 = 0,
@@ -266,7 +261,6 @@ pub const GPULODEntry = struct {
         return .{
             .buffer_adress = if (lod.geometry_buffer) |buf| buf.@"0".address else 0,
             .vertex_count = lod.vertex_count,
-            .index_count = lod.index_count,
             .material_schema = lod.material_schema,
             .material_instance = lod.material_instance,
             .error_metric = lod.error_metric,
@@ -274,7 +268,7 @@ pub const GPULODEntry = struct {
     }
 };
 
-const Header = extern struct {
+pub const Header = extern struct {
     magic: [4]u8,
     version: u32,
     lod_count: u32,
@@ -286,14 +280,13 @@ const Header = extern struct {
     aabb_max_z: f32,
 };
 
-const LODEntry = extern struct {
+pub const LODEntry = extern struct {
     vertex_count: u32,
-    index_count: u32,
     error_metric: f32,
     geometry_offset: isize,
 };
 
-const GeometryMeta = extern struct {
+pub const GeometryMeta = extern struct {
     vertex_size: u64,
     stride: u32,
     position_offset: u32,

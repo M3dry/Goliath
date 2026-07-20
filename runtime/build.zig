@@ -8,17 +8,21 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
     const base_mod = base_dep.module("base");
+
+    const zmesh_dep = b.dependency("zmesh", .{});
 
     const mod = b.addModule("runtime", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "base", .module = base_mod },
+            .{ .name = "zmesh", .module = zmesh_dep.module("root") },
         },
         .target = target,
         .optimize = optimize,
     });
+
+    mod.linkLibrary(zmesh_dep.artifact("zmesh"));
 
     const check_obj = b.addObject(.{
         .name = "check",
