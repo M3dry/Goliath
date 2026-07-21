@@ -36,13 +36,18 @@ pub fn registerMesh(self: *MeshHandler, mesh: *Mesh, alloc: Allocator, gc: *cons
 
     try self.lod_entries.ensureTotalCapacity(alloc, self.lod_entries.items.len + mesh.lods.len);
 
+    mesh.gpu_meta = .{
+        .lod_offset = mesh_desc.lod_offset,
+        .mesh_desc_ix = @intCast(self.mesh_descs.items.len - 1),
+    };
+
     var i: usize = 0;
     errdefer for (0..i) |j| mesh.lods[j].deinitGeometryBuffer(destroy_queue, transport);
     for (mesh.lods) |*lod| {
         var gpu_lod = Mesh.GPULODEntry.fromLod(lod);
-        if (gpu_lod.buffer_adress == 0) {
+        if (gpu_lod.buffer_address == 0) {
             const buf, _ = try lod.initGeometryBuffer(gc, transport);
-            gpu_lod.buffer_adress = buf.address;
+            gpu_lod.buffer_address = buf.address;
         }
         lod.on_gpu = true;
 

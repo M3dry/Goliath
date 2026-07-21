@@ -257,7 +257,14 @@ fn attachmentLayoutToUsage(layout: vk.ImageLayout) ImageUsage {
             .access = .{ .memory_write_bit = true },
             .layout = layout,
         },
-        else => unreachable,
+        else => blk: {
+            std.log.warn("RenderGraph: unhandled image layout '{s}', falling back to general", .{@tagName(layout)});
+            break :blk .{
+                .stage = .{ .all_commands_bit = true },
+                .access = .{ .memory_read_bit = true, .memory_write_bit = true },
+                .layout = layout,
+            };
+        },
     };
 }
 
@@ -752,7 +759,7 @@ pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!Com
 
 /// Consumes `other` by merging its passes into `self`.
 /// After this call `other` is undefined and must not be used.
-pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
+pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{DanglingReference})!void {
     var image_remap = std.AutoArrayHashMapUnmanaged(u32, u32){};
     defer image_remap.deinit(self.alloc);
 
@@ -800,7 +807,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                 if (o_gp.color_attachments.len > 0) {
                     color_attachments = try self.alloc.dupe(ColorAttachment, o_gp.color_attachments);
                     for (color_attachments) |*ca| {
-                        ca.image.index = image_remap.get(ca.image.index) orelse @panic("merge: dangling ImageRef");
+                        ca.image.index = image_remap.get(ca.image.index) orelse return error.DanglingReference;
                     }
                 }
 
@@ -808,7 +815,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                     .pipeline = o_gp.pipeline,
                     .color_attachments = color_attachments,
                     .depth_attachment = if (o_gp.depth_attachment) |da| DepthAttachment{
-                        .image = .{ .index = image_remap.get(da.image.index) orelse @panic("merge: dangling ImageRef") },
+                        .image = .{ .index = image_remap.get(da.image.index) orelse return error.DanglingReference },
                         .view = da.view,
                         .load_op = da.load_op,
                         .store_op = da.store_op,
@@ -818,7 +825,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                         .has_stencil = da.has_stencil,
                     } else null,
                     .stencil_attachment = if (o_gp.stencil_attachment) |sa| StencilAttachment{
-                        .image = .{ .index = image_remap.get(sa.image.index) orelse @panic("merge: dangling ImageRef") },
+                        .image = .{ .index = image_remap.get(sa.image.index) orelse return error.DanglingReference },
                         .view = sa.view,
                         .load_op = sa.load_op,
                         .store_op = sa.store_op,
@@ -834,16 +841,16 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                     .draws = .empty,
                     .indirect = if (o_gp.indirect) |ind| DrawIndirect{
                         .push_constant = ind.push_constant,
-                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse return error.DanglingReference },
                         .offset = ind.offset,
                         .draw_count = ind.draw_count,
                         .stride = ind.stride,
                     } else null,
                     .indirect_count = if (o_gp.indirect_count) |ic| DrawIndirectCount{
                         .push_constant = ic.push_constant,
-                        .buffer = .{ .index = buffer_remap.get(ic.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .buffer = .{ .index = buffer_remap.get(ic.buffer.index) orelse return error.DanglingReference },
                         .offset = ic.offset,
-                        .count_buffer = .{ .index = buffer_remap.get(ic.count_buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .count_buffer = .{ .index = buffer_remap.get(ic.count_buffer.index) orelse return error.DanglingReference },
                         .count_offset = ic.count_offset,
                         .max_draw_count = ic.max_draw_count,
                         .stride = ic.stride,
@@ -851,16 +858,16 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                 };
 
                 for (o_gp.reads_images.items) |item| {
-                    try new_gp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    try new_gp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_gp.reads_buffers.items) |item| {
-                    try new_gp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    try new_gp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_gp.writes_images.items) |item| {
-                    try new_gp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    try new_gp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_gp.writes_buffers.items) |item| {
-                    try new_gp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    try new_gp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 try new_gp.draws.appendSlice(self.alloc, o_gp.draws.items);
 
@@ -877,22 +884,22 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) Allocator.Error!void {
                     .dispatch = o_cp.dispatch,
                     .indirect = if (o_cp.indirect) |ind| DispatchIndirect{
                         .push_constant = ind.push_constant,
-                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse @panic("merge: dangling BufferRef") },
+                        .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse return error.DanglingReference },
                         .offset = ind.offset,
                     } else null,
                 };
 
                 for (o_cp.reads_images.items) |item| {
-                    try new_cp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    try new_cp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_cp.reads_buffers.items) |item| {
-                    try new_cp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    try new_cp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_cp.writes_images.items) |item| {
-                    try new_cp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse @panic("merge: dangling ImageRef") }, .usage = item.usage });
+                    try new_cp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
                 for (o_cp.writes_buffers.items) |item| {
-                    try new_cp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse @panic("merge: dangling BufferRef") }, .usage = item.usage });
+                    try new_cp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
 
                 try self.passes.append(self.alloc, .{ .compute = new_cp });

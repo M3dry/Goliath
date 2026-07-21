@@ -156,7 +156,10 @@ pub fn endUpdate(self: *Self, dev: *vk.DeviceProxy) void {
 }
 
 pub fn updateUbo(self: *Self, alloc: std.mem.Allocator, binding: u32, data: []const u8) void {
-    if (self.ubo_offset + data.len > ubo_size) return;
+    if (self.ubo_offset + data.len > ubo_size) {
+        std.log.warn("Descriptor pool UBO is full", .{});
+        return;
+    }
 
     @memcpy(self.ubo_buffer.mapped.?[self.ubo_offset..][0..data.len], data);
 

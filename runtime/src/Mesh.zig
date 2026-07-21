@@ -45,6 +45,7 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
                     .position_offset = meta.position_offset,
                     .normal_offset = meta.normal_offset,
                     .tangent_offset = meta.tangent_offset,
+                    .color0_offset = meta.color0_offset,
                     .texcoord0_offset = meta.texcoord0_offset,
                     .texcoord1_offset = meta.texcoord1_offset,
                     .texcoord2_offset = meta.texcoord2_offset,
@@ -53,9 +54,9 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
             },
             .geometry_buffer = null,
             .on_gpu = false,
-            .vertex_count = entry.vertex_count,
-            .material_schema = 0,
-            .material_instance = 0,
+            .draw_count = entry.draw_count,
+            .material_schema = entry.material_schema,
+            .material_instance = entry.material_schema,
             .error_metric = entry.error_metric,
         };
     }
@@ -86,64 +87,13 @@ pub fn writeHeader(self: *const Mesh, w: *std.Io.Writer, geometry_offsets: []con
 
     for (self.lods, geometry_offsets) |*lod, offset| {
         try w.writeStruct(LODEntry{
-            .vertex_count = lod.vertex_count,
+            .draw_count = lod.draw_count,
             .error_metric = lod.error_metric,
+            .material_schema = lod.material_schema,
+            .material_instancey = lod.material_instance,
             .geometry_offset = offset,
         }, .little);
     }
-}
-
-pub fn createTestMesh(alloc: Allocator) !struct { Mesh, []u8 } {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(alloc);
-
-    try buf.appendSlice(alloc, std.mem.asBytes(&Header{
-        .magic = .{ 'G', 'M', 'S', 'H' },
-        .version = 0,
-        .lod_count = 1,
-        .aabb_min_x = -0.5, .aabb_min_y = -0.5, .aabb_min_z = -0.5,
-        .aabb_max_x = 0.5, .aabb_max_y = 0.5, .aabb_max_z = 0.5,
-    }));
-
-    const geo_off: isize = @intCast(@sizeOf(Header) + @sizeOf(LODEntry));
-    try buf.appendSlice(alloc, std.mem.asBytes(&LODEntry{
-        .vertex_count = 36,
-        .error_metric = 0,
-        .geometry_offset = geo_off,
-    }));
-
-    const verts = [_]f32{
-        -0.5, -0.5,  0.5, 0, 0,    0.5, -0.5,  0.5, 1, 0,   -0.5,  0.5,  0.5, 0, 1,
-         0.5, -0.5,  0.5, 1, 0,    0.5,  0.5,  0.5, 1, 1,   -0.5,  0.5,  0.5, 0, 1,
-         0.5, -0.5, -0.5, 0, 0,   -0.5, -0.5, -0.5, 1, 0,    0.5,  0.5, -0.5, 0, 1,
-        -0.5, -0.5, -0.5, 1, 0,   -0.5,  0.5, -0.5, 1, 1,    0.5,  0.5, -0.5, 0, 1,
-        -0.5, -0.5, -0.5, 0, 0,   -0.5, -0.5,  0.5, 1, 0,   -0.5,  0.5, -0.5, 0, 1,
-        -0.5, -0.5,  0.5, 1, 0,   -0.5,  0.5,  0.5, 1, 1,   -0.5,  0.5, -0.5, 0, 1,
-         0.5, -0.5,  0.5, 0, 0,    0.5, -0.5, -0.5, 1, 0,    0.5,  0.5,  0.5, 0, 1,
-         0.5, -0.5, -0.5, 1, 0,    0.5,  0.5, -0.5, 1, 1,    0.5,  0.5,  0.5, 0, 1,
-        -0.5,  0.5,  0.5, 0, 0,    0.5,  0.5,  0.5, 1, 0,   -0.5,  0.5, -0.5, 0, 1,
-         0.5,  0.5,  0.5, 1, 0,    0.5,  0.5, -0.5, 1, 1,   -0.5,  0.5, -0.5, 0, 1,
-        -0.5, -0.5, -0.5, 0, 0,    0.5, -0.5, -0.5, 1, 0,   -0.5, -0.5,  0.5, 0, 1,
-         0.5, -0.5, -0.5, 1, 0,    0.5, -0.5,  0.5, 1, 1,   -0.5, -0.5,  0.5, 0, 1,
-    };
-    try buf.appendSlice(alloc, std.mem.asBytes(&GeometryMeta{
-        .vertex_size = @sizeOf(@TypeOf(verts)),
-        .stride = 5,
-        .position_offset = 0,
-        .normal_offset = 0xFFFFFFFF,
-        .tangent_offset = 0xFFFFFFFF,
-        .texcoord0_offset = 3,
-        .texcoord1_offset = 0xFFFFFFFF,
-        .texcoord2_offset = 0xFFFFFFFF,
-        .texcoord3_offset = 0xFFFFFFFF,
-    }));
-    try buf.appendSlice(alloc, std.mem.asBytes(&verts));
-
-    const source = try buf.toOwnedSlice(alloc);
-    errdefer alloc.free(source);
-
-    const mesh = try Mesh.init(alloc, source);
-    return .{ mesh, source };
 }
 
 pub fn deinit(self: *const Mesh, alloc: Allocator) void {
@@ -155,7 +105,7 @@ pub const Lod = struct {
     geometry_buffer: ?struct {base.Buffer, base.Transport.Ticket},
     on_gpu: bool,
 
-    vertex_count: u32,
+    draw_count: u32,
     material_schema: u32,
     material_instance: u32,
     error_metric: f32,
@@ -184,6 +134,7 @@ pub const Lod = struct {
             .position_offset = self.geometry.position_offset,
             .normal_offset = self.geometry.normal_offset,
             .tangent_offset = self.geometry.tangent_offset,
+            .color0_offset = self.geometry.color0_offset,
             .texcoord0_offset = self.geometry.texcoord0_offset,
             .texcoord1_offset = self.geometry.texcoord1_offset,
             .texcoord2_offset = self.geometry.texcoord2_offset,
@@ -221,6 +172,7 @@ pub const GPUGeometry = extern struct {
     position_offset: u32,
     normal_offset: u32,
     tangent_offset: u32,
+    color0_offset: u32,
     texcoord0_offset: u32,
     texcoord1_offset: u32,
     texcoord2_offset: u32,
@@ -251,16 +203,16 @@ pub const GPUMeshDesc = struct {
 };
 
 pub const GPULODEntry = struct {
-    buffer_adress: u64 = 0,
-    vertex_count: u32 = 0,
+    buffer_address: u64 = 0,
+    draw_count: u32 = 0,
     material_schema: u32 = 0,
     material_instance: u32 = 0,
     error_metric: f32 = 0,
 
     pub fn fromLod(lod: *const Lod) GPULODEntry {
         return .{
-            .buffer_adress = if (lod.geometry_buffer) |buf| buf.@"0".address else 0,
-            .vertex_count = lod.vertex_count,
+            .buffer_address = if (lod.geometry_buffer) |buf| buf.@"0".address else 0,
+            .draw_count = lod.draw_count,
             .material_schema = lod.material_schema,
             .material_instance = lod.material_instance,
             .error_metric = lod.error_metric,
@@ -281,7 +233,9 @@ pub const Header = extern struct {
 };
 
 pub const LODEntry = extern struct {
-    vertex_count: u32,
+    draw_count: u32,
+    material_schema: u32,
+    material_instance: u32,
     error_metric: f32,
     geometry_offset: isize,
 };
@@ -292,6 +246,7 @@ pub const GeometryMeta = extern struct {
     position_offset: u32,
     normal_offset: u32,
     tangent_offset: u32,
+    color0_offset: u32,
     texcoord0_offset: u32,
     texcoord1_offset: u32,
     texcoord2_offset: u32,

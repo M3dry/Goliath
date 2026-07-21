@@ -449,7 +449,7 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
     for (0..num_frames) |i| {
         self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, .cpu_to_gpu_staging);
         staging_created += 1;
-        self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse @panic("staging buffer not mapped");
+        self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse return error.StagingBufferNotMapped;
     }
     self.flush_staging = !self.staging_buffers[0].coherent;
 

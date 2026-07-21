@@ -58,14 +58,26 @@ pub fn main(init: std.process.Init) !void {
     zmesh.init(gpa);
     defer zmesh.deinit();
 
-    var shape = zmesh.Shape.initTorus(32, 32, 0.3);
-    defer shape.deinit();
-    shape.computeNormals();
+    const gltf_data = try zmesh.io.parseAndLoadFile("DamagedHelmet.glb");
+    defer zmesh.io.freeData(gltf_data);
 
-    const mesh_io = try runtime.MeshIO.fromShape(gpa, shape);
-    defer mesh_io.deinit(gpa);
+    // Find the node that references mesh 0 and grab its world transform
+    const target_mesh = &gltf_data.meshes.?[0];
+    const mesh_world: zm.Mat = blk: {
+        for (gltf_data.nodes.?[0..gltf_data.nodes_count]) |*node| {
+            if (node.mesh == target_mesh) {
+                const w = node.transformWorld();
+                break :blk zm.matFromArr(w);
+            }
+        }
+        break :blk zm.identity();
+    };
 
-    var test_mesh = try runtime.Mesh.init(gpa, mesh_io.source);
+    const gltf_result = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
+    defer gpa.free(gltf_result.name);
+    defer gltf_result.mesh_io.deinit(gpa);
+
+    var test_mesh = try runtime.Mesh.init(gpa, gltf_result.mesh_io.source);
     defer test_mesh.deinit(gpa);
 
     try mh.registerMesh(&test_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
@@ -182,7 +194,7 @@ pub fn main(init: std.process.Init) !void {
         .set_layouts = &.{set_layout},
         .color_attachments = &.{.{ .format = render_format }},
         .depth_format = .d32_sfloat,
-        .push_constant_size = @intCast(base.push_constant.size(PC)),
+        .push_constant_size = @intCast(base.push_constant.size(PC, base.layout.scalar)),
     });
     pipeline.depth_test_enable = .true;
     pipeline.depth_write_enable = .true;
@@ -190,10 +202,9 @@ pub fn main(init: std.process.Init) !void {
     defer pipeline.deinit(&ctx);
 
     const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
-    var cam = base.Camera.init(
-        zm.f32x4(0, 0, -2, 1),
-        0,
-        0,
+    var cam = base.Camera.initLookAt(
+        zm.f32x4(0, 0, 2, 1),
+        zm.f32x4(0,0,0,1),
         std.math.pi / 4.0,
         aspect,
         0.01,
@@ -263,6 +274,8 @@ pub fn main(init: std.process.Init) !void {
             if (zgui.begin("Capture Status", .{ .popen = null })) {
                 zgui.text("capture_keyboard: {any}", .{imgui.wantCaptureKeyboard()});
                 zgui.text("capture_mouse: {any}", .{imgui.wantCaptureMouse()});
+
+                zgui.text("x: {any}, y: {any}, z: {any}", .{cam.position[0], cam.position[1], cam.position[2]});
             }
             zgui.end();
 
@@ -271,8 +284,8 @@ pub fn main(init: std.process.Init) !void {
             const dt = ctx.depthTarget();
 
             const geo_buf = test_mesh.lods[0].geometry_buffer.?;
-            var pc_buf: [base.push_constant.size(PC)]u8 = undefined;
-            base.push_constant.write(PC, &pc_buf, .{ .vp = cam.view_projection, .geometry_address = geo_buf.@"0".address });
+            var pc_buf: [base.push_constant.size(PC, base.layout.scalar)]u8 = undefined;
+            base.push_constant.write(PC, &pc_buf, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = geo_buf.@"0".address }, base.layout.scalar);
 
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();
@@ -319,7 +332,7 @@ pub fn main(init: std.process.Init) !void {
                 .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
                 .descriptor_sets = &.{set_id},
             });
-            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = test_mesh.lods[0].vertex_count });
+            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = test_mesh.lods[0].draw_count });
 
             try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
 

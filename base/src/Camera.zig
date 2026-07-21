@@ -46,8 +46,8 @@ pub fn initLookAt(
 ) Self {
     const dir = target - position;
     const len = @sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
-    const pitch: f32 = if (len > 0) std.math.asin(f32, dir[1] / len) else 0;
-    const yaw: f32 = if (len > 0) std.math.atan2(f32, dir[0], dir[2]) else 0;
+    const pitch: f32 = if (len > 0) std.math.asin(dir[1] / len) else 0;
+    const yaw: f32 = if (len > 0) std.math.atan2(dir[0], -dir[2]) else 0;
     return init(position, yaw, pitch, fov_y, aspect, near, far);
 }
 
@@ -76,16 +76,12 @@ pub fn update(self: *Self) void {
     const cos_y = @cos(self.yaw);
     const sin_y = @sin(self.yaw);
 
-    const fwd = zm.f32x4(sin_y * cos_p, sin_p, cos_y * cos_p, 0);
+    const fwd = zm.f32x4(sin_y * cos_p, sin_p, -cos_y * cos_p, 0);
     const world_up = zm.f32x4(0, 1, 0, 0);
 
-    // Standard right-handed view matrix (GLM convention):
-    //   neg_fwd = eye - target  (direction from target toward eye)
-    //   right   = cross(neg_fwd, up)
-    //   up      = cross(right, neg_fwd)
     const neg_fwd = -fwd;
-    const r = zm.normalize3(zm.cross3(neg_fwd, world_up));
-    const u = zm.normalize3(zm.cross3(r, neg_fwd));
+    const r = zm.normalize3(zm.cross3(world_up, neg_fwd));
+    const u = zm.normalize3(zm.cross3(neg_fwd, r));
 
     self.view = zm.Mat{
         zm.f32x4(r[0], u[0], neg_fwd[0], 0),
@@ -110,15 +106,15 @@ pub fn forward(self: Self) zm.Vec {
     return zm.normalize3(zm.f32x4(
         @sin(self.yaw) * @cos(self.pitch),
         @sin(self.pitch),
-        @cos(self.yaw) * @cos(self.pitch),
+        -@cos(self.yaw) * @cos(self.pitch),
         0,
     ));
 }
 
 pub fn right(self: Self) zm.Vec {
-    return zm.normalize3(zm.cross3(zm.f32x4(0, 1, 0, 0), self.forward()));
+    return zm.normalize3(zm.cross3(self.forward(), zm.f32x4(0, 1, 0, 0)));
 }
 
 pub fn up(self: Self) zm.Vec {
-    return zm.cross3(self.forward(), self.right());
+    return zm.cross3(self.right(), self.forward());
 }

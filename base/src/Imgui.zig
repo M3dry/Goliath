@@ -26,7 +26,7 @@ pub fn init(allocator: Allocator, ctx: anytype) !Self {
         vk_loader_instance = ctx.graphics.instance.handle;
         vk_loader_get_proc = ctx.graphics.vkb.dispatch.vkGetInstanceProcAddr.?;
         if (!zgui.backend.loadFunctions(api_version, vkLoader, null)) {
-            @panic("failed to load Vulkan functions for ImGui");
+            return error.VulkanFunctionLoadError;
         }
     }
 

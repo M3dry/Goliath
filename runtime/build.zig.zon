@@ -7,8 +7,8 @@
             .path = "../base",
         },
         .zmesh = .{
-            .url = "git+https://github.com/zig-gamedev/zmesh#a0efcc452eab17550ad5525df2293009e9cbaf66",
-            .hash = "zmesh-0.11.0-dev-oO3A5kqTCgAF9nWzOGHywV6-07-wJRUIMm1RH7BlCTHb",
+            .url = "git+https://github.com/zig-gamedev/zmesh#1ccd58e75a68350d75b28bf1afffbcfa23d90087",
+            .hash = "zmesh-0.11.0-dev-oO3A5nqTCgDp-F-INyuScGOVTyVZqWg8XPgudQpKbE4o",
         },
     },
     .paths = .{

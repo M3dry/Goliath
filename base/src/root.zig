@@ -5,6 +5,7 @@ pub const zmath = @import("zmath");
 
 pub const timing = @import("timing.zig");
 pub const image_loader = @import("image_loader.zig");
+pub const layout = @import("layout.zig");
 pub const push_constant = @import("push_constant.zig");
 pub const util = @import("util.zig");
 
@@ -116,8 +117,10 @@ pub const Ctx = struct {
             for (frames) |_| {
                 frames[i] = try Frame.init(&graphics_ctx);
                 i += 1;
+
                 try frames[rt_idx].initRenderTexture(&graphics_ctx, window_opts.render_extent, window_opts.render_format);
                 rt_idx += 1;
+
                 try frames[depth_idx].initDepthTexture(&graphics_ctx, window_opts.render_extent);
                 depth_idx += 1;
             }

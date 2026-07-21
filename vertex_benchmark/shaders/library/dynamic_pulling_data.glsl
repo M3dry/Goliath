@@ -15,10 +15,6 @@ layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
     uint data[];
 }; // no padding since all elements are uint
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Data {
-    uint[];
-}
-
 const uint STRIDE_MASK = 0x7FFFFFFFu;
 const uint INDEXED_TANGENTS_MASK = 0x80000000u;
 
