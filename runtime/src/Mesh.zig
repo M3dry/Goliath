@@ -182,22 +182,19 @@ pub const GPUGeometry = extern struct {
 pub const GPUMeshDesc = struct {
     lod_offset: u32,
     lod_count: u32,
-    current_lod: GPULODEntry,
     aabb_min_x: f32, aabb_min_y: f32, aabb_min_z: f32,
     aabb_max_x: f32, aabb_max_y: f32, aabb_max_z: f32,
 
     pub fn fromMesh(mesh: *const Mesh) GPUMeshDesc {
-        const current_lod: GPULODEntry = if (mesh.lods.len == 1) .fromLod(&mesh.lods[0]) else .{};
         return .{
             .lod_offset = if (mesh.gpu_meta) |gpu_meta| gpu_meta.lod_offset else 0,
             .lod_count = @intCast(mesh.lods.len),
-            .current_lod = current_lod,
-            .aabb_max_x = mesh.aabb.max[0],
-            .aabb_max_y = mesh.aabb.max[1],
-            .aabb_max_z = mesh.aabb.max[2],
             .aabb_min_x = mesh.aabb.min[0],
             .aabb_min_y = mesh.aabb.min[1],
             .aabb_min_z = mesh.aabb.min[2],
+            .aabb_max_x = mesh.aabb.max[0],
+            .aabb_max_y = mesh.aabb.max[1],
+            .aabb_max_z = mesh.aabb.max[2],
         };
     }
 };

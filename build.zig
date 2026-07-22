@@ -1,16 +1,11 @@
 const std = @import("std");
+const shaders = @import("build_shaders.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const base_dep = b.dependency("base", .{
-        .target = target,
-        .optimize = optimize,
-        .shader_src = b.path("shaders"),
-        .shader_mod_name = "shaders",
-    });
-    const shaders_mod = base_dep.module("shaders");
+    const shaders_mod = try shaders.compileAndEmbedShaders(b, b.path("shaders"), "shaders");
 
     const runtime_mod = b.dependency("runtime", .{
         .target = target,

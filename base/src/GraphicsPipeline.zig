@@ -262,14 +262,13 @@ pub fn init(ctx: *const Ctx, desc: Description) !Self {
     };
 }
 
-pub fn deinit(self: *Self, ctx: *const Ctx) void {
-    const dev = ctx.graphics.dev;
+pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
     if (self.handle != .null_handle) {
-        dev.destroyPipeline(self.handle, null);
+        gc.dev.destroyPipeline(self.handle, null);
         self.handle = .null_handle;
     }
     if (self.layout != .null_handle) {
-        dev.destroyPipelineLayout(self.layout, null);
+        gc.dev.destroyPipelineLayout(self.layout, null);
         self.layout = .null_handle;
     }
 }

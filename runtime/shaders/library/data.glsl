@@ -145,7 +145,7 @@ struct Renderable {
     uint material_instance; // 76 - 80
 }; // no padding since 80/8 = 10
 
-layout(buffer_reference, scalar) buffer Renderables {
+layout(buffer_reference, scalar) readonly buffer Renderables {
     uint count; // 0 - 4
     Renderable data[]; // 8 - 88 since 8B alignment
 };
@@ -159,7 +159,7 @@ struct DrawCmd {
     uint renderable_ix; // 16 - 20
 }; // no padding
 
-layout(buffer_reference, scalar) buffer DrawCmds {
+layout(buffer_reference, scalar) readonly buffer DrawCmds {
     DrawCmd cmd[];
 };
 

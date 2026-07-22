@@ -85,6 +85,13 @@ pub const DispatchIndirect = struct {
     offset: u64 = 0,
 };
 
+pub const FillBuffer = struct {
+    buffer: BufferRef,
+    offset: u64 = 0,
+    size: u64,
+    value: u32 = 0,
+};
+
 pub const ColorAttachment = struct {
     image: ImageRef,
     view: vk.ImageView,
@@ -155,11 +162,21 @@ pub const ComputePass = struct {
     query_slot: u32 = 0,
 };
 
-pub const PassType = enum { graphics, compute };
+pub const TransferPass = struct {
+    fills: std.ArrayListUnmanaged(FillBuffer) = .empty,
+    reads_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+    writes_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
+};
+
+pub const PassType = enum { graphics, compute, transfer };
 
 fn PassHandle(comptime pass_type: PassType) type {
     return struct {
-        const pass_name: []const u8 = if (pass_type == .graphics) "graphics" else "compute";
+        const pass_name: []const u8 = switch (pass_type) {
+            .graphics => "graphics",
+            .compute => "compute",
+            .transfer => "transfer",
+        };
 
         rg: *RenderGraph,
         index: u32,
@@ -192,15 +209,26 @@ fn PassHandle(comptime pass_type: PassType) type {
             if (pass_type != .graphics) @compileError("drawIndirectCount is only valid on graphics passes");
             self.rg.passes.items[self.index].graphics.indirect_count = count;
         }
+        pub fn fillBuffer(self: @This(), fill: FillBuffer) Allocator.Error!void {
+            if (pass_type != .transfer) @compileError("fillBuffer is only valid on transfer passes");
+            const tp = &self.rg.passes.items[self.index].transfer;
+            try tp.writes_buffers.append(self.rg.alloc, .{
+                .ref = fill.buffer,
+                .usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_write_bit = true } },
+            });
+            try tp.fills.append(self.rg.alloc, fill);
+        }
     };
 }
 
 pub const GraphicsPassHandle = PassHandle(.graphics);
 pub const ComputePassHandle = PassHandle(.compute);
+pub const TransferPassHandle = PassHandle(.transfer);
 
 pub const Pass = union(enum) {
     graphics: GraphicsPass,
     compute: ComputePass,
+    transfer: TransferPass,
 };
 
 const ImageTrackedState = struct {
@@ -386,6 +414,23 @@ fn collectPassRequirementsCompute(
 
     if (cp.indirect) |ind| {
         try upsert(BufferUsage, pass_buffers, ind.buffer.index, .{ .stage = indirect_stage, .access = indirect_access }, mergeBufferUsage, alloc);
+    }
+}
+
+fn collectPassRequirementsTransfer(
+    pass_images: *std.AutoArrayHashMapUnmanaged(u32, ImageUsage),
+    pass_buffers: *std.AutoArrayHashMapUnmanaged(u32, BufferUsage),
+    tp: *const TransferPass,
+    alloc: Allocator,
+) Allocator.Error!void {
+    pass_images.clearRetainingCapacity();
+    pass_buffers.clearRetainingCapacity();
+
+    for (tp.reads_buffers.items) |rb| {
+        try upsert(BufferUsage, pass_buffers, rb.ref.index, rb.usage, mergeBufferUsage, alloc);
+    }
+    for (tp.writes_buffers.items) |wb| {
+        try upsert(BufferUsage, pass_buffers, wb.ref.index, wb.usage, mergeBufferUsage, alloc);
     }
 }
 
@@ -624,6 +669,23 @@ fn recordComputePass(
     }
 }
 
+fn recordTransferPass(
+    tp: *const TransferPass,
+    gc: *const GraphicsCtx,
+    cmd_buf: vk.CommandBuffer,
+    buf_contracts: []const BufferContract,
+) void {
+    for (tp.fills.items) |fill| {
+        gc.dev.cmdFillBuffer(
+            cmd_buf,
+            buf_contracts[fill.buffer.index].buffer,
+            fill.offset,
+            fill.size,
+            fill.value,
+        );
+    }
+}
+
 fn flushBarriers(
     gc: *const GraphicsCtx,
     cmd_buf: vk.CommandBuffer,
@@ -719,6 +781,11 @@ pub fn deinit(self: *RenderGraph) void {
                 cp.writes_images.deinit(self.alloc);
                 cp.writes_buffers.deinit(self.alloc);
             },
+            .transfer => |*tp| {
+                tp.fills.deinit(self.alloc);
+                tp.reads_buffers.deinit(self.alloc);
+                tp.writes_buffers.deinit(self.alloc);
+            },
         }
     }
     self.passes.deinit(self.alloc);
@@ -761,6 +828,15 @@ pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!Com
         .indirect = desc.indirect,
         .query_pool = desc.query_pool,
         .query_slot = desc.query_slot,
+    } });
+    return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
+}
+
+pub fn addTransferPass(self: *RenderGraph, desc: TransferPass) Allocator.Error!TransferPassHandle {
+    try self.passes.append(self.alloc, .{ .transfer = .{
+        .fills = desc.fills,
+        .reads_buffers = desc.reads_buffers,
+        .writes_buffers = desc.writes_buffers,
     } });
     return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
 }
@@ -916,6 +992,30 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
 
                 try self.passes.append(self.alloc, .{ .compute = new_cp });
             },
+            .transfer => |*o_tp| {
+                var new_tp = TransferPass{
+                    .fills = .empty,
+                    .reads_buffers = .empty,
+                    .writes_buffers = .empty,
+                };
+
+                for (o_tp.reads_buffers.items) |item| {
+                    try new_tp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
+                }
+                for (o_tp.writes_buffers.items) |item| {
+                    try new_tp.writes_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
+                }
+                for (o_tp.fills.items) |item| {
+                    try new_tp.fills.append(self.alloc, .{
+                        .buffer = .{ .index = buffer_remap.get(item.buffer.index) orelse return error.DanglingReference },
+                        .offset = item.offset,
+                        .size = item.size,
+                        .value = item.value,
+                    });
+                }
+
+                try self.passes.append(self.alloc, .{ .transfer = new_tp });
+            },
         }
     }
 
@@ -1049,6 +1149,30 @@ pub fn run(
                 if (cp.query_pool) |pool| {
                     dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, cp.query_slot + 1);
                 }
+            },
+            .transfer => |*tp| {
+                if (prev_gp != null) {
+                    dev_proxy.cmdEndRendering(cmd_buf);
+                    prev_gp = null;
+                }
+                try collectPassRequirementsTransfer(&pass_images, &pass_buffers, tp, alloc);
+                try emitPassBarriers(
+                    pass_images,
+                    pass_buffers,
+                    image_states,
+                    buffer_states,
+                    self.images.items,
+                    self.buffers.items,
+                    qf,
+                    &img_bars,
+                    &buf_bars,
+                    alloc,
+                );
+                flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+                img_bars.clearRetainingCapacity();
+                buf_bars.clearRetainingCapacity();
+
+                recordTransferPass(tp, gc, cmd_buf, self.buffers.items);
             },
         }
     }
@@ -1616,4 +1740,105 @@ test "merge: indirect BufferRef is rebased" {
     const merged = &rg1.passes.items[0].graphics;
     try std.testing.expect(merged.indirect != null);
     try std.testing.expectEqual(@as(u32, 0), merged.indirect.?.buffer.index);
+}
+
+test "transfer: fillBuffer records write with transfer barrier" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const vb: vk.Buffer = @enumFromInt(100);
+
+    const buf = try rg.addBuffer(.{
+        .buffer = vb, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+        .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
+    });
+
+    const tp = try rg.addTransferPass(.{});
+    try tp.fillBuffer(.{ .buffer = buf, .offset = 0, .size = 256, .value = 0 });
+
+    {
+        const transfer = &rg.passes.items[0].transfer;
+        try std.testing.expectEqual(@as(usize, 1), transfer.fills.items.len);
+        try std.testing.expectEqual(@as(usize, 1), transfer.writes_buffers.items.len);
+        try std.testing.expectEqual(@as(u32, 0), transfer.fills.items[0].buffer.index);
+        try std.testing.expectEqual(@as(u64, 0), transfer.fills.items[0].offset);
+        try std.testing.expectEqual(@as(u64, 256), transfer.fills.items[0].size);
+        try std.testing.expectEqual(@as(u32, 0), transfer.fills.items[0].value);
+        try std.testing.expect(transfer.writes_buffers.items[0].usage.stage.all_transfer_bit);
+        try std.testing.expect(transfer.writes_buffers.items[0].usage.access.transfer_write_bit);
+    }
+}
+
+test "transfer: collectPassRequirementsTransfer merges buffer writes" {
+    const alloc = std.testing.allocator;
+
+    var rg = RenderGraph.init(alloc);
+    defer rg.deinit();
+
+    const vb: vk.Buffer = @enumFromInt(100);
+
+    const buf = try rg.addBuffer(.{
+        .buffer = vb, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    const tp_handle = try rg.addTransferPass(.{});
+    try tp_handle.readBuffer(buf, .{
+        .stage = .{ .vertex_input_bit = true },
+        .access = .{ .memory_read_bit = true },
+    });
+    try tp_handle.fillBuffer(.{ .buffer = buf, .offset = 0, .size = 256, .value = 42 });
+
+    var pass_images = std.AutoArrayHashMapUnmanaged(u32, ImageUsage){};
+    defer pass_images.deinit(alloc);
+    var pass_buffers = std.AutoArrayHashMapUnmanaged(u32, BufferUsage){};
+    defer pass_buffers.deinit(alloc);
+
+    const tp = &rg.passes.items[0].transfer;
+    try collectPassRequirementsTransfer(&pass_images, &pass_buffers, tp, alloc);
+
+    try std.testing.expectEqual(@as(usize, 0), pass_images.count());
+    try std.testing.expectEqual(@as(usize, 1), pass_buffers.count());
+    const merged = pass_buffers.get(0).?;
+    try std.testing.expect(merged.stage.vertex_input_bit);
+    try std.testing.expect(merged.stage.all_transfer_bit);
+    try std.testing.expect(merged.access.memory_read_bit);
+    try std.testing.expect(merged.access.transfer_write_bit);
+}
+
+test "merge: transfer pass refs are rebased through dedup" {
+    const alloc = std.testing.allocator;
+
+    var rg1 = RenderGraph.init(alloc);
+    defer rg1.deinit();
+
+    const buf: vk.Buffer = @enumFromInt(10);
+    _ = try rg1.addBuffer(.{
+        .buffer = buf, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+
+    var rg2 = RenderGraph.init(alloc);
+
+    const fill_buf = try rg2.addBuffer(.{
+        .buffer = buf, .offset = 0, .size = 256,
+        .start_usage = .{ .stage = .{}, .access = .{} },
+        .end_usage = .{ .stage = .{}, .access = .{} },
+    });
+    const tp = try rg2.addTransferPass(.{});
+    try tp.fillBuffer(.{ .buffer = fill_buf, .offset = 0, .size = 256, .value = 0 });
+
+    try rg1.merge(&rg2);
+
+    try std.testing.expectEqual(@as(usize, 1), rg1.buffers.items.len);
+    try std.testing.expectEqual(@as(usize, 1), rg1.passes.items.len);
+    try std.testing.expect(rg1.passes.items[0] == .transfer);
+    const merged = &rg1.passes.items[0].transfer;
+    try std.testing.expectEqual(@as(usize, 1), merged.fills.items.len);
+    try std.testing.expectEqual(@as(u32, 0), merged.fills.items[0].buffer.index);
 }

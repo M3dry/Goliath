@@ -1,6 +1,7 @@
 const std = @import("std");
+const shaders = @import("build_shaders.zig");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -10,6 +11,8 @@ pub fn build(b: *std.Build) void {
     });
     const base_mod = base_dep.module("base");
 
+    const shaders_mod = try shaders.compileAndEmbedShaders(b, b.path("shaders"), "shaders");
+
     const zmesh_dep = b.dependency("zmesh", .{});
 
     const mw_dep = b.dependency("MemoryMapWriter", .{});
@@ -18,6 +21,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "base", .module = base_mod },
+            .{ .name = "shaders", .module = shaders_mod },
             .{ .name = "zmesh", .module = zmesh_dep.module("root") },
             .{ .name = "MemoryMapWriter", .module = mw_dep.module("root") },
         },

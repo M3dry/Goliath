@@ -1,6 +1,6 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const shader = @import("Shader.zig");
+const ShaderModule = @import("Shader.zig");
 
 const Ctx = @import("root.zig").Ctx;
 const GraphicsCtx = @import("GraphicsCtx.zig");
@@ -25,7 +25,7 @@ layout: vk.PipelineLayout,
 push_constant_size: u32,
 
 pub const Description = struct {
-    shader: shader.ShaderModule,
+    shader: ShaderModule,
     set_layouts: []const vk.DescriptorSetLayout = &.{},
     push_constant_size: u32 = 0,
 };
@@ -67,14 +67,13 @@ pub fn init(ctx: *const Ctx, desc: Description) !Self {
     };
 }
 
-pub fn deinit(self: *Self, ctx: *const Ctx) void {
-    const dev = ctx.graphics.dev;
+pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
     if (self.handle != .null_handle) {
-        dev.destroyPipeline(self.handle, null);
+        gc.dev.destroyPipeline(self.handle, null);
         self.handle = .null_handle;
     }
     if (self.layout != .null_handle) {
-        dev.destroyPipelineLayout(self.layout, null);
+        gc.dev.destroyPipelineLayout(self.layout, null);
         self.layout = .null_handle;
     }
 }
