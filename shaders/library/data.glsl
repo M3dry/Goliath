@@ -15,10 +15,6 @@ layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
     uint data[];
 }; // no padding since all elements are uint
 
-layout(buffer_reference, scalar, buffer_reference_align = 16) readonly buffer Data {
-    uint[];
-}
-
 const uint STRIDE_MASK = 0x7FFFFFFFu;
 const uint INDEXED_TANGENTS_MASK = 0x80000000u;
 
@@ -125,13 +121,46 @@ struct LODEntry {
     float error_metric; // 20 - 24
 }; // no padding since 24/8 = 3
 
+layout(buffer_reference, scalar) readonly buffer LODEntries {
+    LODEntry entry[];
+};
+
 // 8B alingment, scalar required
 struct MeshDesc {
     uint lod_offset; // 0 - 4, 4B alingment
     uint lod_count; // 4 - 8
     LODEntry current_lod; // 8 - 32, 8B alignment
-    vec3 min; // 32 - 44
+    vec3 min; // 32 - 44, 4B alignment
     vec3 max; // 44 - 56
 }; // no padding since 56/8 = 7
+
+layout(buffer_reference, scalar) readonly buffer MeshDescs {
+    MeshDesc desc[];
+};
+
+// 4B alignment, scalar required
+struct InstanceData {
+    mat4 transform; // 0 - 64, 4B alingment
+    uint mesh_desc_ix; // 64 - 68
+    uint material_schema; // 68 - 72
+    uint material_instance; // 72 - 76
+}; // no padding since 76/4 = 19
+
+layout(buffer_reference, scalar) readonly buffer InstanceDatas {
+    InstanceData data[];
+};
+
+// 4B alignment
+struct DrawCmd = struct {
+    uint draw_count; // 0 - 4
+    uint instance_count; // 4 - 8
+    uint first_vertex; // 8 - 12
+    uint first_instance; // 12 - 16
+    uint instace_data_ix; // 16 - 20
+}; // no padding
+
+layout(buffer_reference, scalar) readonly buffer DrawCmds {
+    DrawCmd cmd[];
+};
 
 #endif

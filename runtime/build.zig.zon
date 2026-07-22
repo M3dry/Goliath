@@ -10,6 +10,10 @@
             .url = "git+https://github.com/zig-gamedev/zmesh#1ccd58e75a68350d75b28bf1afffbcfa23d90087",
             .hash = "zmesh-0.11.0-dev-oO3A5nqTCgDp-F-INyuScGOVTyVZqWg8XPgudQpKbE4o",
         },
+        .MemoryMapWriter = .{
+            .url = "git+https://github.com/m3dry/MemoryMapWriter#68abfe2f644133c62f8335477a4d447a3eb0888d",
+            .hash = "MemoryMapWriter-0.0.1-ssLNULghAAD3hlY7aBiE8gI7zQY-rzXFh06Dz0SDYE16",
+        },
     },
     .paths = .{
         "build.zig",

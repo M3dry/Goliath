@@ -138,6 +138,8 @@ pub const GraphicsPass = struct {
     draws: std.ArrayListUnmanaged(DrawCall) = .empty,
     indirect: ?DrawIndirect = null,
     indirect_count: ?DrawIndirectCount = null,
+    query_pool: ?vk.QueryPool = null,
+    query_slot: u32 = 0,
 };
 
 pub const ComputePass = struct {
@@ -149,6 +151,8 @@ pub const ComputePass = struct {
     writes_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
     dispatch: DispatchCall,
     indirect: ?DispatchIndirect = null,
+    query_pool: ?vk.QueryPool = null,
+    query_slot: u32 = 0,
 };
 
 pub const PassType = enum { graphics, compute };
@@ -743,6 +747,8 @@ pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!G
         .descriptor_sets = desc.descriptor_sets,
         .indirect = desc.indirect,
         .indirect_count = desc.indirect_count,
+        .query_pool = desc.query_pool,
+        .query_slot = desc.query_slot,
     } });
     return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
 }
@@ -753,6 +759,8 @@ pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!Com
         .descriptor_sets = desc.descriptor_sets,
         .dispatch = desc.dispatch,
         .indirect = desc.indirect,
+        .query_pool = desc.query_pool,
+        .query_slot = desc.query_slot,
     } });
     return .{ .rg = self, .index = @intCast(self.passes.items.len - 1) };
 }
@@ -855,6 +863,8 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
                         .max_draw_count = ic.max_draw_count,
                         .stride = ic.stride,
                     } else null,
+                    .query_pool = o_gp.query_pool,
+                    .query_slot = o_gp.query_slot,
                 };
 
                 for (o_gp.reads_images.items) |item| {
@@ -887,6 +897,8 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
                         .buffer = .{ .index = buffer_remap.get(ind.buffer.index) orelse return error.DanglingReference },
                         .offset = ind.offset,
                     } else null,
+                    .query_pool = o_cp.query_pool,
+                    .query_slot = o_cp.query_slot,
                 };
 
                 for (o_cp.reads_images.items) |item| {
@@ -985,6 +997,10 @@ pub fn run(
                     break :blk renderTargetsEqual(prev, gp);
                 } else false;
 
+                if (gp.query_pool) |pool| {
+                    dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, gp.query_slot);
+                }
+
                 if (can_merge) {
                     recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
                 } else {
@@ -995,6 +1011,11 @@ pub fn run(
                     try beginRendering(gp, dev, cmd_buf, alloc);
                     recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
                 }
+
+                if (gp.query_pool) |pool| {
+                    dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, gp.query_slot + 1);
+                }
+
                 prev_gp = gp;
             },
             .compute => |*cp| {
@@ -1018,7 +1039,16 @@ pub fn run(
                 flushBarriers(gc, cmd_buf, img_bars, buf_bars);
                 img_bars.clearRetainingCapacity();
                 buf_bars.clearRetainingCapacity();
+
+                if (cp.query_pool) |pool| {
+                    dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, cp.query_slot);
+                }
+
                 recordComputePass(cp, gc, cmd_buf, dp, self.buffers.items);
+
+                if (cp.query_pool) |pool| {
+                    dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, cp.query_slot + 1);
+                }
             },
         }
     }

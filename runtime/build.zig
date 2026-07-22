@@ -12,11 +12,14 @@ pub fn build(b: *std.Build) void {
 
     const zmesh_dep = b.dependency("zmesh", .{});
 
+    const mw_dep = b.dependency("MemoryMapWriter", .{});
+
     const mod = b.addModule("runtime", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "base", .module = base_mod },
             .{ .name = "zmesh", .module = zmesh_dep.module("root") },
+            .{ .name = "MemoryMapWriter", .module = mw_dep.module("root") },
         },
         .target = target,
         .optimize = optimize,
