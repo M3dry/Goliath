@@ -10,7 +10,6 @@ pub const GPUMeta = struct {
     lod_offset: u32,
 };
 
-source: []const u8,
 gpu_meta: ?GPUMeta, // null => mesh not loaded on the GPU in any way
 lods: []Lod,
 aabb: base.util.AABB,
@@ -50,6 +49,8 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
                     .texcoord1_offset = meta.texcoord1_offset,
                     .texcoord2_offset = meta.texcoord2_offset,
                     .texcoord3_offset = meta.texcoord3_offset,
+                    .joints0_offset = meta.joints0_offset,
+                    .weights0_offset = meta.weights0_offset,
                 },
             },
             .geometry_buffer = null,
@@ -62,7 +63,6 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
     }
 
     return .{
-        .source = source,
         .gpu_meta = null,
         .lods = lods,
         .aabb = .{
@@ -98,6 +98,36 @@ pub fn writeHeader(self: *const Mesh, w: *std.Io.Writer, geometry_offsets: []con
 
 pub fn deinit(self: *const Mesh, alloc: Allocator) void {
     alloc.free(self.lods);
+}
+
+pub fn addLod(
+    self: *Mesh,
+    alloc: Allocator,
+    geometry_data: []const u8,
+    geometry_meta: GPUGeometry,
+    draw_count: u32,
+    material_schema: u32,
+    material_instance: u32,
+    error_metric: f32,
+) !void {
+    self.lods = try alloc.realloc(self.lods, self.lods.len + 1);
+    self.lods[self.lods.len - 1] = .{
+        .geometry = .{ .data = geometry_data, .geo = geometry_meta },
+        .geometry_buffer = null,
+        .on_gpu = false,
+        .draw_count = draw_count,
+        .material_schema = material_schema,
+        .material_instance = material_instance,
+        .error_metric = error_metric,
+    };
+}
+
+pub fn removeLod(self: *Mesh, alloc: Allocator, index: usize) error{MeshOnGPU}!void {
+    if (self.gpu_meta != null) return error.MeshOnGPU;
+    if (index >= self.lods.len) return;
+
+    std.mem.copyForwards(Lod, self.lods[index..], self.lods[index + 1 ..]);
+    self.lods = try alloc.realloc(self.lods, self.lods.len - 1);
 }
 
 pub const Lod = struct {
@@ -139,6 +169,8 @@ pub const Lod = struct {
             .texcoord1_offset = self.geometry.texcoord1_offset,
             .texcoord2_offset = self.geometry.texcoord2_offset,
             .texcoord3_offset = self.geometry.texcoord3_offset,
+            .joints0_offset = self.geometry.joints0_offset,
+            .weights0_offset = self.geometry.weights0_offset,
         }, .little);
         try w.writeAll(self.geometry.data);
 
@@ -177,6 +209,8 @@ pub const GPUGeometry = extern struct {
     texcoord1_offset: u32,
     texcoord2_offset: u32,
     texcoord3_offset: u32,
+    joints0_offset: u32,
+    weights0_offset: u32,
 };
 
 pub const GPUMeshDesc = struct {
@@ -248,4 +282,6 @@ pub const GeometryMeta = extern struct {
     texcoord1_offset: u32,
     texcoord2_offset: u32,
     texcoord3_offset: u32,
+    joints0_offset: u32,
+    weights0_offset: u32,
 };

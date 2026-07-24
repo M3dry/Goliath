@@ -15,8 +15,6 @@ layout(push_constant, scalar) uniform PushConstants {
 layout(location = 0) flat out uint vis_packed;
 
 void main() {
-    // vis_packed = uint(pc.vp[0]);
-    // gl_Position = vec4(0, 0, 0, 1);
     DrawCmd cmd = pc.cmds.cmd[gl_DrawID];
     Renderable rend = pc.renderables.data[cmd.renderable_ix];
 

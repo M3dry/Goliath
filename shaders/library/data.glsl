@@ -1,6 +1,9 @@
 #ifndef _DATA_
 #define _DATA_
 
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+
 // 4 alignment
 layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
     uint stride_indexed_tangents;
@@ -12,6 +15,8 @@ layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
     uint texcoord1_offset;
     uint texcoord2_offset;
     uint texcoord3_offset;
+    uint joints0_offset;
+    uint weights0_offset;
     uint data[];
 }; // no padding since all elements are uint
 
@@ -36,10 +41,12 @@ struct Vertex {
     vec2 uv1;
     vec2 uv2;
     vec2 uv3;
+    u16vec4 joints;
+    vec4 weights;
 };
 
 Vertex load_vertex(GeometryBuffer geo, uint vert_ix) {
-    Vertex vert = Vertex(vert_ix, vec3(0xFFFFFFFF), vec3(0xFFFFFFFF), vec4(0xFFFFFFFF), vec4(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF));
+    Vertex vert = Vertex(vert_ix, vec3(0xFFFFFFFF), vec3(0xFFFFFFFF), vec4(0xFFFFFFFF), vec4(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF), vec2(0xFFFFFFFF), u16vec4(0xFFFF), vec4(0xFFFFFFFF));
 
     uint stride = get_stride(geo);
     bool indexed_tangents = tangents_indexed(geo);
@@ -106,6 +113,21 @@ Vertex load_vertex(GeometryBuffer geo, uint vert_ix) {
         vert.uv3 = uintBitsToFloat(uvec2(
             geo.data[base + geo.texcoord3_offset],
             geo.data[base + geo.texcoord3_offset + 1]
+        ));
+    }
+
+    if (geo.joints0_offset != 0xFFFFFFFF) {
+        uint raw0 = geo.data[base + geo.joints0_offset];
+        uint raw1 = geo.data[base + geo.joints0_offset + 1];
+        vert.joints = u16vec4(uint16_t(raw0), uint16_t(raw0 >> 16u), uint16_t(raw1), uint16_t(raw1 >> 16u));
+    }
+
+    if (geo.weights0_offset != 0xFFFFFFFF) {
+        vert.weights = uintBitsToFloat(uvec4(
+            geo.data[base + geo.weights0_offset],
+            geo.data[base + geo.weights0_offset + 1],
+            geo.data[base + geo.weights0_offset + 2],
+            geo.data[base + geo.weights0_offset + 3]
         ));
     }
 

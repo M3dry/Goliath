@@ -231,6 +231,7 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
     };
     var features11: vk.PhysicalDeviceVulkan11Features = .{
         .p_next = &features12,
+        .storage_buffer_16_bit_access = .true,
         .shader_draw_parameters = .true,
     };
     const features: vk.PhysicalDeviceFeatures2 = .{
@@ -238,6 +239,8 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
         .features = .{
             .multi_draw_indirect = .true,
             .independent_blend = .true,
+            .shader_int_64 = .true,
+            .shader_int_16 = .true,
         },
     };
     const dev = try inst.createDevice(pdev, &.{

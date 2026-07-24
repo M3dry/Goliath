@@ -65,35 +65,63 @@ pub fn main(init: std.process.Init) !void {
     zmesh.init(gpa);
     defer zmesh.deinit();
 
-    const gltf_data = try zmesh.io.parseAndLoadFile("DamagedHelmet.glb");
+    const gltf_data = try zmesh.io.parseAndLoadFile("Paladin.glb");
     defer zmesh.io.freeData(gltf_data);
 
+    const skeleton = try runtime.Skeleton.fromGltf(gpa, gltf_data, 66);
+    defer skeleton.deinit(gpa);
+
+    const skin = try runtime.Skin.fromGltf(gpa, gltf_data, 0, &skeleton);
+    defer skin.deinit(gpa);
+
+    var anims: [3]runtime.Animation = undefined;
+    for (&anims, 0..) |*a, i| a.* = try runtime.Animation.fromGltf(gpa, gltf_data, @intCast(i), &skeleton);
+    defer for (&anims) |*a| a.deinit(gpa);
+
     // Find the node that references mesh 0 and grab its world transform
-    const target_mesh = &gltf_data.meshes.?[0];
-    const mesh_world: zm.Mat = blk: {
-        for (gltf_data.nodes.?[0..gltf_data.nodes_count]) |*node| {
-            if (node.mesh == target_mesh) {
-                const w = node.transformWorld();
-                break :blk zm.matFromArr(w);
-            }
-        }
-        break :blk zm.identity();
-    };
+    // const target_mesh = &gltf_data.meshes.?[0];
+    const mesh_world = zm.scaling(0.05, 0.05, 0.05);
+    // const mesh_world: zm.Mat = blk: {
+    //     for (gltf_data.nodes.?[0..gltf_data.nodes_count]) |*node| {
+    //         if (node.mesh == target_mesh) {
+    //             const w = node.transformWorld();
+    //             break :blk zm.matFromArr(w);
+    //         }
+    //     }
+    //     break :blk zm.identity();
+    // };
 
-    const gltf_result = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
-    defer gpa.free(gltf_result.name);
-    defer gltf_result.mesh_io.deinit(gpa);
+    const gltf_result0 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
+    defer gpa.free(gltf_result0.name);
+    defer gltf_result0.mesh_io.deinit(gpa);
 
-    var test_mesh = try runtime.Mesh.init(gpa, gltf_result.mesh_io.source);
-    defer test_mesh.deinit(gpa);
+    const gltf_result1 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 1, 0);
+    defer gpa.free(gltf_result1.name);
+    defer gltf_result1.mesh_io.deinit(gpa);
 
-    try mh.registerMesh(&test_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
-    defer mh.unregisterMesh(&test_mesh, &ctx.destroy_queue, &transport);
+    var body_mesh = try runtime.Mesh.init(gpa, gltf_result1.mesh_io.source);
+    defer body_mesh.deinit(gpa);
+
+    var helmet_mesh = try runtime.Mesh.init(gpa, gltf_result0.mesh_io.source);
+    defer helmet_mesh.deinit(gpa);
+
+    try mh.registerMesh(&body_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
+    defer mh.unregisterMesh(&body_mesh, &ctx.destroy_queue, &transport);
+
+    try mh.registerMesh(&helmet_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
+    defer mh.unregisterMesh(&helmet_mesh, &ctx.destroy_queue, &transport);
+
+    var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
+    for (&joint_matrices_bufs, 0..) |*buf, i| {
+        buf.* = try base.Buffer.init(&ctx.graphics, .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
+        _ = i;
+    }
+    defer for (&joint_matrices_bufs) |*buf| buf.deinit(&ctx.destroy_queue);
 
     try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &transport);
 
     {
-        const geo_buf = test_mesh.lods[0].geometry_buffer.?;
+        const geo_buf = body_mesh.lods[0].geometry_buffer.?;
         while (!try transport.isReady(geo_buf.@"1")) {
             try transport.drain(&ctx.graphics);
             std.Thread.yield() catch {};
@@ -185,31 +213,32 @@ pub fn main(init: std.process.Init) !void {
     }, null);
     defer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
 
-    const vert = shaders.get(.vertex_mesh_test);
-    const vert_mod = try base.ShaderModule.init(&ctx, vert);
-    defer vert_mod.deinit(&ctx);
+    const skinned_vert = shaders.get(.vertex_skinned_test);
+    const skinned_vert_mod = try base.ShaderModule.init(&ctx, skinned_vert);
+    defer skinned_vert_mod.deinit(&ctx);
 
     const frag = shaders.get(.fragment_mesh_test);
     const frag_mod = try base.ShaderModule.init(&ctx, frag);
     defer frag_mod.deinit(&ctx);
 
-    const PC = struct {
+    const SkinnedPC = struct {
         vp: zm.Mat,
         geometry_address: u64,
+        joints_address: u64,
     };
 
-    var pipeline = try base.GraphicsPipeline.init(&ctx, .{
-        .vertex = vert_mod,
+    var skinned_pipeline = try base.GraphicsPipeline.init(&ctx, .{
+        .vertex = skinned_vert_mod,
         .fragment = frag_mod,
         .set_layouts = &.{set_layout},
         .color_attachments = &.{.{ .format = render_format }},
         .depth_format = .d32_sfloat,
-        .push_constant_size = @intCast(base.push_constant.size(PC, base.layout.scalar)),
+        .push_constant_size = @intCast(base.push_constant.size(SkinnedPC, base.layout.scalar)),
     });
-    pipeline.depth_test_enable = .true;
-    pipeline.depth_write_enable = .true;
-    pipeline.depth_compare_op = .less;
-    defer pipeline.deinit(&ctx.graphics);
+    skinned_pipeline.depth_test_enable = .true;
+    skinned_pipeline.depth_write_enable = .true;
+    skinned_pipeline.depth_compare_op = .less;
+    defer skinned_pipeline.deinit(&ctx.graphics);
 
     // 68 bytes: uint + mat4, tightly packed under scalar layout
     const world_instance_size = @sizeOf(u32) + 16 * @sizeOf(f32);
@@ -242,6 +271,7 @@ pub fn main(init: std.process.Init) !void {
         screen_width: f32,
         screen_height: f32,
         fov_y: f32,
+        camera_pos: [3]f32,
     };
 
     const cull_comp = shaders.get(.compute_cull_renderables);
@@ -336,10 +366,6 @@ pub fn main(init: std.process.Init) !void {
             const rt = ctx.renderTarget();
             const dt = ctx.depthTarget();
 
-            const geo_buf = test_mesh.lods[0].geometry_buffer.?;
-            var pc_buf: [base.push_constant.size(PC, base.layout.scalar)]u8 = undefined;
-            base.push_constant.write(PC, &pc_buf, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = geo_buf.@"0".address }, base.layout.scalar);
-
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();
 
@@ -423,6 +449,7 @@ pub fn main(init: std.process.Init) !void {
                 .screen_width = @floatFromInt(render_extent.width),
                 .screen_height = @floatFromInt(render_extent.height),
                 .fov_y = std.math.pi / 4.0,
+                .camera_pos = .{ cam.position[0], cam.position[1], cam.position[2] },
             }, base.layout.scalar);
 
             const compute_pass = try rg.addComputePass(.{
@@ -450,14 +477,29 @@ pub fn main(init: std.process.Init) !void {
                 .view = dt.view,
             }, renderables_ref, renderables_buf.address, draw_cmds_ref, draw_cmds_buf.address, max_instances, &vb_pc_buf);
 
+            const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
+            {
+                const buf = &joint_matrices_bufs[ctx.current_frame];
+                const mats: []zm.Mat = @as([*]zm.Mat, @alignCast(@ptrCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
+                try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
+                if (!buf.coherent) buf.flush(ctx.graphics.vma_alloc, 0, buf.size);
+            }
+
             const gpass = try rg.addGraphicsPass(.{
-                .pipeline = &pipeline,
+                .pipeline = &skinned_pipeline,
                 .color_attachments = &.{.{ .image = rt_ref, .view = rt.view, .load_op = .clear, .store_op = .store, .clear_color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } }},
                 .depth_attachment = .{ .image = depth_ref, .view = dt.view },
                 .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
                 .descriptor_sets = &.{set_id},
             });
-            try gpass.draw(.{ .push_constant = pc_buf[0..], .vertex_count = test_mesh.lods[0].draw_count });
+
+            var pc_buf1: [base.push_constant.size(SkinnedPC, base.layout.scalar)]u8 = undefined;
+            base.push_constant.write(SkinnedPC, &pc_buf1, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = body_mesh.lods[0].geometry_buffer.?.@"0".address, .joints_address = joint_matrices_bufs[ctx.current_frame].address }, base.layout.scalar);
+            try gpass.draw(.{ .push_constant = pc_buf1[0..], .vertex_count = body_mesh.lods[0].draw_count });
+
+            var pc_buf2: [base.push_constant.size(SkinnedPC, base.layout.scalar)]u8 = undefined;
+            base.push_constant.write(SkinnedPC, &pc_buf2, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = helmet_mesh.lods[0].geometry_buffer.?.@"0".address, .joints_address = joint_matrices_bufs[ctx.current_frame].address }, base.layout.scalar);
+            try gpass.draw(.{ .push_constant = pc_buf2[0..], .vertex_count = helmet_mesh.lods[0].draw_count });
 
             try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
 

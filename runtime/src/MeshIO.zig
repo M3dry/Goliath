@@ -55,7 +55,7 @@ pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !MeshIO {
         if (has_texcoords) geo.appendSliceAssumeCapacity(std.mem.asBytes(&shape.texcoords.?[i]));
     }
 
-    return packGeometry(alloc, vertex_count, stride, pos_off, norm_off, 0xFFFFFFFF, 0xFFFFFFFF,
+    return packGeometry(alloc, vertex_count, stride, pos_off, norm_off, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
         .{ tc0_off, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF },
         .{ aabb[0], aabb[1], aabb[2] }, .{ aabb[3], aabb[4], aabb[5] }, geo.items);
 }
@@ -79,6 +79,8 @@ pub fn fromGltfPrimitive(
     var has_normals = false;
     var has_tangents = false;
     var has_colors = false;
+    var has_joints = false;
+    var has_weights = false;
     var has_texcoords = [_]bool{false} ** 4;
 
     for (prim.attributes[0..prim.attributes_count]) |attrib| {
@@ -91,6 +93,12 @@ pub fn fromGltfPrimitive(
             .color => {
                 if (attrib.index == 0) has_colors = true;
             },
+            .joints => {
+                if (attrib.index == 0) has_joints = true;
+            },
+            .weights => {
+                if (attrib.index == 0) has_weights = true;
+            },
             else => {},
         }
     }
@@ -102,6 +110,8 @@ pub fn fromGltfPrimitive(
     for (has_texcoords) |tc| {
         if (tc) stride += 2;
     }
+    if (has_joints) stride += 2;
+    if (has_weights) stride += 4;
 
     const pos_off: u32 = if (has_indices) draw_count else 0;
     var off = pos_off + 3;
@@ -118,6 +128,11 @@ pub fn fromGltfPrimitive(
             off += 2;
         }
     }
+
+    const joints0_off: u32 = if (has_joints) off else 0xFFFFFFFF;
+    if (has_joints) off += 2;
+    const weights0_off: u32 = if (has_weights) off else 0xFFFFFFFF;
+    if (has_weights) off += 4;
 
     const index_bytes: usize = if (has_indices) draw_count * @sizeOf(u32) else 0;
     const vertex_bytes: usize = vertex_count * stride * @sizeOf(u32);
@@ -148,6 +163,7 @@ pub fn fromGltfPrimitive(
             .tangent => tang_off,
             .color => if (attrib.index == 0) col_off else 0xFFFFFFFF,
             .texcoord => if (attrib.index >= 0 and attrib.index < 4) tc_off[@intCast(attrib.index)] else 0xFFFFFFFF,
+            .weights => if (attrib.index == 0) weights0_off else 0xFFFFFFFF,
             else => 0xFFFFFFFF,
         };
         if (attr_off == 0xFFFFFFFF) continue;
@@ -170,9 +186,25 @@ pub fn fromGltfPrimitive(
 
     var aabb_min: [3]f32 = .{ std.math.floatMax(f32), std.math.floatMax(f32), std.math.floatMax(f32) };
     var aabb_max: [3]f32 = .{ -std.math.floatMax(f32), -std.math.floatMax(f32), -std.math.floatMax(f32) };
+    if (has_joints) {
+        for (prim.attributes[0..prim.attributes_count]) |attrib| {
+            if (attrib.type == .joints and attrib.index == 0) {
+                const accessor = attrib.data;
+                const intra_off = joints0_off - pos_off;
+                for (0..vertex_count) |vi| {
+                    var joint_vals: [4]u32 = undefined;
+                    _ = accessor.readUint(vi, &joint_vals);
+                    const vbase = vi * stride + intra_off;
+                    vertex_slice[vbase + 0] = @as(u32, @intCast(joint_vals[0])) | (@as(u32, @intCast(joint_vals[1])) << 16);
+                    vertex_slice[vbase + 1] = @as(u32, @intCast(joint_vals[2])) | (@as(u32, @intCast(joint_vals[3])) << 16);
+                }
+                break;
+            }
+        }
+    }
+
     for (prim.attributes[0..prim.attributes_count]) |attrib| {
-        if (attrib.type == .position) {
-            const pos = attrib.data;
+        if (attrib.type == .position) {            const pos = attrib.data;
             if (pos.has_min != 0) aabb_min = .{ pos.min[0], pos.min[1], pos.min[2] };
             if (pos.has_max != 0) aabb_max = .{ pos.max[0], pos.max[1], pos.max[2] };
             break;
@@ -189,7 +221,7 @@ pub fn fromGltfPrimitive(
     } else -1;
 
     const mesh_io = try packGeometry(alloc, draw_count, stride, pos_off, norm_off, tang_off, col_off,
-        tc_off, aabb_min, aabb_max, geo.items);
+        joints0_off, weights0_off, tc_off, aabb_min, aabb_max, geo.items);
     return .{ .mesh_io = mesh_io, .name = name, .material_index = material_index };
 }
 
@@ -205,6 +237,8 @@ fn packGeometry(
     normal_offset: u32,
     tangent_offset: u32,
     color0_offset: u32,
+    joints0_offset: u32,
+    weights0_offset: u32,
     texcoord_offsets: [4]u32,
     aabb_min: [3]f32,
     aabb_max: [3]f32,
@@ -242,6 +276,8 @@ fn packGeometry(
         .texcoord1_offset = texcoord_offsets[1],
         .texcoord2_offset = texcoord_offsets[2],
         .texcoord3_offset = texcoord_offsets[3],
+        .joints0_offset = joints0_offset,
+        .weights0_offset = weights0_offset,
     }));
 
     buf.appendSliceAssumeCapacity(geo_data);

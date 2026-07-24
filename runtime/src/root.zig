@@ -5,3 +5,6 @@ pub const Mesh = @import("Mesh.zig");
 pub const MeshHandler = @import("MeshHandler.zig");
 pub const MeshIO = @import("MeshIO.zig");
 pub const Visbuffer = @import("Visbuffer.zig");
+pub const Skeleton = @import("Skeleton.zig");
+pub const Skin = @import("Skin.zig");
+pub const Animation = @import("Animation.zig");

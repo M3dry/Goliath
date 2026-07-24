@@ -3,6 +3,7 @@
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
 #include "library/data.glsl"
 
@@ -29,9 +30,10 @@ layout(push_constant, scalar) uniform PC {
     float screen_width;
     float screen_height;
     float fov_y;
+    vec3 camera_pos;
 } pc;
 
-bool frustum_test(mat4 vp, vec3 bmin, vec3 bmax) {
+bool frustum_test(mat4 vp, mat4 model, vec3 bmin, vec3 bmax) {
     vec3 corners[8] = vec3[](
         vec3(bmin.x, bmin.y, bmin.z),
         vec3(bmax.x, bmin.y, bmin.z),
@@ -46,7 +48,8 @@ bool frustum_test(mat4 vp, vec3 bmin, vec3 bmax) {
     for (int plane = 0; plane < 4; plane++) {
         int out_count = 0;
         for (int c = 0; c < 8; c++) {
-            vec4 clip = vp * vec4(corners[c], 1.0);
+            vec4 world = model * vec4(corners[c], 1.0);
+            vec4 clip = vp * world;
             if (clip[plane] < -clip.w) out_count++;
         }
         if (out_count == 8) return false;
@@ -61,26 +64,33 @@ void main() {
     WorldInstance inst = pc.world_instances.instances[gid];
     MeshDesc md = pc.mesh_descs.desc[inst.mesh_desc_ix];
 
-    if (!frustum_test(pc.vp, md.min, md.max)) return;
+    if (!frustum_test(pc.vp, inst.transform, md.min, md.max)) return;
 
-    float dist = length((inst.transform * vec4(0, 0, 0, 1)).xyz);
+    vec3 center = (inst.transform * vec4(0.5 * (md.min + md.max), 1.0)).xyz;
+    float dist = length(center - pc.camera_pos);
     float ppf = 2.0 * tan(pc.fov_y * 0.5) / pc.screen_height;
 
-    uint selected_lod = 0;
+    uint selected_lod = md.lod_count;
     for (uint i = 0; i < md.lod_count; i++) {
         LODEntry le = pc.lod_entries.entry[md.lod_offset + i];
+        if (uint64_t(le.geometry) == 0) continue;
+
         float pixel_size = le.error_metric / (dist * ppf + 0.001);
         if (pixel_size > 1.0) {
             selected_lod = i;
-        } else {
             break;
         }
     }
 
+    if (selected_lod == md.lod_count) return;
+
     LODEntry lod = pc.lod_entries.entry[md.lod_offset + selected_lod];
 
     uint slot = atomicAdd(pc.renderables.count, 1);
-    if (slot >= pc.max_draw_count) return;
+    if (slot >= pc.max_draw_count) {
+        atomicMin(pc.renderables.count, pc.max_draw_count);
+        return;
+    }
 
     pc.renderables.data[slot] = Renderable(
         inst.transform,
