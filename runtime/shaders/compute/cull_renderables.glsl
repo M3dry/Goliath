@@ -91,17 +91,20 @@ void main() {
         atomicMin(pc.renderables.count, pc.max_draw_count);
         return;
     }
+    uint dslot = atomicAdd(pc.draw_cmds.count, 1);
+    if (dslot >= pc.max_draw_count) {
+        atomicMin(pc.draw_cmds.count, pc.max_draw_count);
+        return;
+    }
 
-    pc.renderables.data[slot] = Renderable(
-        inst.transform,
-        lod.geometry,
-        lod.material_schema,
-        lod.material_instance
-    );
+    pc.renderables.data[slot].transform = inst.transform;
+    pc.renderables.data[slot].geometry = lod.geometry;
+    pc.renderables.data[slot].material_schema = lod.material_schema;
+    pc.renderables.data[slot].material_instance = lod.material_instance;
 
-    pc.draw_cmds.cmd[slot].draw_count = lod.draw_count;
-    pc.draw_cmds.cmd[slot].instance_count = 1;
-    pc.draw_cmds.cmd[slot].first_vertex = 0;
-    pc.draw_cmds.cmd[slot].first_instance = 0;
-    pc.draw_cmds.cmd[slot].renderable_ix = slot;
+    pc.draw_cmds.cmd[dslot].draw_count = lod.draw_count;
+    pc.draw_cmds.cmd[dslot].instance_count = 1;
+    pc.draw_cmds.cmd[dslot].first_vertex = 0;
+    pc.draw_cmds.cmd[dslot].first_instance = 0;
+    pc.draw_cmds.cmd[dslot].renderable_ix = slot;
 }

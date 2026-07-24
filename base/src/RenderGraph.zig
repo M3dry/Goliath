@@ -6,6 +6,7 @@ const GraphicsCtx = @import("GraphicsCtx.zig");
 const DescriptorPool = @import("DescriptorPool.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
+const Buffer = @import("Buffer.zig");
 const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
 
 const RenderGraph = @This();
@@ -39,7 +40,7 @@ pub const ImageContract = struct {
 };
 
 pub const BufferContract = struct {
-    buffer: vk.Buffer,
+    buffer: Buffer,
     offset: u64,
     size: u64,
     start_usage: BufferUsage,
@@ -485,7 +486,7 @@ fn emitPassBarriers(
                 .dst_access_mask = req.access,
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
-                .buffer = buf_contracts[idx].buffer,
+                .buffer = buf_contracts[idx].buffer.handle,
                 .offset = buf_contracts[idx].offset,
                 .size = buf_contracts[idx].size,
             });
@@ -523,7 +524,7 @@ fn recordGraphicsCommands(
     if (gp.indirect) |ind| {
         gp.pipeline.drawIndirect(gc, cmd_buf, .{
             .push_constant = ind.push_constant,
-            .buffer = buf_contracts[ind.buffer.index].buffer,
+            .buffer = buf_contracts[ind.buffer.index].buffer.handle,
             .offset = ind.offset,
             .draw_count = ind.draw_count,
             .stride = ind.stride,
@@ -532,9 +533,9 @@ fn recordGraphicsCommands(
     if (gp.indirect_count) |ic| {
         gp.pipeline.drawIndirectCount(gc, cmd_buf, .{
             .push_constant = ic.push_constant,
-            .buffer = buf_contracts[ic.buffer.index].buffer,
+            .buffer = buf_contracts[ic.buffer.index].buffer.handle,
             .offset = ic.offset,
-            .count_buffer = buf_contracts[ic.count_buffer.index].buffer,
+            .count_buffer = buf_contracts[ic.count_buffer.index].buffer.handle,
             .count_offset = ic.count_offset,
             .max_draw_count = ic.max_draw_count,
             .stride = ic.stride,
@@ -656,7 +657,7 @@ fn recordComputePass(
     if (cp.indirect) |ind| {
         cp.pipeline.dispatchIndirect(gc, cmd_buf, .{
             .push_constant = ind.push_constant,
-            .buffer = buf_contracts[ind.buffer.index].buffer,
+            .buffer = buf_contracts[ind.buffer.index].buffer.handle,
             .offset = ind.offset,
         });
     } else {
@@ -678,7 +679,7 @@ fn recordTransferPass(
     for (tp.fills.items) |fill| {
         gc.dev.cmdFillBuffer(
             cmd_buf,
-            buf_contracts[fill.buffer.index].buffer,
+            buf_contracts[fill.buffer.index].buffer.handle,
             fill.offset,
             fill.size,
             fill.value,
@@ -739,7 +740,7 @@ fn emitFinalBarriers(
                 .dst_access_mask = contract.end_usage.access,
                 .src_queue_family_index = qf,
                 .dst_queue_family_index = qf,
-                .buffer = contract.buffer,
+                .buffer = contract.buffer.handle,
                 .offset = contract.offset,
                 .size = contract.size,
             });
@@ -801,6 +802,10 @@ pub fn addImage(self: *RenderGraph, contract: ImageContract) Allocator.Error!Ima
 pub fn addBuffer(self: *RenderGraph, contract: BufferContract) Allocator.Error!BufferRef {
     try self.buffers.append(self.alloc, contract);
     return .{ .index = @intCast(self.buffers.items.len - 1) };
+}
+
+pub fn getBuffer(self: *const RenderGraph, ref: BufferRef) Buffer {
+    return self.buffers.items[ref.index].buffer;
 }
 
 pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!GraphicsPassHandle {
@@ -870,7 +875,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
     for (other.buffers.items, 0..) |o_buf, o_idx| {
         var found = false;
         for (self.buffers.items, 0..) |s_buf, s_idx| {
-            if (s_buf.buffer == o_buf.buffer) {
+            if (s_buf.buffer.handle == o_buf.buffer.handle) {
                 try buffer_remap.put(self.alloc, @intCast(o_idx), @intCast(s_idx));
                 self.buffers.items[s_idx].end_usage = o_buf.end_usage;
                 found = true;
@@ -1192,8 +1197,8 @@ test "builder: add images, buffers, passes and deinit" {
     const rt_view: vk.ImageView = @enumFromInt(0);
     const depth_img: vk.Image = @enumFromInt(0);
     const depth_view: vk.ImageView = @enumFromInt(0);
-    const vb: vk.Buffer = @enumFromInt(0);
-    const count_buf: vk.Buffer = @enumFromInt(1);
+    const vb: Buffer = .{ .handle = @enumFromInt(0) };
+    const count_buf: Buffer = .{ .handle = @enumFromInt(1) };
 
     const rt = try rg.addImage(.{
         .image = rt_img,
@@ -1336,8 +1341,8 @@ test "indirect: drawIndirect and drawIndirectCount with BufferRef" {
     var rg = RenderGraph.init(alloc);
     defer rg.deinit();
 
-    const vb: vk.Buffer = @enumFromInt(100);
-    const cb: vk.Buffer = @enumFromInt(200);
+    const vb: Buffer = .{ .handle = @enumFromInt(100) };
+    const cb: Buffer = .{ .handle = @enumFromInt(200) };
 
     const ind_buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 256,
@@ -1381,7 +1386,7 @@ test "indirect: dispatchIndirect with BufferRef" {
     var rg = RenderGraph.init(alloc);
     defer rg.deinit();
 
-    const vb: vk.Buffer = @enumFromInt(100);
+    const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const ind_buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 64,
@@ -1410,7 +1415,7 @@ test "merge: explicit read + indirect draw merge into one barrier" {
 
     const rt_img: vk.Image = @enumFromInt(0);
     const rt_view: vk.ImageView = @enumFromInt(0);
-    const vb: vk.Buffer = @enumFromInt(100);
+    const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const rt = try rg.addImage(.{
         .image = rt_img,
@@ -1520,7 +1525,7 @@ test "merge: two disjoint graphs concatenate cleanly" {
     defer rg1.deinit();
 
     const img1: vk.Image = @enumFromInt(1);
-    const buf1: vk.Buffer = @enumFromInt(100);
+    const buf1: Buffer = .{ .handle = @enumFromInt(100) };
 
     _ = try rg1.addImage(.{
         .image = img1,
@@ -1540,7 +1545,7 @@ test "merge: two disjoint graphs concatenate cleanly" {
     var rg2 = RenderGraph.init(alloc);
 
     const img2: vk.Image = @enumFromInt(2);
-    const buf2: vk.Buffer = @enumFromInt(200);
+    const buf2: Buffer = .{ .handle = @enumFromInt(200) };
 
     _ = try rg2.addImage(.{
         .image = img2,
@@ -1579,7 +1584,7 @@ test "merge: overlapping image dedup and end_usage inheritance" {
     defer rg1.deinit();
 
     const shared_img: vk.Image = @enumFromInt(42);
-    const shared_buf: vk.Buffer = @enumFromInt(7);
+    const shared_buf: Buffer = .{ .handle = @enumFromInt(7) };
 
     _ = try rg1.addImage(.{
         .image = shared_img,
@@ -1714,7 +1719,7 @@ test "merge: indirect BufferRef is rebased" {
     var rg1 = RenderGraph.init(alloc);
     defer rg1.deinit();
 
-    const buf: vk.Buffer = @enumFromInt(10);
+    const buf: Buffer = .{ .handle = @enumFromInt(10) };
     _ = try rg1.addBuffer(.{
         .buffer = buf, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
@@ -1748,7 +1753,7 @@ test "transfer: fillBuffer records write with transfer barrier" {
     var rg = RenderGraph.init(alloc);
     defer rg.deinit();
 
-    const vb: vk.Buffer = @enumFromInt(100);
+    const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 256,
@@ -1778,7 +1783,7 @@ test "transfer: collectPassRequirementsTransfer merges buffer writes" {
     var rg = RenderGraph.init(alloc);
     defer rg.deinit();
 
-    const vb: vk.Buffer = @enumFromInt(100);
+    const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const buf = try rg.addBuffer(.{
         .buffer = vb, .offset = 0, .size = 256,
@@ -1816,7 +1821,7 @@ test "merge: transfer pass refs are rebased through dedup" {
     var rg1 = RenderGraph.init(alloc);
     defer rg1.deinit();
 
-    const buf: vk.Buffer = @enumFromInt(10);
+    const buf: Buffer = .{ .handle = @enumFromInt(10) };
     _ = try rg1.addBuffer(.{
         .buffer = buf, .offset = 0, .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },

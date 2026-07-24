@@ -9,12 +9,7 @@ const zmesh = runtime.zmesh;
 
 const shaders = @import("shaders");
 
-const RenderableEntry = extern struct {
-    transform: zm.Mat,
-    geometry: u64,
-    material_schema: u32,
-    material_instance: u32,
-};
+const Culling = runtime.Culling;
 
 fn generateCheckerboard(allocator: std.mem.Allocator, width: u32, height: u32, cell_size: u32) !base.image_loader.ImageData {
     const pixels = try allocator.alloc(u8, (width * height * 4));
@@ -240,49 +235,39 @@ pub fn main(init: std.process.Init) !void {
     skinned_pipeline.depth_compare_op = .less;
     defer skinned_pipeline.deinit(&ctx.graphics);
 
-    // 68 bytes: uint + mat4, tightly packed under scalar layout
-    const world_instance_size = @sizeOf(u32) + 16 * @sizeOf(f32);
-
-    var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
+    var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
     defer world_instances_buf.deinit(&ctx.destroy_queue);
     {
         const mapped = world_instances_buf.mapped.?;
         @as(*u32, @ptrCast(@alignCast(mapped))).* = 0;
         @memcpy(mapped[4..][0..64], std.mem.asBytes(&mesh_world));
-        world_instances_buf.flush(ctx.graphics.vma_alloc, 0, world_instance_size);
+        world_instances_buf.flush(ctx.graphics.vma_alloc, 0, Culling.world_instance_size);
     }
 
     const max_instances = 64;
-    var renderables_buf = try base.Buffer.init(&ctx.graphics, .graphics, "renderables_buf", @sizeOf(u32) + max_instances * @sizeOf(RenderableEntry), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    var renderables_buf = try base.Buffer.init(&ctx.graphics, .graphics, "renderables_buf", @sizeOf(u32) + max_instances * @sizeOf(Culling.RenderableEntry), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
     defer renderables_buf.deinit(&ctx.destroy_queue);
 
     var draw_cmds_buf = try base.Buffer.init(&ctx.graphics, .graphics, "draw_cmds_buf", max_instances * 5 * @sizeOf(u32), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
     defer draw_cmds_buf.deinit(&ctx.destroy_queue);
 
-    const CullPC = struct {
-        vp: zm.Mat,
-        world_instances_address: u64,
-        mesh_descs_address: u64,
-        lod_entries_address: u64,
-        renderables_address: u64,
-        draw_cmds_address: u64,
-        instance_count: u32,
-        max_draw_count: u32,
-        screen_width: f32,
-        screen_height: f32,
-        fov_y: f32,
-        camera_pos: [3]f32,
-    };
+    // Per-frame arena for skinned vertex cache
+    const arena_elements: u32 = 64 * 1024 * 32;
+    const arena_buf_size = @sizeOf(u32) * 2 + arena_elements * @sizeOf(u32);
+    var arena_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinning_arena", arena_buf_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer arena_buf.deinit(&ctx.destroy_queue);
 
-    const cull_comp = shaders.get(.compute_cull_renderables);
-    const cull_comp_mod = try base.ShaderModule.init(&ctx, cull_comp);
-    defer cull_comp_mod.deinit(&ctx);
+    // Skinned draw cmds (indirect with extra fields), includes u32 count header
+    var skinned_draw_cmds_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinned_draw_cmds_buf", @sizeOf(u32) + max_instances * 32, .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer skinned_draw_cmds_buf.deinit(&ctx.destroy_queue);
 
-    var cull_pipeline = try base.ComputePipeline.init(&ctx, .{
-        .shader = cull_comp_mod,
-        .push_constant_size = @intCast(base.push_constant.size(CullPC, base.layout.scalar)),
-    });
-    defer cull_pipeline.deinit(&ctx.graphics);
+    // Skinned world instances (mesh_ix + joint_offset + transform)
+    const skinned_instance_count: u32 = 2;
+    var skinned_world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinned_world_instances_buf", skinned_instance_count * Culling.skinned_world_instance_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
+    defer skinned_world_instances_buf.deinit(&ctx.destroy_queue);
+
+    var culling = try Culling.init(&ctx);
+    defer culling.deinit(&ctx);
 
     const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
     var cam = base.Camera.initLookAt(
@@ -365,6 +350,20 @@ pub fn main(init: std.process.Init) !void {
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();
             const dt = ctx.depthTarget();
+            const dp = ctx.descriptorPool();
+
+            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
+            dp.beginUpdate(set_id);
+            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, checker_view.handle, sampler.handle);
+            dp.endUpdate(&ctx.graphics.dev);
+
+            const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
+            {
+                const buf = &joint_matrices_bufs[ctx.current_frame];
+                const mats: []zm.Mat = @as([*]zm.Mat, @alignCast(@ptrCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
+                try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
+                if (!buf.coherent) buf.flush(ctx.graphics.vma_alloc, 0, buf.size);
+            }
 
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();
@@ -398,14 +397,50 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
-            const dp = ctx.descriptorPool();
-            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
-            dp.beginUpdate(set_id);
-            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, checker_view.handle, sampler.handle);
-            dp.endUpdate(&ctx.graphics.dev);
+            const mesh_descs_ref = try rg.addBuffer(.{
+                .buffer = mh.mesh_desc_buf,
+                .offset = 0,
+                .size = mh.mesh_desc_buf.size,
+                .start_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+            });
+
+            const lod_entries_ref = try rg.addBuffer(.{
+                .buffer = mh.lod_entry_buf,
+                .offset = 0,
+                .size = mh.lod_entry_buf.size,
+                .start_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+            });
+
+            const world_instances_ref = try rg.addBuffer(.{
+                .buffer = world_instances_buf,
+                .offset = 0,
+                .size = world_instances_buf.size,
+                .start_usage = .{
+                    .stage = .{ .compute_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .compute_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+            });
 
             const renderables_ref = try rg.addBuffer(.{
-                .buffer = renderables_buf.handle,
+                .buffer = renderables_buf,
                 .offset = 0,
                 .size = renderables_buf.size,
                 .start_usage = .{
@@ -419,7 +454,7 @@ pub fn main(init: std.process.Init) !void {
             });
 
             const draw_cmds_ref = try rg.addBuffer(.{
-                .buffer = draw_cmds_buf.handle,
+                .buffer = draw_cmds_buf,
                 .offset = 0,
                 .size = draw_cmds_buf.size,
                 .start_usage = .{
@@ -432,58 +467,158 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
+            const skinned_world_instances_ref = try rg.addBuffer(.{
+                .buffer = skinned_world_instances_buf,
+                .offset = 0,
+                .size = skinned_world_instances_buf.size,
+                .start_usage = .{
+                    .stage = .{ .compute_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .compute_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+            });
+
+            const arena_ref = try rg.addBuffer(.{
+                .buffer = arena_buf,
+                .offset = 0,
+                .size = arena_buf.size,
+                .start_usage = .{
+                    .stage = .{ .all_commands_bit = true },
+                    .access = .{ .memory_write_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .vertex_shader_bit = true },
+                    .access = .{ .shader_storage_write_bit = true, .shader_storage_read_bit = true },
+                },
+            });
+
+            const skinned_draw_cmds_ref = try rg.addBuffer(.{
+                .buffer = skinned_draw_cmds_buf,
+                .offset = 0,
+                .size = skinned_draw_cmds_buf.size,
+                .start_usage = .{
+                    .stage = .{ .all_commands_bit = true },
+                    .access = .{ .memory_write_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .draw_indirect_bit = true, .vertex_shader_bit = true },
+                    .access = .{ .indirect_command_read_bit = true, .shader_read_bit = true },
+                },
+            });
+
             const zero_pass = try rg.addTransferPass(.{});
             try zero_pass.fillBuffer(.{ .buffer = renderables_ref, .size = renderables_buf.size });
             try zero_pass.fillBuffer(.{ .buffer = draw_cmds_ref, .size = draw_cmds_buf.size });
+            try zero_pass.fillBuffer(.{ .buffer = arena_ref, .size = @sizeOf(u32) }); // reset arena write_offset
+            try zero_pass.fillBuffer(.{ .buffer = skinned_draw_cmds_ref, .size = @sizeOf(u32) }); // reset skinned count
 
-            var cull_pc_buf: [base.push_constant.size(CullPC, base.layout.scalar)]u8 = undefined;
-            base.push_constant.write(CullPC, &cull_pc_buf, .{
+            var cull_pc_buf: [Culling.CullPC.size]u8 = undefined;
+            try culling.cull(&rg, .{
                 .vp = cam.view_projection,
-                .world_instances_address = world_instances_buf.address,
-                .mesh_descs_address = mh.mesh_desc_buf.address,
-                .lod_entries_address = mh.lod_entry_buf.address,
-                .renderables_address = renderables_buf.address,
-                .draw_cmds_address = draw_cmds_buf.address,
-                .instance_count = 1,
+                .world_instances_ref = world_instances_ref,
+                .mesh_descs_ref = mesh_descs_ref,
+                .lod_entries_ref = lod_entries_ref,
+                .renderables_ref = renderables_ref,
+                .draw_cmds_ref = draw_cmds_ref,
+                .instance_count = 0,
                 .max_draw_count = max_instances,
                 .screen_width = @floatFromInt(render_extent.width),
                 .screen_height = @floatFromInt(render_extent.height),
                 .fov_y = std.math.pi / 4.0,
                 .camera_pos = .{ cam.position[0], cam.position[1], cam.position[2] },
-            }, base.layout.scalar);
+                .pc_buf = &cull_pc_buf,
+            });
 
-            const compute_pass = try rg.addComputePass(.{
-                .pipeline = &cull_pipeline,
-                .dispatch = .{
-                    .push_constant = &cull_pc_buf,
-                    .group_count_x = (1 + 31) / 32,
-                    .group_count_y = 1,
-                    .group_count_z = 1,
+            const joints_ref = try rg.addBuffer(.{
+                .buffer = joint_matrices_bufs[ctx.current_frame],
+                .offset = 0,
+                .size = joint_matrices_bufs[ctx.current_frame].size,
+                .start_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
+                },
+                .end_usage = .{
+                    .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true },
+                    .access = .{ .shader_storage_read_bit = true },
                 },
             });
-            try compute_pass.writeBuffer(renderables_ref, .{
-                .stage = .{ .compute_shader_bit = true },
-                .access = .{ .shader_write_bit = true },
-            });
-            try compute_pass.writeBuffer(draw_cmds_ref, .{
-                .stage = .{ .compute_shader_bit = true },
-                .access = .{ .shader_write_bit = true },
+
+            // Upload skinned world instances
+            {
+                const mapped = skinned_world_instances_buf.mapped.?;
+                const instances = std.mem.bytesAsSlice(u32, mapped[0..skinned_instance_count * Culling.skinned_world_instance_size]);
+                // body_mesh at mesh_desc_ix 0, helmet at 1, both use joint_offset 0
+                instances[0] = 0; // mesh_desc_ix
+                instances[1] = 0; // joint_offset
+                // transform at offset 2 (two u32s skipped)
+                @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&mesh_world));
+                const base_off = Culling.skinned_world_instance_size;
+                const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
+                inst2[0] = 1; // mesh_desc_ix
+                inst2[1] = 0; // joint_offset
+                @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&mesh_world));
+                if (!skinned_world_instances_buf.coherent)
+                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+            }
+
+            var anim_cull_pc_buf: [Culling.AnimatedCullPC.size]u8 = undefined;
+            try culling.cullAnimated(&rg, .{
+                .vp = cam.view_projection,
+                .world_instances_ref = skinned_world_instances_ref,
+                .mesh_descs_ref = mesh_descs_ref,
+                .lod_entries_ref = lod_entries_ref,
+                .renderables_ref = renderables_ref,
+                .draw_cmds_ref = skinned_draw_cmds_ref,
+                .arena_ref = arena_ref,
+                .joints_ref = joints_ref,
+                .arena_capacity = arena_elements,
+                .instance_count = skinned_instance_count,
+                .max_draw_count = max_instances,
+                .screen_width = @floatFromInt(render_extent.width),
+                .screen_height = @floatFromInt(render_extent.height),
+                .fov_y = std.math.pi / 4.0,
+                .camera_pos = .{ cam.position[0], cam.position[1], cam.position[2] },
+                .pc_buf = &anim_cull_pc_buf,
             });
 
             const vis_ref, _ = try vis.visbuffer_ref(ctx.current_frame, &rg);
             var vb_pc_buf: [runtime.Visbuffer.pc_size]u8 = undefined;
-            try vis.raster(ctx.current_frame, &rg, vis_ref, cam.view_projection, .{
-                .image = depth_ref,
-                .view = dt.view,
-            }, renderables_ref, renderables_buf.address, draw_cmds_ref, draw_cmds_buf.address, max_instances, &vb_pc_buf);
+            try vis.raster(&rg, .{
+                .current_frame = ctx.current_frame,
+                .vis_ref = vis_ref,
+                .vp = cam.view_projection,
+                .depth_attachment = .{
+                    .image = depth_ref,
+                    .view = dt.view,
+                },
+                .renderables_buf_ref = renderables_ref,
+                .renderables_buf_address = renderables_buf.address,
+                .draw_cmds_buf_ref = draw_cmds_ref,
+                .draw_cmds_buf_address = draw_cmds_buf.address,
+                .max_draw_count = max_instances,
+                .pc_buf = &vb_pc_buf,
+            });
 
-            const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
-            {
-                const buf = &joint_matrices_bufs[ctx.current_frame];
-                const mats: []zm.Mat = @as([*]zm.Mat, @alignCast(@ptrCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
-                try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
-                if (!buf.coherent) buf.flush(ctx.graphics.vma_alloc, 0, buf.size);
-            }
+            var skinned_vb_pc_buf: [runtime.Visbuffer.skinned_pc_size]u8 = undefined;
+            try vis.rasterSkinned(&rg, .{
+                .current_frame = ctx.current_frame,
+                .vis_ref = vis_ref,
+                .vp = cam.view_projection,
+                .depth_attachment = .{
+                    .image = depth_ref,
+                    .view = dt.view,
+                },
+                .renderables_buf_ref = renderables_ref,
+                .renderables_buf_address = renderables_buf.address,
+                .draw_cmds_buf_ref = skinned_draw_cmds_ref,
+                .draw_cmds_buf_address = skinned_draw_cmds_buf.address,
+                .joints_buf_address = joint_matrices_bufs[ctx.current_frame].address,
+                .max_draw_count = max_instances,
+                .pc_buf = &skinned_vb_pc_buf,
+            });
 
             const gpass = try rg.addGraphicsPass(.{
                 .pipeline = &skinned_pipeline,

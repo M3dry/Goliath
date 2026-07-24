@@ -8,3 +8,4 @@ pub const Visbuffer = @import("Visbuffer.zig");
 pub const Skeleton = @import("Skeleton.zig");
 pub const Skin = @import("Skin.zig");
 pub const Animation = @import("Animation.zig");
+pub const Culling = @import("Culling.zig");

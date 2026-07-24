@@ -55,7 +55,7 @@ pub fn fromShape(alloc: Allocator, shape: zmesh.Shape) !MeshIO {
         if (has_texcoords) geo.appendSliceAssumeCapacity(std.mem.asBytes(&shape.texcoords.?[i]));
     }
 
-    return packGeometry(alloc, vertex_count, stride, pos_off, norm_off, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+    return packGeometry(alloc, vertex_count, index_count, stride, pos_off, norm_off, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
         .{ tc0_off, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF },
         .{ aabb[0], aabb[1], aabb[2] }, .{ aabb[3], aabb[4], aabb[5] }, geo.items);
 }
@@ -220,7 +220,7 @@ pub fn fromGltfPrimitive(
         break :blk @as(i32, @intCast((mat_ptr - base_ptr) / @sizeOf(zcgltf.Material)));
     } else -1;
 
-    const mesh_io = try packGeometry(alloc, draw_count, stride, pos_off, norm_off, tang_off, col_off,
+    const mesh_io = try packGeometry(alloc, draw_count, vertex_count, stride, pos_off, norm_off, tang_off, col_off,
         joints0_off, weights0_off, tc_off, aabb_min, aabb_max, geo.items);
     return .{ .mesh_io = mesh_io, .name = name, .material_index = material_index };
 }
@@ -231,6 +231,7 @@ pub fn deinit(self: *const MeshIO, alloc: Allocator) void {
 
 fn packGeometry(
     alloc: Allocator,
+    draw_count: u32,
     vertex_count: u32,
     stride: u32,
     position_offset: u32,
@@ -258,12 +259,15 @@ fn packGeometry(
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb_min));
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&aabb_max));
 
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&vertex_count));
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&[_]u32{0})); // material schema
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&[_]u32{0})); // material instance
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&@as(f32, 0)));
     const geometry_offset: isize = @intCast(hdr_size + lod_size);
-    buf.appendSliceAssumeCapacity(std.mem.asBytes(&geometry_offset));
+    buf.appendSliceAssumeCapacity(std.mem.asBytes(&Mesh.LODEntry{
+        .draw_count = draw_count,
+        .vertex_count = vertex_count,
+        .material_schema = 0,
+        .material_instance = 0,
+        .error_metric = std.math.floatMax(f32),
+        .geometry_offset = geometry_offset,
+    }));
 
     buf.appendSliceAssumeCapacity(std.mem.asBytes(&Mesh.GeometryMeta{
         .vertex_size = @intCast(geo_data.len),

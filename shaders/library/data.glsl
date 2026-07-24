@@ -3,9 +3,16 @@
 
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 
-// 4 alignment
+// 8B alignment (buffer_reference)
+layout(buffer_reference, scalar) readonly buffer IndicesBuffer {
+    uint ix[];
+};
+
+// 4 alignment, but indices field is 8B
 layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
+    IndicesBuffer indices;
     uint stride_indexed_tangents;
     uint position_offset;
     uint normal_offset;
@@ -18,7 +25,7 @@ layout(buffer_reference, scalar) readonly buffer GeometryBuffer {
     uint joints0_offset;
     uint weights0_offset;
     uint data[];
-}; // no padding since all elements are uint
+}; // padding to 8B due to indices
 
 const uint STRIDE_MASK = 0x7FFFFFFFu;
 const uint INDEXED_TANGENTS_MASK = 0x80000000u;
@@ -50,8 +57,8 @@ Vertex load_vertex(GeometryBuffer geo, uint vert_ix) {
 
     uint stride = get_stride(geo);
     bool indexed_tangents = tangents_indexed(geo);
-    if (geo.position_offset != 0) {
-        vert.index = geo.data[vert_ix];
+    if (uint64_t(geo.indices) != 0) {
+        vert.index = geo.indices.ix[vert_ix];
     }
 
     uint base = vert.index * stride;
@@ -137,11 +144,13 @@ Vertex load_vertex(GeometryBuffer geo, uint vert_ix) {
 // needs 8B alignment, std430 min
 struct LODEntry {
     GeometryBuffer geometry; // 0 - 8, 8B alignment
-    uint draw_count; // 8 - 12, 4B alignment
-    uint material_schema; // 12 - 16
-    uint material_instance; // 16 - 20
-    float error_metric; // 20 - 24
-}; // no padding since 24/8 = 3
+    uint vertex_count; // 8 - 12, 4B alignment
+    uint draw_count; // 12 - 16
+    uint material_schema; // 16 - 20
+    uint material_instance; // 20 - 24
+    float error_metric; // 24 - 28
+    uint _padding; // 28 - 32, pad to 8B
+}; // no padding since 32/8 = 4
 
 layout(buffer_reference, scalar) readonly buffer LODEntries {
     LODEntry entry[];
@@ -182,7 +191,33 @@ struct DrawCmd {
 }; // no padding
 
 layout(buffer_reference, scalar) buffer DrawCmds {
+    uint count;
     DrawCmd cmd[];
+};
+
+// 4B alignment (scalar)
+struct SkinnedDrawCmd {
+    uint draw_count;
+    uint instance_count;
+    uint first_vertex;
+    uint first_instance;
+    uint renderable_ix;
+    uint joint_offset;   // byte offset into joint buffer
+    GeometryBuffer original_geometry;
+};
+
+layout(buffer_reference, scalar) buffer SkinnedDrawCmds {
+    uint count;
+    SkinnedDrawCmd cmd[];
+};
+
+layout(buffer_reference, scalar) buffer SkinningArena {
+    uint write_offset;
+    uint data[];
+};
+
+layout(buffer_reference, scalar) readonly buffer JointMatrices {
+    mat4 matrices[];
 };
 
 #endif

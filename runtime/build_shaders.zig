@@ -60,6 +60,7 @@ pub fn compileAndEmbedShaders(b: *std.Build, shader_src: std.Build.LazyPath, mod
         const stage_flag = b.fmt("-fshader-stage={s}", .{stage});
         const glslc_run = b.addSystemCommand(&.{
             "glslc",
+            "-g",
             "-I",
             shader_dir_abs,
             stage_flag,

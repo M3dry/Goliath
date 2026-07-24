@@ -40,6 +40,7 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
             .geometry = .{
                 .data = source[vtx_start..vtx_end],
                 .geo = .{
+                    .indices_address = 0,
                     .stride = meta.stride,
                     .position_offset = meta.position_offset,
                     .normal_offset = meta.normal_offset,
@@ -56,6 +57,7 @@ pub fn init(alloc: Allocator, source: []const u8) !Mesh {
             .geometry_buffer = null,
             .on_gpu = false,
             .draw_count = entry.draw_count,
+            .vertex_count = entry.vertex_count,
             .material_schema = entry.material_schema,
             .material_instance = entry.material_schema,
             .error_metric = entry.error_metric,
@@ -88,6 +90,7 @@ pub fn writeHeader(self: *const Mesh, w: *std.Io.Writer, geometry_offsets: []con
     for (self.lods, geometry_offsets) |*lod, offset| {
         try w.writeStruct(LODEntry{
             .draw_count = lod.draw_count,
+            .vertex_count = lod.vertex_count,
             .error_metric = lod.error_metric,
             .material_schema = lod.material_schema,
             .material_instancey = lod.material_instance,
@@ -106,6 +109,7 @@ pub fn addLod(
     geometry_data: []const u8,
     geometry_meta: GPUGeometry,
     draw_count: u32,
+    vertex_count: u32,
     material_schema: u32,
     material_instance: u32,
     error_metric: f32,
@@ -116,6 +120,7 @@ pub fn addLod(
         .geometry_buffer = null,
         .on_gpu = false,
         .draw_count = draw_count,
+        .vertex_count = vertex_count,
         .material_schema = material_schema,
         .material_instance = material_instance,
         .error_metric = error_metric,
@@ -136,19 +141,22 @@ pub const Lod = struct {
     on_gpu: bool,
 
     draw_count: u32,
+    vertex_count: u32,
     material_schema: u32,
     material_instance: u32,
     error_metric: f32,
 
     pub fn initGeometryBuffer(self: *Lod, gc: *const base.GraphicsCtx, transport: *base.Transport) !struct{base.Buffer, base.Transport.Ticket} {
-        const buf = try base.Buffer.init(gc, .graphics, "Geometry buffer", @sizeOf(GPUGeometry) + self.geometry.data.len, .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+        const buf = try base.Buffer.init(gc, .graphics, "Geometry buffer", gpu_geometry_header_size + self.geometry.data.len, .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+
+        self.geometry.geo.indices_address = buf.address + gpu_geometry_header_size;
 
         const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
         const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
         const tick1 = try transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, buf.handle, 0, dst_stage, dst_access);
         errdefer transport.unqueue(tick1, false);
 
-        const tick2 = try transport.uploadBuffer(false, self.geometry.data, null, buf.handle, @sizeOf(GPUGeometry), dst_stage, dst_access);
+        const tick2 = try transport.uploadBuffer(false, self.geometry.data, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access);
         errdefer transport.unqueue(tick2, false);
 
         self.geometry_buffer = .{buf, tick2};
@@ -200,6 +208,7 @@ pub const Geometry = struct {
 };
 
 pub const GPUGeometry = extern struct {
+    indices_address: u64,
     stride: u32,
     position_offset: u32,
     normal_offset: u32,
@@ -212,6 +221,10 @@ pub const GPUGeometry = extern struct {
     joints0_offset: u32,
     weights0_offset: u32,
 };
+
+// GPU scalar layout has no trailing padding before data[] — data[] starts at offset 52.
+// @sizeOf(GPUGeometry) is 56 due to extern 8B alignment; use this constant for buffer math.
+pub const gpu_geometry_header_size: usize = 52;
 
 pub const GPUMeshDesc = struct {
     lod_offset: u32,
@@ -235,14 +248,17 @@ pub const GPUMeshDesc = struct {
 
 pub const GPULODEntry = struct {
     buffer_address: u64 = 0,
+    vertex_count: u32 = 0,
     draw_count: u32 = 0,
     material_schema: u32 = 0,
     material_instance: u32 = 0,
     error_metric: f32 = 0,
+    _padding: u32 = 0,
 
     pub fn fromLod(lod: *const Lod) GPULODEntry {
         return .{
             .buffer_address = if (lod.geometry_buffer) |buf| buf.@"0".address else 0,
+            .vertex_count = lod.vertex_count,
             .draw_count = lod.draw_count,
             .material_schema = lod.material_schema,
             .material_instance = lod.material_instance,
@@ -265,6 +281,7 @@ pub const Header = extern struct {
 
 pub const LODEntry = extern struct {
     draw_count: u32,
+    vertex_count: u32,
     material_schema: u32,
     material_instance: u32,
     error_metric: f32,
