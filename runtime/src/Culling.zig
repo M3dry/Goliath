@@ -57,21 +57,23 @@ pipeline: base.ComputePipeline,
 animated_pipeline: base.ComputePipeline,
 
 pub fn init(ctx: *base.Ctx) !Self {
-    const cull_comp = shaders.get(.compute_cull_renderables);
+    const cull_comp = shaders.get(.cull_renderables);
     const cull_comp_mod = try base.ShaderModule.init(ctx, cull_comp);
     defer cull_comp_mod.deinit(ctx);
 
     const pipeline = try base.ComputePipeline.init(ctx, .{
         .shader = cull_comp_mod,
+        .entry_point = "compute",
         .push_constant_size = @intCast(base.push_constant.size(CullPC, base.layout.scalar)),
     });
 
-    const anim_comp = shaders.get(.compute_cull_animated_renderables);
+    const anim_comp = shaders.get(.cull_animated_renderables);
     const anim_comp_mod = try base.ShaderModule.init(ctx, anim_comp);
     defer anim_comp_mod.deinit(ctx);
 
     const animated_pipeline = try base.ComputePipeline.init(ctx, .{
         .shader = anim_comp_mod,
+        .entry_point = "compute",
         .push_constant_size = @intCast(base.push_constant.size(AnimatedCullPC, base.layout.scalar)),
     });
 

@@ -76,7 +76,9 @@ depth_bias_slope_factor: f32 = 0,
 
 pub const Description = struct {
     vertex: ShaderModule,
+    vertex_entry_point: []const u8 = "vertex",
     fragment: ShaderModule,
+    fragment_entry_point: []const u8 = "fragment",
     set_layouts: []const vk.DescriptorSetLayout = &.{},
     push_constant_size: u32 = 0,
     fill_mode: vk.PolygonMode = .fill,
@@ -102,8 +104,8 @@ pub fn init(ctx: *const Ctx, desc: Description) !Self {
     }
 
     const stages = [_]vk.PipelineShaderStageCreateInfo{
-        desc.vertex.stageInfo(.{ .vertex_bit = true }),
-        desc.fragment.stageInfo(.{ .fragment_bit = true }),
+        desc.vertex.stageInfo(.{ .vertex_bit = true }, desc.vertex_entry_point),
+        desc.fragment.stageInfo(.{ .fragment_bit = true }, desc.fragment_entry_point),
     };
 
     const vertex_input = vk.PipelineVertexInputStateCreateInfo{};

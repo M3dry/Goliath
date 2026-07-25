@@ -21,11 +21,11 @@ pub fn deinit(self: Self, ctx: *const Ctx) void {
     ctx.graphics.dev.destroyShaderModule(self.handle, null);
 }
 
-pub fn stageInfo(self: Self, stage: vk.ShaderStageFlags) vk.PipelineShaderStageCreateInfo {
+pub fn stageInfo(self: Self, stage: vk.ShaderStageFlags, entry_point: []const u8) vk.PipelineShaderStageCreateInfo {
     return .{
         .stage = stage,
         .module = self.handle,
-        .p_name = "main",
+        .p_name = @ptrCast(entry_point.ptr),
         .p_specialization_info = null,
     };
 }

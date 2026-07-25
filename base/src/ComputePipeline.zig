@@ -26,6 +26,7 @@ push_constant_size: u32,
 
 pub const Description = struct {
     shader: ShaderModule,
+    entry_point: []const u8 = "compute",
     set_layouts: []const vk.DescriptorSetLayout = &.{},
     push_constant_size: u32 = 0,
 };
@@ -33,7 +34,7 @@ pub const Description = struct {
 pub fn init(ctx: *const Ctx, desc: Description) !Self {
     const dev = ctx.graphics.dev;
 
-    const stage = desc.shader.stageInfo(.{ .compute_bit = true });
+    const stage = desc.shader.stageInfo(.{ .compute_bit = true }, desc.entry_point);
 
     var push_constant_range: vk.PushConstantRange = undefined;
     const pc_range_count: u32 = if (desc.push_constant_size > 0) 1 else 0;

@@ -14,6 +14,9 @@
             .url = "git+https://github.com/m3dry/MemoryMapWriter#68abfe2f644133c62f8335477a4d447a3eb0888d",
             .hash = "MemoryMapWriter-0.0.1-ssLNULghAAD3hlY7aBiE8gI7zQY-rzXFh06Dz0SDYE16",
         },
+        .slang_build = .{
+            .path = "../tooling/slang_build",
+        },
     },
     .paths = .{
         "build.zig",

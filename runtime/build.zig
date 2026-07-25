@@ -1,9 +1,12 @@
 const std = @import("std");
-const shaders = @import("build_shaders.zig");
+const build_shaders = @import("build_shaders.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const shaders = build_shaders.shadersStep(b, "shaders");
+    b.getInstallStep().dependOn(shaders.step);
 
     const base_dep = b.dependency("base", .{
         .target = target,
@@ -11,17 +14,14 @@ pub fn build(b: *std.Build) !void {
     });
     const base_mod = base_dep.module("base");
 
-    const shaders_mod = try shaders.compileAndEmbedShaders(b, b.path("shaders"), "shaders");
-
     const zmesh_dep = b.dependency("zmesh", .{});
-
     const mw_dep = b.dependency("MemoryMapWriter", .{});
 
     const mod = b.addModule("runtime", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "base", .module = base_mod },
-            .{ .name = "shaders", .module = shaders_mod },
+            .{ .name = "shaders", .module = shaders.mod },
             .{ .name = "zmesh", .module = zmesh_dep.module("root") },
             .{ .name = "MemoryMapWriter", .module = mw_dep.module("root") },
         },
@@ -39,10 +39,7 @@ pub fn build(b: *std.Build) !void {
     const check = b.step("check", "Check compilation");
     check.dependOn(&check_obj.step);
 
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
-    });
-
+    const mod_tests = b.addTest(.{ .root_module = mod });
     b.installArtifact(mod_tests);
     const run_mod_tests = b.addRunArtifact(mod_tests);
 

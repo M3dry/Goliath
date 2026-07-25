@@ -208,13 +208,11 @@ pub fn main(init: std.process.Init) !void {
     }, null);
     defer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
 
-    const skinned_vert = shaders.get(.vertex_skinned_test);
-    const skinned_vert_mod = try base.ShaderModule.init(&ctx, skinned_vert);
-    defer skinned_vert_mod.deinit(&ctx);
+    const skin_mod = try base.ShaderModule.init(&ctx, shaders.get(.skinned_test));
+    defer skin_mod.deinit(&ctx);
 
-    const frag = shaders.get(.fragment_mesh_test);
-    const frag_mod = try base.ShaderModule.init(&ctx, frag);
-    defer frag_mod.deinit(&ctx);
+    const mesh_mod = try base.ShaderModule.init(&ctx, shaders.get(.mesh_test));
+    defer mesh_mod.deinit(&ctx);
 
     const SkinnedPC = struct {
         vp: zm.Mat,
@@ -223,8 +221,10 @@ pub fn main(init: std.process.Init) !void {
     };
 
     var skinned_pipeline = try base.GraphicsPipeline.init(&ctx, .{
-        .vertex = skinned_vert_mod,
-        .fragment = frag_mod,
+        .vertex = skin_mod,
+        .vertex_entry_point = "vertex",
+        .fragment = mesh_mod,
+        .fragment_entry_point = "fragment",
         .set_layouts = &.{set_layout},
         .color_attachments = &.{.{ .format = render_format }},
         .depth_format = .d32_sfloat,

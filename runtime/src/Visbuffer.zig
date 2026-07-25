@@ -52,14 +52,14 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
         errdefer for (0..n) |i| if (i == n) break else images[i].deinit(&ctx.destroy_queue);
     }
 
-    const vert_mod = try base.ShaderModule.init(ctx, shaders.get(.vertex_visbuffer_raster));
-    const frag_mod = try base.ShaderModule.init(ctx, shaders.get(.fragment_visbuffer_raster));
-    defer vert_mod.deinit(ctx);
-    defer frag_mod.deinit(ctx);
+    const vis_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_raster));
+    defer vis_mod.deinit(ctx);
 
     var pipeline = try base.GraphicsPipeline.init(ctx, .{
-        .vertex = vert_mod,
-        .fragment = frag_mod,
+        .vertex = vis_mod,
+        .vertex_entry_point = "vertex",
+        .fragment = vis_mod,
+        .fragment_entry_point = "fragment",
         .set_layouts = &.{},
         .color_attachments = &.{.{ .format = vis_format }},
         .depth_format = .d32_sfloat,
@@ -69,12 +69,14 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
     pipeline.depth_write_enable = .true;
     pipeline.depth_compare_op = .less;
 
-    const skinned_vert_mod = try base.ShaderModule.init(ctx, shaders.get(.vertex_visbuffer_raster_skinned));
+    const skinned_vert_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_raster_skinned));
     defer skinned_vert_mod.deinit(ctx);
 
     var skinned_pipeline = try base.GraphicsPipeline.init(ctx, .{
         .vertex = skinned_vert_mod,
-        .fragment = frag_mod,
+        .vertex_entry_point = "vertex",
+        .fragment = vis_mod,
+        .fragment_entry_point = "fragment",
         .set_layouts = &.{},
         .color_attachments = &.{.{ .format = vis_format }},
         .depth_format = .d32_sfloat,

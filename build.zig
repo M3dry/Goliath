@@ -1,11 +1,12 @@
 const std = @import("std");
-const shaders = @import("build_shaders.zig");
+const build_shaders = @import("build_shaders.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const shaders_mod = try shaders.compileAndEmbedShaders(b, b.path("shaders"), "shaders");
+    const shaders = build_shaders.shadersStep(b, "shaders");
+    b.getInstallStep().dependOn(shaders.step);
 
     const runtime_mod = b.dependency("runtime", .{
         .target = target,
@@ -19,7 +20,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "shaders", .module = shaders_mod },
+                .{ .name = "shaders", .module = shaders.mod },
                 .{ .name = "runtime", .module = runtime_mod },
             },
         }),
@@ -37,15 +38,9 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
-    });
-    const run_exe_tests = b.addRunArtifact(exe_tests);
+    if (b.args) |args| run_cmd.addArgs(args);
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_exe_tests.step);
+    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
+    test_step.dependOn(&b.addRunArtifact(exe_tests).step);
 }

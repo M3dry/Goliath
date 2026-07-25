@@ -6,6 +6,9 @@
         .runtime = .{
             .path = "runtime",
         },
+        .slang_build = .{
+            .path = "tooling/slang_build",
+        },
     },
     .paths = .{
         "build.zig",
