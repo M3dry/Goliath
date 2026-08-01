@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) !void {
     };
 
     const exe = b.addExecutable(exe_opts);
+    exe.use_llvm = true;
     b.installArtifact(exe);
 
     const exe_check = b.addExecutable(exe_opts);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zprobe = @import("zprobe");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
@@ -157,7 +158,7 @@ pub fn endUpdate(self: *Self, dev: *vk.DeviceProxy) void {
 
 pub fn updateUbo(self: *Self, alloc: std.mem.Allocator, binding: u32, data: []const u8) void {
     if (self.ubo_offset + data.len > ubo_size) {
-        std.log.warn("Descriptor pool UBO is full", .{});
+        zprobe.event(.warn, "descriptor pool ubo full", .{ .binding = binding, .len = data.len });
         return;
     }
 

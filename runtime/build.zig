@@ -14,8 +14,15 @@ pub fn build(b: *std.Build) !void {
     });
     const base_mod = base_dep.module("base");
 
-    const zmesh_dep = b.dependency("zmesh", .{});
-    const mw_dep = b.dependency("MemoryMapWriter", .{});
+    const zmesh_dep = b.dependency("zmesh", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const mw_dep = b.dependency("MemoryMapWriter", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const mod = b.addModule("runtime", .{
         .root_source_file = b.path("src/root.zig"),

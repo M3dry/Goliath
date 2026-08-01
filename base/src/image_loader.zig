@@ -18,14 +18,14 @@ pub const ImageData = struct {
 pub fn loadFromFile(allocator: Allocator, io: std.Io, path: []const u8) !ImageData {
     var read_buffer: [4096]u8 = undefined;
     var img = try zigimg.Image.fromFilePath(allocator, io, path, &read_buffer);
-    errdefer img.deinit(allocator);
+    defer img.deinit(allocator);
 
     return loadFromImage(allocator, &img);
 }
 
 pub fn loadFromMemory(allocator: Allocator, data: []const u8) !ImageData {
     var img = try zigimg.Image.fromMemory(allocator, data);
-    errdefer img.deinit(allocator);
+    defer img.deinit(allocator);
 
     return loadFromImage(allocator, &img);
 }

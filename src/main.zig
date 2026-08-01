@@ -11,32 +11,12 @@ const shaders = @import("shaders");
 
 const Culling = runtime.Culling;
 
-fn generateCheckerboard(allocator: std.mem.Allocator, width: u32, height: u32, cell_size: u32) !base.image_loader.ImageData {
-    const pixels = try allocator.alloc(u8, (width * height * 4));
-    errdefer allocator.free(pixels);
-
-    const colors = [_]u8{ 0xFF, 0xCC, 0x88, 0xFF, 0x44, 0x22, 0x11, 0xFF };
-    for (0..height) |y| {
-        for (0..width) |x| {
-            const cx = x / cell_size;
-            const cy = y / cell_size;
-            const ci = @as(usize, (cx + cy) % 2) * 4;
-            const i = (y * width + x) * 4;
-            pixels[i + 0] = colors[ci + 0];
-            pixels[i + 1] = colors[ci + 1];
-            pixels[i + 2] = colors[ci + 2];
-            pixels[i + 3] = colors[ci + 3];
-        }
-    }
-
-    return .{
-        .pixels = pixels,
-        .width = width,
-        .height = height,
-    };
-}
-
 pub fn main(init: std.process.Init) !void {
+    var file_subscriber: base.zprobe.FileSubscriber = undefined;
+    base.zprobe.FileSubscriber.init(&file_subscriber, init.io, std.Io.File.stdout(), &.{}, "Stdout");
+    defer file_subscriber.writer.flush() catch {};
+    file_subscriber.subscriber.register();
+
     const gpa = init.gpa;
     const render_extent: base.vk.Extent2D = .{ .width = 1920, .height = 1080 };
     const render_format: base.vk.Format = .r32g32b32a32_sfloat;
@@ -134,28 +114,30 @@ pub fn main(init: std.process.Init) !void {
     var imgui = try base.Imgui.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
-    const tex_width = 256;
-    const tex_height = 256;
+    // e2e texture test: Paladin albedo (material 0 baseColorTexture), uploaded for RenderDoc inspection.
+    // ponytail: throwaway test path — real upload moves to the asset loader.
+    const helmet_tex = (try runtime.Texture.fromGltf(gpa, init.io, gltf_data, 2, null)) orelse return error.HelmetTextureUnavailable;
+    defer helmet_tex.deinit(gpa);
+
+    const tex_width = helmet_tex.width;
+    const tex_height = helmet_tex.height;
     const tex_format = base.vk.Format.r8g8b8a8_srgb;
 
-    const tex_data = try generateCheckerboard(gpa, tex_width, tex_height, 32);
-    defer gpa.free(tex_data.pixels);
-
-    var checker_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "checkerboard", .{
+    var helmet_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "helmet_albedo", .{
         .format = tex_format,
         .extent = .{ .width = tex_width, .height = tex_height },
         .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
     });
-    defer checker_image.deinit(&ctx.destroy_queue);
+    defer helmet_image.deinit(&ctx.destroy_queue);
 
     {
         const tick = try transport.uploadImage(
             false,
             tex_format,
             .{ .width = tex_width, .height = tex_height, .depth = 1 },
-            tex_data.pixels,
+            helmet_tex.pixels,
             null,
-            checker_image.handle,
+            helmet_image.handle,
             .{
                 .aspect_mask = .{ .color_bit = true },
                 .mip_level = 0,
@@ -174,8 +156,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var checker_view = try base.ImageView.init(&ctx.graphics, .{
-        .image = checker_image.handle,
+    var helmet_view = try base.ImageView.init(&ctx.graphics, .{
+        .image = helmet_image.handle,
         .format = tex_format,
         .subresource_range = .{
             .aspect_mask = .{ .color_bit = true },
@@ -185,9 +167,9 @@ pub fn main(init: std.process.Init) !void {
             .layer_count = 1,
         },
     });
-    defer checker_view.deinit(&ctx.destroy_queue);
+    defer helmet_view.deinit(&ctx.destroy_queue);
 
-    var sampler = try base.Sampler.init(&ctx.graphics, .{});
+    var sampler = try base.Sampler.init(&ctx.graphics, helmet_tex.sampler);
     defer sampler.deinit(&ctx.destroy_queue);
 
     var vis = try runtime.Visbuffer.init(&ctx, render_extent);
@@ -354,7 +336,7 @@ pub fn main(init: std.process.Init) !void {
 
             const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
             dp.beginUpdate(set_id);
-            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, checker_view.handle, sampler.handle);
+            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, helmet_view.handle, sampler.handle);
             dp.endUpdate(&ctx.graphics.dev);
 
             const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);

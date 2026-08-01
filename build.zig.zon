@@ -13,6 +13,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build_shaders.zig",
         "src",
     },
     .fingerprint = 0x711cc6d0b2f8ef86, // Changing this has security and trust implications.

@@ -52,6 +52,8 @@ pub fn build(b: *std.Build) !void {
     });
 
     const zgui = b.dependency("zgui", .{
+        .target = target,
+        .optimize = optimize,
         .shared = false,
         .with_implot = true,
         .backend = .glfw_vulkan,
@@ -68,6 +70,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     }).module("zigimg");
 
+    const zprobe_mod = b.dependency("zprobe", .{
+        .target = target,
+        .optimize = optimize,
+        .provider = "Goliath",
+    }).module("root");
+
     const mod = b.addModule("base", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
@@ -76,6 +84,7 @@ pub fn build(b: *std.Build) !void {
             .{ .name = "zgui", .module = zgui.module("root") },
             .{ .name = "zmath", .module = zmath_mod },
             .{ .name = "zigimg", .module = zigimg_mod },
+            .{ .name = "zprobe", .module = zprobe_mod },
         },
         .target = target,
         .optimize = optimize,

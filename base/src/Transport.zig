@@ -82,7 +82,6 @@ const TaskDst = union(enum) {
     },
 };
 
-
 const Task = struct {
     dst: TaskDst,
     src: [*]const u8,
@@ -385,7 +384,6 @@ current_cmd_buf: u32,
 cmd_bufs: [num_frames]vk.CommandBuffer,
 cmd_buf_fences: [num_frames]vk.Fence,
 
-transport_graphics_semaphores: [num_frames]vk.Semaphore,
 timeline_semaphore: vk.Semaphore,
 timeline_counter: u64,
 finished_timeline: u64,
@@ -414,6 +412,7 @@ pending_submissions: std.ArrayListUnmanaged(PendingSubmission),
 drain_cmd_pool: vk.CommandPool,
 drain_cmd_buf: vk.CommandBuffer,
 drain_fence: vk.Fence,
+last_wait_semaphore: vk.Semaphore = .null_handle,
 
 pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !void {
     self.alloc = alloc;
@@ -474,13 +473,6 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
         }, null);
         fences_created += 1;
     }
-    var sem_created: u32 = 0;
-    errdefer for (self.transport_graphics_semaphores[0..sem_created]) |s| gc.dev.destroySemaphore(s, null);
-    for (&self.transport_graphics_semaphores) |*sem| {
-        sem.* = try gc.dev.createSemaphore(&.{}, null);
-        sem_created += 1;
-    }
-
     self.timeline_semaphore = try gc.dev.createSemaphore(&.{
         .p_next = &vk.SemaphoreTypeCreateInfo{
             .initial_value = 0,
@@ -505,6 +497,7 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
     self.drain_fence = try gc.dev.createFence(&.{
         .flags = .{ .signaled_bit = true },
     }, null);
+    self.last_wait_semaphore = .null_handle;
 
     self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, gc });
 }
@@ -518,10 +511,15 @@ pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
     gc.dev.destroyCommandPool(self.cmd_pool, null);
     gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
 
+    if (self.last_wait_semaphore != .null_handle) {
+        // The last drain submission may still be in flight; wait before destroying its semaphore.
+        _ = gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64)) catch {};
+        gc.dev.destroySemaphore(self.last_wait_semaphore, null);
+    }
+
     gc.dev.destroyFence(self.drain_fence, null);
     for (self.cmd_buf_fences) |f| gc.dev.destroyFence(f, null);
 
-    for (self.transport_graphics_semaphores) |s| gc.dev.destroySemaphore(s, null);
     gc.dev.destroySemaphore(self.timeline_semaphore, null);
 
     for (&self.task_queues) |*q| q.deinit(self.alloc);
@@ -807,6 +805,11 @@ pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
         if (!sub.valid) continue;
 
         _ = try gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64));
+        // The fence covers the previous drain submission, so its per-batch semaphore is idle.
+        if (self.last_wait_semaphore != .null_handle) {
+            gc.dev.destroySemaphore(self.last_wait_semaphore, null);
+            self.last_wait_semaphore = .null_handle;
+        }
         try gc.dev.resetFences(&[_]vk.Fence{self.drain_fence});
 
         try gc.dev.resetCommandBuffer(self.drain_cmd_buf, .{});
@@ -861,6 +864,7 @@ pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
                 })[0..1],
             })[0..1], self.drain_fence);
         }
+        if (self.has_dedicated_transport) self.last_wait_semaphore = sub.wait_semaphore;
 
         {
             self.ticket_mutex.lockUncancelable(self.io);
@@ -954,7 +958,6 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
         const fence = self.cmd_buf_fences[slot];
         const staging_buf = self.staging_buffers[slot];
         const staging_ptr = self.staging_ptrs[slot];
-        const binary_sem = self.transport_graphics_semaphores[slot];
 
         _ = try gc.dev.waitForFences(&[_]vk.Fence{fence}, .true, std.math.maxInt(u64));
         try gc.dev.resetFences(&[_]vk.Fence{fence});
@@ -1040,12 +1043,12 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                             .dst_access_mask = t.dst_access,
                             .src_queue_family_index = self.transport_family,
                             .dst_queue_family_index = self.graphics_family,
-                    .buffer = dst.buffer,
-                    .offset = dst.initial_offset,
-                    .size = t.full_src_size,
-                });
-            },
-            .image_dst => |dst| {
+                            .buffer = dst.buffer,
+                            .offset = dst.initial_offset,
+                            .size = t.full_src_size,
+                        });
+                    },
+                    .image_dst => |dst| {
                         try img_bars.append(self.alloc, .{
                             .src_stage_mask = .{},
                             .src_access_mask = .{},
@@ -1085,15 +1088,21 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
 
             try gc.dev.endCommandBuffer(cmd_buf);
 
+            // Fresh binary semaphore per batch: drain() waits on it exactly once and destroys it
+            // after the submission completes, so a batch can never re-signal an unconsumed
+            // semaphore (VUID-vkQueueSubmit2-semaphore-03868) and the worker never blocks on GPU.
+            // Split batches (no isLast task) have no graphics-side handoff, so no signal at all.
+            const batch_sem = if (has_graphics_work) try gc.dev.createSemaphore(&.{}, null) else .null_handle;
+
             try gc.dev.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
                 .command_buffer_info_count = 1,
                 .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
                     .command_buffer = cmd_buf,
                     .device_mask = 0,
                 })[0..1],
-                .signal_semaphore_info_count = 1,
+                .signal_semaphore_info_count = if (has_graphics_work) 1 else 0,
                 .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
-                    .semaphore = binary_sem,
+                    .semaphore = batch_sem,
                     .value = 0,
                     .stage_mask = .{ .all_transfer_bit = true },
                     .device_index = 0,
@@ -1106,7 +1115,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                 defer self.pending_mutex.unlock(self.io);
 
                 try self.pending_submissions.append(self.alloc, .{
-                    .wait_semaphore = binary_sem,
+                    .wait_semaphore = batch_sem,
                     .buffer_barriers = buf_bars,
                     .image_barriers = img_bars,
                     .ticket_ids = ticket_ids,

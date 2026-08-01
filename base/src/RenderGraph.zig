@@ -1,4 +1,5 @@
 const std = @import("std");
+const zprobe = @import("zprobe");
 const vk = @import("vulkan");
 const util = @import("util.zig");
 
@@ -291,7 +292,7 @@ fn attachmentLayoutToUsage(layout: vk.ImageLayout) ImageUsage {
             .layout = layout,
         },
         else => blk: {
-            std.log.warn("RenderGraph: unhandled image layout '{s}', falling back to general", .{@tagName(layout)});
+            zprobe.event(.warn, "unhandled image layout", .{ .layout = @tagName(layout) });
             break :blk .{
                 .stage = .{ .all_commands_bit = true },
                 .access = .{ .memory_read_bit = true, .memory_write_bit = true },

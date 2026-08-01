@@ -2,6 +2,7 @@ pub const vk = @import("vulkan");
 pub const zglfw = @import("zglfw");
 pub const zgui = @import("zgui");
 pub const zmath = @import("zmath");
+pub const zprobe = @import("zprobe");
 
 pub const timing = @import("timing.zig");
 pub const image_loader = @import("image_loader.zig");

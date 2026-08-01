@@ -27,8 +27,12 @@
             .hash = "zmath-0.11.0-dev-wjwivTwtAwDOjG2_KGP-HLtHrONfsFfHttalmxFAGVAK",
         },
         .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg.git#096115a3eeae1a4c477496d575f1f1f74865387c",
-            .hash = "zigimg-0.1.0-8_eo2mHBFwDLhWjXriR17_b7VF6qML1f98Xokp7ZZbop",
+            .url = "git+https://github.com/zigimg/zigimg?ref=zigimg_zig_0.16.0#d695acd97c02e57bb151e8f659d1280f5cd6ca70",
+            .hash = "zigimg-0.1.0-8_eo2oyaFwBZwJpmqPkCfVXWBrHcqbYwmrp1I6bTD3lI",
+        },
+        .zprobe = .{
+            .url = "git+https://github.com/m3dry/zprobe#e06a8158415383264fbc34e04292ac58764a8dc6",
+            .hash = "zprobe-0.0.1-LvXHVCpIAADLkXmIxUPSrheODDFIqeRP1oIhycOZCBQg",
         },
     },
     .minimum_zig_version = "0.16.0",

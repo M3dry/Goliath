@@ -2,6 +2,7 @@ const vk = @import("vulkan");
 const zglfw = @import("zglfw");
 
 const std = @import("std");
+const zprobe = @import("zprobe");
 const vma = @import("vma.zig").vma;
 
 const Self = @This();
@@ -37,16 +38,17 @@ fn checkLayerSupport(alloc: Allocator, vkb: *const BaseWrapper, required_layers:
 fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, msg_type: vk.DebugUtilsMessageTypeFlagsEXT, callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(.c) vk.Bool32 {
     const type_str = if (msg_type.general_bit_ext) "general" else if (msg_type.validation_bit_ext) "validation" else if (msg_type.performance_bit_ext) "performance" else if (msg_type.device_address_binding_bit_ext) "device addr" else "unknown";
 
-    const message: [*c]const u8 = if (callback_data) |cb_data| cb_data.p_message else "NO MESSAGE!";
+    const message: []const u8 = if (callback_data) |cb_data|
+        if (cb_data.p_message) |p| std.mem.span(p) else "NO MESSAGE!"
+    else
+        "NO MESSAGE!";
 
-    if (severity.verbose_bit_ext or severity.info_bit_ext) {
-        std.log.info("[{s}]: {s}", .{type_str, message});
+    if (severity.error_bit_ext) {
+        zprobe.event(.err, "vulkan messenger", .{ .type = type_str, .message = message });
     } else if (severity.warning_bit_ext) {
-        std.log.warn("[{s}]: {s}", .{type_str, message});
-    } else if (severity.error_bit_ext) {
-        std.log.err("[{s}]: {s}", .{type_str, message});
+        zprobe.event(.warn, "vulkan messenger", .{ .type = type_str, .message = message });
     } else {
-        std.log.info("[{s}]: {s}", .{type_str, message});
+        zprobe.event(.info, "vulkan messenger", .{ .type = type_str, .message = message });
     }
 
     return .false;
@@ -302,7 +304,7 @@ pub fn deinit(self: Self, alloc: Allocator) void {
         var stats_ptr: [*c]u8 = undefined;
         vma.vmaBuildStatsString(self.vma_alloc, &stats_ptr, @intFromEnum(vk.Bool32.true));
         defer vma.vmaFreeStatsString(self.vma_alloc, stats_ptr);
-        std.log.info("VMA stats:\n{s}", .{stats_ptr});
+        zprobe.event(.info, "vma stats", .{ .stats = std.mem.span(stats_ptr) });
     }
 
     vma.vmaDestroyAllocator(self.vma_alloc);

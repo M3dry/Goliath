@@ -21,6 +21,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build_shaders.zig",
         "src",
     },
     .fingerprint = 0xd5a60c7b6d03abe9,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zprobe = @import("zprobe");
 const zglfw = @import("zglfw");
 
 const Self = @This();
@@ -262,7 +263,7 @@ fn keyCallback(window: *zglfw.Window, key: Key, scancode: c_int, action: Action,
     if (key == .unknown) return;
     const state = window.getUserPointer(Self) orelse return;
     if (state.event_count >= state.events.len) {
-        std.log.warn("key callback: event buffer full", .{});
+        zprobe.event(.warn, "key callback: event buffer full", .{});
         return;
     }
     state.events[state.event_count] = .{ .key = .{ .key = key, .scancode = scancode, .action = action, .mods = mods } };
@@ -272,7 +273,7 @@ fn keyCallback(window: *zglfw.Window, key: Key, scancode: c_int, action: Action,
 fn mouseButtonCallback(window: *zglfw.Window, button: MouseButton, action: Action, mods: Mods) callconv(.c) void {
     const state = window.getUserPointer(Self) orelse return;
     if (state.event_count >= state.events.len) {
-        std.log.warn("mouse button callback: event buffer full", .{});
+        zprobe.event(.warn, "mouse button callback: event buffer full", .{});
         return;
     }
     state.events[state.event_count] = .{ .mouse_button = .{ .button = button, .action = action, .mods = mods } };
@@ -282,7 +283,7 @@ fn mouseButtonCallback(window: *zglfw.Window, button: MouseButton, action: Actio
 fn cursorPosCallback(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
     const state = window.getUserPointer(Self) orelse return;
     if (state.event_count >= state.events.len) {
-        std.log.warn("cursor pos callback: event buffer full", .{});
+        zprobe.event(.warn, "cursor pos callback: event buffer full", .{});
         return;
     }
     state.events[state.event_count] = .{ .mouse_move = .{ .x = xpos, .y = ypos } };
@@ -292,7 +293,7 @@ fn cursorPosCallback(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.c) v
 fn scrollCallback(window: *zglfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
     const state = window.getUserPointer(Self) orelse return;
     if (state.event_count >= state.events.len) {
-        std.log.warn("scroll callback: event buffer full", .{});
+        zprobe.event(.warn, "scroll callback: event buffer full", .{});
         return;
     }
     state.events[state.event_count] = .{ .mouse_scroll = .{ .x = xoffset, .y = yoffset } };
@@ -303,7 +304,7 @@ fn charCallback(window: *zglfw.Window, codepoint: u32) callconv(.c) void {
     const state = window.getUserPointer(Self) orelse return;
     if (codepoint > 0x10FFFF) return;
     if (state.event_count >= state.events.len) {
-        std.log.warn("char callback: event buffer full", .{});
+        zprobe.event(.warn, "char callback: event buffer full", .{});
         return;
     }
     state.events[state.event_count] = .{ .char_input = .{ .codepoint = @intCast(codepoint) } };
