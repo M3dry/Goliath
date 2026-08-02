@@ -138,8 +138,6 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
     defer extensions.deinit(alloc);
 
     try extensions.append(alloc, vk.extensions.ext_debug_utils.name);
-    // try extensions.append(alloc, vk.extensions.khr_portability_enumeration.name);
-    // try extensions.append(alloc, vk.extensions.khr_get_physical_device_properties_2.name);
 
     const glfw_exts = try zglfw.getRequiredInstanceExtensions();
     try extensions.appendSlice(alloc, glfw_exts);
@@ -156,7 +154,6 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
         .pp_enabled_layer_names = &required_layers,
         .enabled_extension_count = @intCast(extensions.items.len),
         .pp_enabled_extension_names = extensions.items.ptr,
-        .flags = .{ .enumerate_portability_bit_khr = true, },
     }, null);
 
     const vki = try alloc.create(InstanceWrapper);

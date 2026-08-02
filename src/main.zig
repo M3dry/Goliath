@@ -7,9 +7,81 @@ const zm = base.zmath;
 
 const zmesh = runtime.zmesh;
 
-const shaders = @import("shaders");
-
 const Culling = runtime.Culling;
+
+const pool_texture_count = 5; // 2 fallbacks + 3 Paladin textures
+
+fn waitForTick(transport: *base.Transport, gc: *const base.GraphicsCtx, tick: base.Transport.Ticket) !void {
+    while (!try transport.isReady(tick)) {
+        try transport.drain(gc);
+        std.Thread.yield() catch {};
+    }
+}
+
+fn uploadPoolTexture(
+    ctx: *base.Ctx,
+    transport: *base.Transport,
+    pool: *base.TexturePool,
+    image: *base.Image2D,
+    view: *base.ImageView,
+    sampler: *base.Sampler,
+    index: u32,
+    width: u32,
+    height: u32,
+    pixels: []const u8,
+    sampler_desc: base.Sampler.Description,
+) !void {
+    const fmt = base.vk.Format.r8g8b8a8_srgb;
+    image.* = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "texture_pool", .{
+        .format = fmt,
+        .extent = .{ .width = width, .height = height },
+        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
+    });
+    errdefer image.deinit(&ctx.destroy_queue);
+
+    const tick = try transport.uploadImage(
+        false,
+        fmt,
+        .{ .width = width, .height = height, .depth = 1 },
+        pixels,
+        null,
+        image.handle,
+        .{
+            .aspect_mask = .{ .color_bit = true },
+            .mip_level = 0,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+        .{ .x = 0, .y = 0, .z = 0 },
+        .undefined,
+        .shader_read_only_optimal,
+        .{ .fragment_shader_bit = true, .compute_shader_bit = true },
+        .{ .shader_read_bit = true },
+    );
+    try waitForTick(transport, &ctx.graphics, tick);
+
+    view.* = try base.ImageView.init(&ctx.graphics, .{
+        .image = image.handle,
+        .format = fmt,
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    });
+    errdefer view.deinit(&ctx.destroy_queue);
+
+    sampler.* = try base.Sampler.init(&ctx.graphics, sampler_desc);
+    errdefer sampler.deinit(&ctx.destroy_queue);
+
+    pool.update(&ctx.graphics.dev, index, view.handle, .shader_read_only_optimal, sampler.handle);
+}
+
+fn remapTextureIndex(gltf_ix: u32, fallback: u32) u32 {
+    return if (gltf_ix == runtime.PbrShading.no_texture) fallback else 2 + gltf_ix;
+}
 
 pub fn main(init: std.process.Init) !void {
     var file_subscriber: base.zprobe.FileSubscriber = undefined;
@@ -114,108 +186,56 @@ pub fn main(init: std.process.Init) !void {
     var imgui = try base.Imgui.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
-    // e2e texture test: Paladin albedo (material 0 baseColorTexture), uploaded for RenderDoc inspection.
-    // ponytail: throwaway test path — real upload moves to the asset loader.
-    const helmet_tex = (try runtime.Texture.fromGltf(gpa, init.io, gltf_data, 2, null)) orelse return error.HelmetTextureUnavailable;
-    defer helmet_tex.deinit(gpa);
+    // Texture pool: index 0 = white, 1 = flat normal (0.5, 0.5, 1) fallbacks, then Paladin textures.
+    var texture_pool = try base.TexturePool.init(ctx.graphics.dev, 16);
+    defer texture_pool.deinit(ctx.graphics.dev);
 
-    const tex_width = helmet_tex.width;
-    const tex_height = helmet_tex.height;
-    const tex_format = base.vk.Format.r8g8b8a8_srgb;
+    var pool_images: [pool_texture_count]base.Image2D = undefined;
+    var pool_views: [pool_texture_count]base.ImageView = undefined;
+    var pool_samplers: [pool_texture_count]base.Sampler = undefined;
+    defer for (0..pool_texture_count) |i| {
+        pool_samplers[i].deinit(&ctx.destroy_queue);
+        pool_views[i].deinit(&ctx.destroy_queue);
+        pool_images[i].deinit(&ctx.destroy_queue);
+    };
 
-    var helmet_image = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "helmet_albedo", .{
-        .format = tex_format,
-        .extent = .{ .width = tex_width, .height = tex_height },
-        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
-    });
-    defer helmet_image.deinit(&ctx.destroy_queue);
+    const white_pixel = [4]u8{ 255, 255, 255, 255 };
+    try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[0], &pool_views[0], &pool_samplers[0], 0, 1, 1, &white_pixel, .{});
+    const flat_normal_pixel = [4]u8{ 128, 128, 255, 255 };
+    try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[1], &pool_views[1], &pool_samplers[1], 1, 1, 1, &flat_normal_pixel, .{});
 
-    {
-        const tick = try transport.uploadImage(
-            false,
-            tex_format,
-            .{ .width = tex_width, .height = tex_height, .depth = 1 },
-            helmet_tex.pixels,
-            null,
-            helmet_image.handle,
-            .{
-                .aspect_mask = .{ .color_bit = true },
-                .mip_level = 0,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-            .{ .x = 0, .y = 0, .z = 0 },
-            .undefined,
-            .shader_read_only_optimal,
-            .{ .fragment_shader_bit = true },
-            .{ .shader_read_bit = true },
-        );
-        while (!try transport.isReady(tick)) {
-            try transport.drain(&ctx.graphics);
-            std.Thread.yield() catch {};
-        }
+    for (0..3) |gltf_ix| {
+        const tex = (try runtime.Texture.fromGltf(gpa, init.io, gltf_data, @intCast(gltf_ix), null)) orelse continue;
+        defer tex.deinit(gpa);
+        const pool_ix = 2 + gltf_ix;
+        try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[pool_ix], &pool_views[pool_ix], &pool_samplers[pool_ix], @intCast(pool_ix), tex.width, tex.height, tex.pixels, tex.sampler);
     }
 
-    var helmet_view = try base.ImageView.init(&ctx.graphics, .{
-        .image = helmet_image.handle,
-        .format = tex_format,
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    });
-    defer helmet_view.deinit(&ctx.destroy_queue);
+    // PBR material instance: gltf texture indices → pool indices, then upload.
+    var mat_handler = runtime.MaterialHandler{};
+    defer mat_handler.deinit(gpa, &ctx.destroy_queue, &transport);
 
-    var sampler = try base.Sampler.init(&ctx.graphics, helmet_tex.sampler);
-    defer sampler.deinit(&ctx.destroy_queue);
+    var inst = try runtime.PbrShading.PBRInstance.fromGltf(gltf_data, 0);
+    inst.albedo_map = remapTextureIndex(inst.albedo_map, 0);
+    inst.metallic_roughness_map = remapTextureIndex(inst.metallic_roughness_map, 0);
+    inst.normal_map = remapTextureIndex(inst.normal_map, 1);
+    inst.occlusion_map = remapTextureIndex(inst.occlusion_map, 0);
+    inst.emissive_map = remapTextureIndex(inst.emissive_map, 0);
+    try mat_handler.append(gpa, 0, inst);
+    try mat_handler.flush(&ctx.graphics, &transport, &ctx.destroy_queue);
+    try waitForTick(&transport, &ctx.graphics, mat_handler.schema_tickets[0]);
 
     var vis = try runtime.Visbuffer.init(&ctx, render_extent);
     defer vis.deinit(&ctx);
 
-    const set_layout = try ctx.graphics.dev.createDescriptorSetLayout(&.{
-        .flags = .{ .update_after_bind_pool_bit = true },
-        .binding_count = 1,
-        .p_bindings = &.{
-            base.vk.DescriptorSetLayoutBinding{
-                .binding = 0,
-                .descriptor_type = .combined_image_sampler,
-                .descriptor_count = 1,
-                .stage_flags = .{ .fragment_bit = true },
-                .p_immutable_samplers = null,
-            },
-        },
-    }, null);
-    defer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
+    var pbr = try runtime.PbrShading.init(&ctx, vis.set_layout, texture_pool.set_layout);
+    defer pbr.deinit(&ctx);
 
-    const skin_mod = try base.ShaderModule.init(&ctx, shaders.get(.skinned_test));
-    defer skin_mod.deinit(&ctx);
-
-    const mesh_mod = try base.ShaderModule.init(&ctx, shaders.get(.mesh_test));
-    defer mesh_mod.deinit(&ctx);
-
-    const SkinnedPC = struct {
-        vp: zm.Mat,
-        geometry_address: u64,
-        joints_address: u64,
-    };
-
-    var skinned_pipeline = try base.GraphicsPipeline.init(&ctx, .{
-        .vertex = skin_mod,
-        .vertex_entry_point = "vertex",
-        .fragment = mesh_mod,
-        .fragment_entry_point = "fragment",
-        .set_layouts = &.{set_layout},
-        .color_attachments = &.{.{ .format = render_format }},
-        .depth_format = .d32_sfloat,
-        .push_constant_size = @intCast(base.push_constant.size(SkinnedPC, base.layout.scalar)),
-    });
-    skinned_pipeline.depth_test_enable = .true;
-    skinned_pipeline.depth_write_enable = .true;
-    skinned_pipeline.depth_compare_op = .less;
-    defer skinned_pipeline.deinit(&ctx.graphics);
+    // Give the graph a bindable id for the texture pool's own set, on every frame pool.
+    var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
+    for (0..base.Ctx.frames_in_flight) |i| {
+        texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, texture_pool.set);
+    }
 
     var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
     defer world_instances_buf.deinit(&ctx.destroy_queue);
@@ -254,7 +274,7 @@ pub fn main(init: std.process.Init) !void {
     const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
     var cam = base.Camera.initLookAt(
         zm.f32x4(0, 0, 2, 1),
-        zm.f32x4(0,0,0,1),
+        zm.f32x4(0, 0, 0, 1),
         std.math.pi / 4.0,
         aspect,
         0.01,
@@ -325,7 +345,7 @@ pub fn main(init: std.process.Init) !void {
                 zgui.text("capture_keyboard: {any}", .{imgui.wantCaptureKeyboard()});
                 zgui.text("capture_mouse: {any}", .{imgui.wantCaptureMouse()});
 
-                zgui.text("x: {any}, y: {any}, z: {any}", .{cam.position[0], cam.position[1], cam.position[2]});
+                zgui.text("x: {any}, y: {any}, z: {any}", .{ cam.position[0], cam.position[1], cam.position[2] });
             }
             zgui.end();
 
@@ -334,15 +354,10 @@ pub fn main(init: std.process.Init) !void {
             const dt = ctx.depthTarget();
             const dp = ctx.descriptorPool();
 
-            const set_id = try dp.newSet(&ctx.graphics.dev, set_layout);
-            dp.beginUpdate(set_id);
-            try dp.updateSampledImage(gpa, 0, .shader_read_only_optimal, helmet_view.handle, sampler.handle);
-            dp.endUpdate(&ctx.graphics.dev);
-
             const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
             {
                 const buf = &joint_matrices_bufs[ctx.current_frame];
-                const mats: []zm.Mat = @as([*]zm.Mat, @alignCast(@ptrCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
+                const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
                 try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
                 if (!buf.coherent) buf.flush(ctx.graphics.vma_alloc, 0, buf.size);
             }
@@ -491,11 +506,55 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
+            const counters_ref = try rg.addBuffer(.{
+                .buffer = vis.counters_buf,
+                .offset = 0,
+                .size = vis.counters_buf.size,
+                .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+                .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
+            });
+            const offsets_ref = try rg.addBuffer(.{
+                .buffer = vis.offsets_buf,
+                .offset = 0,
+                .size = vis.offsets_buf.size,
+                .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+                .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
+            });
+            const dispatch_ref = try rg.addBuffer(.{
+                .buffer = vis.dispatch_buf,
+                .offset = 0,
+                .size = vis.dispatch_buf.size,
+                .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+                .end_usage = .{ .stage = .{ .compute_shader_bit = true, .draw_indirect_bit = true }, .access = .{ .shader_storage_read_bit = true, .indirect_command_read_bit = true } },
+            });
+            const frag_ids_ref = try rg.addBuffer(.{
+                .buffer = vis.frag_ids_buf,
+                .offset = 0,
+                .size = vis.frag_ids_buf.size,
+                .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+                .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
+            });
+            const instances_ref = try rg.addBuffer(.{
+                .buffer = mat_handler.schema_bufs[0],
+                .offset = 0,
+                .size = mat_handler.schema_bufs[0].size,
+                .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
+                .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
+            });
+
             const zero_pass = try rg.addTransferPass(.{});
+            try zero_pass.clearImage(.{
+                .image = rt_ref,
+                .color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } },
+            });
             try zero_pass.fillBuffer(.{ .buffer = renderables_ref, .size = renderables_buf.size });
             try zero_pass.fillBuffer(.{ .buffer = draw_cmds_ref, .size = draw_cmds_buf.size });
             try zero_pass.fillBuffer(.{ .buffer = arena_ref, .size = @sizeOf(u32) }); // reset arena write_offset
             try zero_pass.fillBuffer(.{ .buffer = skinned_draw_cmds_ref, .size = @sizeOf(u32) }); // reset skinned count
+            try zero_pass.fillBuffer(.{ .buffer = counters_ref, .size = vis.counters_buf.size });
+            try zero_pass.fillBuffer(.{ .buffer = offsets_ref, .size = vis.offsets_buf.size });
+            try zero_pass.fillBuffer(.{ .buffer = dispatch_ref, .size = vis.dispatch_buf.size });
+            try zero_pass.fillBuffer(.{ .buffer = frag_ids_ref, .size = vis.frag_ids_buf.size });
 
             var cull_pc_buf: [Culling.CullPC.size]u8 = undefined;
             try culling.cull(&rg, .{
@@ -531,15 +590,15 @@ pub fn main(init: std.process.Init) !void {
             // Upload skinned world instances
             {
                 const mapped = skinned_world_instances_buf.mapped.?;
-                const instances = std.mem.bytesAsSlice(u32, mapped[0..skinned_instance_count * Culling.skinned_world_instance_size]);
+                const instances = std.mem.bytesAsSlice(u32, mapped[0 .. skinned_instance_count * Culling.skinned_world_instance_size]);
                 // body_mesh at mesh_desc_ix 0, helmet at 1, both use joint_offset 0
-                instances[0] = 0; // mesh_desc_ix
+                instances[0] = 1; // mesh_desc_ix
                 instances[1] = 0; // joint_offset
                 // transform at offset 2 (two u32s skipped)
                 @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&mesh_world));
                 const base_off = Culling.skinned_world_instance_size;
                 const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
-                inst2[0] = 1; // mesh_desc_ix
+                inst2[0] = 0; // mesh_desc_ix
                 inst2[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&mesh_world));
                 if (!skinned_world_instances_buf.coherent)
@@ -577,9 +636,7 @@ pub fn main(init: std.process.Init) !void {
                     .view = dt.view,
                 },
                 .renderables_buf_ref = renderables_ref,
-                .renderables_buf_address = renderables_buf.address,
                 .draw_cmds_buf_ref = draw_cmds_ref,
-                .draw_cmds_buf_address = draw_cmds_buf.address,
                 .max_draw_count = max_instances,
                 .pc_buf = &vb_pc_buf,
             });
@@ -594,29 +651,49 @@ pub fn main(init: std.process.Init) !void {
                     .view = dt.view,
                 },
                 .renderables_buf_ref = renderables_ref,
-                .renderables_buf_address = renderables_buf.address,
                 .draw_cmds_buf_ref = skinned_draw_cmds_ref,
-                .draw_cmds_buf_address = skinned_draw_cmds_buf.address,
-                .joints_buf_address = joint_matrices_bufs[ctx.current_frame].address,
+                .joints_ref = joints_ref,
+                .arena_ref = arena_ref,
                 .max_draw_count = max_instances,
                 .pc_buf = &skinned_vb_pc_buf,
             });
 
-            const gpass = try rg.addGraphicsPass(.{
-                .pipeline = &skinned_pipeline,
-                .color_attachments = &.{.{ .image = rt_ref, .view = rt.view, .load_op = .clear, .store_op = .store, .clear_color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } } }},
-                .depth_attachment = .{ .image = depth_ref, .view = dt.view },
-                .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = render_extent },
-                .descriptor_sets = &.{set_id},
+            const shading_set = try vis.shadingSet(gpa, &ctx.graphics.dev, dp, ctx.current_frame, rt.view);
+
+            var count_pc_buf: [runtime.Visbuffer.count_pc_size]u8 = undefined;
+            var offsets_pc_buf: [runtime.Visbuffer.offsets_pc_size]u8 = undefined;
+            var fragments_pc_buf: [runtime.Visbuffer.fragments_pc_size]u8 = undefined;
+            try vis.process(&rg, .{
+                .vis_ref = vis_ref,
+                .set_id = shading_set,
+                .renderables_buf_ref = renderables_ref,
+                .counters_ref = counters_ref,
+                .offsets_ref = offsets_ref,
+                .dispatch_ref = dispatch_ref,
+                .frag_ids_ref = frag_ids_ref,
+                .count_pc_buf = &count_pc_buf,
+                .offsets_pc_buf = &offsets_pc_buf,
+                .fragments_pc_buf = &fragments_pc_buf,
             });
 
-            var pc_buf1: [base.push_constant.size(SkinnedPC, base.layout.scalar)]u8 = undefined;
-            base.push_constant.write(SkinnedPC, &pc_buf1, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = body_mesh.lods[0].geometry_buffer.?.@"0".address, .joints_address = joint_matrices_bufs[ctx.current_frame].address }, base.layout.scalar);
-            try gpass.draw(.{ .push_constant = pc_buf1[0..], .vertex_count = body_mesh.lods[0].draw_count });
-
-            var pc_buf2: [base.push_constant.size(SkinnedPC, base.layout.scalar)]u8 = undefined;
-            base.push_constant.write(SkinnedPC, &pc_buf2, .{ .vp = zm.mul(mesh_world, cam.view_projection), .geometry_address = helmet_mesh.lods[0].geometry_buffer.?.@"0".address, .joints_address = joint_matrices_bufs[ctx.current_frame].address }, base.layout.scalar);
-            try gpass.draw(.{ .push_constant = pc_buf2[0..], .vertex_count = helmet_mesh.lods[0].draw_count });
+            var pbr_pc_buf: [runtime.PbrShading.pbr_pc_size]u8 = undefined;
+            try pbr.shade(&rg, gpa, &ctx.graphics.dev, dp, texture_pool_sets[ctx.current_frame], .{
+                .screen = .{ render_extent.width, render_extent.height },
+                .vis_ref = vis_ref,
+                .target_ref = rt_ref,
+                .vis_set_id = shading_set,
+                .dispatch_ref = dispatch_ref,
+                .frag_ids_ref = frag_ids_ref,
+                .renderables_ref = renderables_ref,
+                .instances_ref = instances_ref,
+                .arena_ref = arena_ref,
+                .cam_pos = .{ cam.position[0], cam.position[1], cam.position[2] },
+                .view_proj = cam.view_projection,
+                .lights_address = 0,
+                .light_count = 0,
+                .schema_count = 1,
+                .pc_buf = &pbr_pc_buf,
+            });
 
             try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
 

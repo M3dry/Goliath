@@ -80,12 +80,46 @@ void compute(uint3 tid : SV_DispatchThreadID) {
 
     LODEntry lod = pc.lod_entries[md.lod_offset + selected_lod];
 
-    // Allocate arena space for GPU skinning cache
-    uint vertex_count = lod.vertex_count;
+    // Arena stores a compact copy of the skinned geometry (joints/weights excluded).
+    uint orig_stride = get_stride(lod.geometry);
+    uint arena_stride = orig_stride;
+    if (lod.geometry.joints0_offset != 0xFFFFFFFF) arena_stride -= 2;
+    if (lod.geometry.weights0_offset != 0xFFFFFFFF) arena_stride -= 4;
+    uint indexed_flag = lod.geometry.stride_indexed_tangents & 0x80000000u;
+    uint arena_stride_packed = indexed_flag | arena_stride;
 
-    uint arena_offset;
-    InterlockedAdd(pc.arena.write_offset, vertex_count, arena_offset);
-    if (arena_offset + vertex_count > pc.arena_capacity) return;
+    // Allocate arena space: GeometryBuffer header + vertex_count * arena_stride
+    // Allocate arena space: GeometryBuffer header + vertex_count * arena_stride.
+    // Round the allocation up to an even number of u32s so every region's geometry
+    // starts 8-byte aligned (the header's uint64_t indices field requires it).
+    const uint ARENA_HEADER_SIZE = 14;
+    uint alloc_size = (ARENA_HEADER_SIZE + lod.vertex_count * arena_stride + 1u) & ~1u;
+    uint arena_off;
+    InterlockedAdd(pc.arena.write_offset, alloc_size, arena_off);
+    if (arena_off + alloc_size > pc.arena_capacity) return;
+
+    // Write the arena geometry header: compact GeometryBuffer, pos at offset 0,
+    // joints/weights nulled. All attribute offsets are relative to position.
+    uint pos_off = lod.geometry.position_offset;
+    // Arena indices point at the original index buffer so load_vertex resolves the
+    // unique vertex index into the arena (slots are laid out by vert.index * stride).
+    uint64_t orig_indices = uint64_t(lod.geometry.indices);
+    pc.arena.data[arena_off + 1 + 0] = uint(orig_indices & 0xFFFFFFFFu); // indices low
+    pc.arena.data[arena_off + 1 + 1] = uint(orig_indices >> 32u); // indices high
+    pc.arena.data[arena_off + 1 + 2] = arena_stride_packed;
+    pc.arena.data[arena_off + 1 + 3] = 0; // position_offset = 0
+    pc.arena.data[arena_off + 1 + 4] = lod.geometry.normal_offset != 0xFFFFFFFF ? lod.geometry.normal_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 5] = lod.geometry.tangent_offset != 0xFFFFFFFF ? lod.geometry.tangent_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 6] = lod.geometry.color0_offset != 0xFFFFFFFF ? lod.geometry.color0_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 7] = lod.geometry.texcoord0_offset != 0xFFFFFFFF ? lod.geometry.texcoord0_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 8] = lod.geometry.texcoord1_offset != 0xFFFFFFFF ? lod.geometry.texcoord1_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 9] = lod.geometry.texcoord2_offset != 0xFFFFFFFF ? lod.geometry.texcoord2_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 10] = lod.geometry.texcoord3_offset != 0xFFFFFFFF ? lod.geometry.texcoord3_offset - pos_off : 0xFFFFFFFF;
+    pc.arena.data[arena_off + 1 + 11] = 0xFFFFFFFF; // joints0_offset = null
+    pc.arena.data[arena_off + 1 + 12] = 0xFFFFFFFF; // weights0_offset = null
+
+    // Arena geometry address: skip the arena write_offset (1 u32) + allocated offset in bytes
+    uint64_t arena_geo_addr = uint64_t(pc.arena) + 8 + uint64_t(arena_off) * 4;
 
     uint slot;
     InterlockedAdd(pc.renderables.count, 1, slot);
@@ -104,7 +138,7 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     }
 
     pc.renderables.data[slot].transform = inst.transform;
-    pc.renderables.data[slot].geometry = lod.geometry;
+    pc.renderables.data[slot].geometry = (GeometryBuffer*)arena_geo_addr;
     pc.renderables.data[slot].material_schema = lod.material_schema;
     pc.renderables.data[slot].material_instance = lod.material_instance;
 

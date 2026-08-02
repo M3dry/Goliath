@@ -28,7 +28,6 @@ pub const RenderGraph = @import("RenderGraph.zig");
 pub const Image2D = @import("image.zig").Image2D;
 pub const ImageView = @import("image.zig").ImageView;
 
-
 const std = @import("std");
 const vma = @import("vma.zig").vma;
 
@@ -61,13 +60,13 @@ pub const Ctx = struct {
 
     pub const Opts = struct {
         pub const Size = union(enum) {
-            dims: struct {u32, u32},
+            dims: struct { u32, u32 },
             fullscreen,
         };
 
         name: [*:0]const u8,
 
-        size: Size = .{ .dims = .{0,0} },
+        size: Size = .{ .dims = .{ 0, 0 } },
         resizable: bool = false,
 
         render_extent: vk.Extent2D = .{ .width = 1920, .height = 1080 },
@@ -85,13 +84,13 @@ pub const Ctx = struct {
         zglfw.windowHint(.auto_iconify, false);
 
         const mon_width, const mon_height = if (zglfw.getPrimaryMonitor()) |mon| blk: {
-            const mode = mon.getVideoMode() catch break :blk .{0, 0};
-            break :blk .{mode.width, mode.height};
-        } else .{0, 0};
+            const mode = mon.getVideoMode() catch break :blk .{ 0, 0 };
+            break :blk .{ mode.width, mode.height };
+        } else .{ 0, 0 };
 
         var width: c_int, var height: c_int = switch (window_opts.size) {
             .dims => |dims| .{ @intCast(dims.@"0"), @intCast(dims.@"1") },
-            .fullscreen => .{mon_width, mon_height},
+            .fullscreen => .{ mon_width, mon_height },
         };
 
         const window = try zglfw.createWindow(width, height, name, null, null);
@@ -204,9 +203,9 @@ pub const Ctx = struct {
 
     pub fn prepare_frame(self: *Ctx) !PrepareResult {
         const frame = &self.frames[self.current_frame];
-        _ = try self.graphics.dev.waitForFences(&[_]vk.Fence{ frame.fence }, .true, std.math.maxInt(u64));
+        _ = try self.graphics.dev.waitForFences(&[_]vk.Fence{frame.fence}, .true, std.math.maxInt(u64));
         self.destroy_queue.flush(self.graphics.vma_alloc, &self.graphics.dev);
-        try self.graphics.dev.resetFences(&[_]vk.Fence{ frame.fence });
+        try self.graphics.dev.resetFences(&[_]vk.Fence{frame.fence});
 
         const acquired = self.graphics.dev.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), frame.semaphore, .null_handle) catch |err| if (err == error.OutOfDateKHR) vk.DeviceWrapper.AcquireNextImageKHRResult{
             .result = .error_out_of_date_khr,
@@ -242,7 +241,9 @@ pub const Ctx = struct {
         try self.graphics.dev.resetCommandBuffer(frame.cmd_buf, .{});
 
         try self.graphics.dev.beginCommandBuffer(frame.cmd_buf, &.{
-            .flags = .{ .one_time_submit_bit = true, },
+            .flags = .{
+                .one_time_submit_bit = true,
+            },
         });
 
         const barriers = [_]vk.ImageMemoryBarrier2{
@@ -398,20 +399,17 @@ pub const Ctx = struct {
                     .device_mask = 0,
                 })[0..1],
                 .signal_semaphore_info_count = 2,
-                .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{
-                    .{
-                        .semaphore = self.swapchain.images[acquired_image].semaphore,
-                        .value = 0,
-                        .stage_mask = .{ .all_commands_bit = true },
-                        .device_index = 0,
-                    },
-                    .{
-                        .semaphore = self.timeline_semaphore,
-                        .value = self.timeline_value,
-                        .stage_mask = .{ .all_commands_bit = true },
-                        .device_index = 0,
-                    }
-                },
+                .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{ .{
+                    .semaphore = self.swapchain.images[acquired_image].semaphore,
+                    .value = 0,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                }, .{
+                    .semaphore = self.timeline_semaphore,
+                    .value = self.timeline_value,
+                    .stage_mask = .{ .all_commands_bit = true },
+                    .device_index = 0,
+                } },
             })[0..1], frame.fence);
 
             res = self.graphics.dev.queuePresentKHR(self.graphics.graphics_queue, &.{
@@ -487,7 +485,7 @@ const Frame = struct {
         self.render_target = try Image2D.init(gc, gc.vma_alloc, "render_target", .{
             .format = format,
             .extent = extent,
-            .usage = .{ .color_attachment_bit = true, .transfer_src_bit = true, .transfer_dst_bit = true },
+            .usage = .{ .color_attachment_bit = true, .storage_bit = true, .transfer_src_bit = true, .transfer_dst_bit = true },
         });
         errdefer self.render_target.deinitNow(gc.vma_alloc);
 

@@ -9,6 +9,8 @@ pub const Skeleton = @import("Skeleton.zig");
 pub const Skin = @import("Skin.zig");
 pub const Animation = @import("Animation.zig");
 pub const Texture = @import("Texture.zig");
+pub const PbrShading = @import("PbrShading.zig");
+pub const MaterialHandler = @import("MaterialHandler.zig");
 pub const Culling = @import("Culling.zig");
 
 // test  {

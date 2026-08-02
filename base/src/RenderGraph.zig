@@ -94,6 +94,18 @@ pub const FillBuffer = struct {
     value: u32 = 0,
 };
 
+pub const ClearImage = struct {
+    image: ImageRef,
+    color: vk.ClearColorValue,
+    range: vk.ImageSubresourceRange = .{
+        .aspect_mask = .{ .color_bit = true },
+        .base_mip_level = 0,
+        .level_count = vk.REMAINING_MIP_LEVELS,
+        .base_array_layer = 0,
+        .layer_count = vk.REMAINING_ARRAY_LAYERS,
+    },
+};
+
 pub const ColorAttachment = struct {
     image: ImageRef,
     view: vk.ImageView,
@@ -166,6 +178,9 @@ pub const ComputePass = struct {
 
 pub const TransferPass = struct {
     fills: std.ArrayListUnmanaged(FillBuffer) = .empty,
+    clears: std.ArrayListUnmanaged(ClearImage) = .empty,
+    reads_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
+    writes_images: std.ArrayListUnmanaged(ImageRefUsage) = .empty,
     reads_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
     writes_buffers: std.ArrayListUnmanaged(BufferRefUsage) = .empty,
 };
@@ -219,6 +234,15 @@ fn PassHandle(comptime pass_type: PassType) type {
                 .usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_write_bit = true } },
             });
             try tp.fills.append(self.rg.alloc, fill);
+        }
+        pub fn clearImage(self: @This(), clear: ClearImage) Allocator.Error!void {
+            if (pass_type != .transfer) @compileError("clearImage is only valid on transfer passes");
+            const tp = &self.rg.passes.items[self.index].transfer;
+            try tp.writes_images.append(self.rg.alloc, .{
+                .ref = clear.image,
+                .usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_write_bit = true }, .layout = .transfer_dst_optimal },
+            });
+            try tp.clears.append(self.rg.alloc, clear);
         }
     };
 }
@@ -428,6 +452,12 @@ fn collectPassRequirementsTransfer(
     pass_images.clearRetainingCapacity();
     pass_buffers.clearRetainingCapacity();
 
+    for (tp.reads_images.items) |ri| {
+        try upsert(ImageUsage, pass_images, ri.ref.index, ri.usage, mergeImageUsage, alloc);
+    }
+    for (tp.writes_images.items) |wi| {
+        try upsert(ImageUsage, pass_images, wi.ref.index, wi.usage, mergeImageUsage, alloc);
+    }
     for (tp.reads_buffers.items) |rb| {
         try upsert(BufferUsage, pass_buffers, rb.ref.index, rb.usage, mergeBufferUsage, alloc);
     }
@@ -676,6 +706,7 @@ fn recordTransferPass(
     gc: *const GraphicsCtx,
     cmd_buf: vk.CommandBuffer,
     buf_contracts: []const BufferContract,
+    img_contracts: []const ImageContract,
 ) void {
     for (tp.fills.items) |fill| {
         gc.dev.cmdFillBuffer(
@@ -684,6 +715,15 @@ fn recordTransferPass(
             fill.offset,
             fill.size,
             fill.value,
+        );
+    }
+    for (tp.clears.items) |clear| {
+        gc.dev.cmdClearColorImage(
+            cmd_buf,
+            img_contracts[clear.image.index].image,
+            .transfer_dst_optimal,
+            &clear.color,
+            &[_]vk.ImageSubresourceRange{clear.range},
         );
     }
 }
@@ -771,6 +811,7 @@ pub fn deinit(self: *RenderGraph) void {
         switch (pass.*) {
             .graphics => |*gp| {
                 self.alloc.free(gp.color_attachments);
+                self.alloc.free(gp.descriptor_sets);
                 gp.reads_images.deinit(self.alloc);
                 gp.reads_buffers.deinit(self.alloc);
                 gp.writes_images.deinit(self.alloc);
@@ -778,6 +819,7 @@ pub fn deinit(self: *RenderGraph) void {
                 gp.draws.deinit(self.alloc);
             },
             .compute => |*cp| {
+                self.alloc.free(cp.descriptor_sets);
                 cp.reads_images.deinit(self.alloc);
                 cp.reads_buffers.deinit(self.alloc);
                 cp.writes_images.deinit(self.alloc);
@@ -785,6 +827,9 @@ pub fn deinit(self: *RenderGraph) void {
             },
             .transfer => |*tp| {
                 tp.fills.deinit(self.alloc);
+                tp.clears.deinit(self.alloc);
+                tp.reads_images.deinit(self.alloc);
+                tp.writes_images.deinit(self.alloc);
                 tp.reads_buffers.deinit(self.alloc);
                 tp.writes_buffers.deinit(self.alloc);
             },
@@ -811,13 +856,15 @@ pub fn getBuffer(self: *const RenderGraph, ref: BufferRef) Buffer {
 
 pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!GraphicsPassHandle {
     const color_attachments = try self.alloc.dupe(ColorAttachment, desc.color_attachments);
+    // descriptor_sets may be a stack literal in the caller; own a copy.
+    const descriptor_sets = try self.alloc.dupe(u64, desc.descriptor_sets);
     try self.passes.append(self.alloc, .{ .graphics = .{
         .pipeline = desc.pipeline,
         .color_attachments = color_attachments,
         .depth_attachment = desc.depth_attachment,
         .stencil_attachment = desc.stencil_attachment,
         .render_area = desc.render_area,
-        .descriptor_sets = desc.descriptor_sets,
+        .descriptor_sets = descriptor_sets,
         .indirect = desc.indirect,
         .indirect_count = desc.indirect_count,
         .query_pool = desc.query_pool,
@@ -827,9 +874,11 @@ pub fn addGraphicsPass(self: *RenderGraph, desc: GraphicsPass) Allocator.Error!G
 }
 
 pub fn addComputePass(self: *RenderGraph, desc: ComputePass) Allocator.Error!ComputePassHandle {
+    // descriptor_sets may be a stack literal in the caller; own a copy.
+    const descriptor_sets = try self.alloc.dupe(u64, desc.descriptor_sets);
     try self.passes.append(self.alloc, .{ .compute = .{
         .pipeline = desc.pipeline,
-        .descriptor_sets = desc.descriptor_sets,
+        .descriptor_sets = descriptor_sets,
         .dispatch = desc.dispatch,
         .indirect = desc.indirect,
         .query_pool = desc.query_pool,
@@ -1005,6 +1054,17 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
                     .writes_buffers = .empty,
                 };
 
+                for (o_tp.reads_images.items) |item| {
+                    try new_tp.reads_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
+                }
+                for (o_tp.writes_images.items) |item| {
+                    try new_tp.writes_images.append(self.alloc, .{ .ref = .{ .index = image_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
+                }
+                for (o_tp.clears.items) |item| {
+                    var c = item;
+                    c.image.index = image_remap.get(item.image.index) orelse return error.DanglingReference;
+                    try new_tp.clears.append(self.alloc, c);
+                }
                 for (o_tp.reads_buffers.items) |item| {
                     try new_tp.reads_buffers.append(self.alloc, .{ .ref = .{ .index = buffer_remap.get(item.ref.index) orelse return error.DanglingReference }, .usage = item.usage });
                 }
@@ -1178,7 +1238,7 @@ pub fn run(
                 img_bars.clearRetainingCapacity();
                 buf_bars.clearRetainingCapacity();
 
-                recordTransferPass(tp, gc, cmd_buf, self.buffers.items);
+                recordTransferPass(tp, gc, cmd_buf, self.buffers.items, self.images.items);
             },
         }
     }

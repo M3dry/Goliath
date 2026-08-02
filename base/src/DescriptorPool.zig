@@ -18,14 +18,22 @@ ubo_buffer: Buffer = .{},
 ubo_offset: u64 = 0,
 
 write_id: u64 = std.math.maxInt(u64),
-write_buffer_infos: std.ArrayListUnmanaged(vk.DescriptorBufferInfo) = .{ .items = &.{}, .capacity = 0 },
-write_image_infos: std.ArrayListUnmanaged(vk.DescriptorImageInfo) = .{ .items = &.{}, .capacity = 0 },
-write_queue: std.ArrayListUnmanaged(vk.WriteDescriptorSet) = .{ .items = &.{}, .capacity = 0 },
-buffer_write_indices: std.ArrayListUnmanaged(u32) = .{ .items = &.{}, .capacity = 0 },
-image_write_indices: std.ArrayListUnmanaged(u32) = .{ .items = &.{}, .capacity = 0 },
+write_buffer_infos: std.ArrayList(vk.DescriptorBufferInfo) = .empty,
+write_image_infos: std.ArrayList(vk.DescriptorImageInfo) = .empty,
+write_queue: std.ArrayList(vk.WriteDescriptorSet) = .empty,
+buffer_write_indices: std.ArrayList(u32) = .empty,
+image_write_indices: std.ArrayList(u32) = .empty,
+
+// Raw vk descriptor sets (e.g. TexturePool's own set) registered for graph binding.
+external_sets: std.ArrayList(vk.DescriptorSet) = .empty,
 
 const max_sets: u32 = 500;
 const ubo_size: vk.DeviceSize = 16000;
+
+pub fn registerExternalSet(self: *Self, alloc: Allocator, set: vk.DescriptorSet) !u64 {
+    try self.external_sets.append(alloc, set);
+    return max_sets + @as(u64, @intCast(self.external_sets.items.len - 1));
+}
 
 pub fn init(
     gc: *const GraphicsCtx,
@@ -78,6 +86,7 @@ pub fn deinit(
     self.ubo_buffer.deinitNow(gc.vma_alloc);
 
     alloc.free(self.sets);
+    self.external_sets.deinit(alloc);
 
     self.write_buffer_infos.deinit(alloc);
     self.write_image_infos.deinit(alloc);
@@ -110,7 +119,13 @@ pub fn bindSet(
     layout: vk.PipelineLayout,
     set: u32,
 ) void {
-    gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
+    if (id >= max_sets) {
+        const ext_ix: usize = @intCast(id - max_sets);
+        if (ext_ix >= self.external_sets.items.len) return;
+        gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.external_sets.items[ext_ix]}, null);
+    } else {
+        gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
+    }
 }
 
 pub fn updateSet(
@@ -156,7 +171,7 @@ pub fn endUpdate(self: *Self, dev: *vk.DeviceProxy) void {
     self.write_id = std.math.maxInt(u64);
 }
 
-pub fn updateUbo(self: *Self, alloc: std.mem.Allocator, binding: u32, data: []const u8) void {
+pub fn updateUbo(self: *Self, alloc: std.mem.Allocator, binding: u32, data: []const u8) !void {
     if (self.ubo_offset + data.len > ubo_size) {
         zprobe.event(.warn, "descriptor pool ubo full", .{ .binding = binding, .len = data.len });
         return;

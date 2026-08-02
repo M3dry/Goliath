@@ -86,8 +86,8 @@ pub fn update(
         .sampler = sampler,
     }};
 
-    var dummy_buf: vk.DescriptorBufferInfo = .{ .buffer = .null_handle, .offset = 0, .range = 0 };
-    var dummy_buf_view: vk.BufferView = .{};
+    var dummy_buf: [1]vk.DescriptorBufferInfo = .{.{ .buffer = .null_handle, .offset = 0, .range = 0 }};
+    var dummy_buf_view: [1]vk.BufferView = std.mem.zeroes([1]vk.BufferView);
 
     dev.updateDescriptorSets(&.{
         .{
