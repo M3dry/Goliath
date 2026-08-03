@@ -11,7 +11,7 @@ struct PushConstants {
 
 struct VSOutput {
     float4 position : SV_Position;
-    nointerpolation uint vis_packed : TEXCOORD0;
+    nointerpolation uint vis_packed;
 };
 
 [shader("vertex")]

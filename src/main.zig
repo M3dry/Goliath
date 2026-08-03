@@ -1,5 +1,6 @@
 const std = @import("std");
 const runtime = @import("runtime");
+const shaders = @import("shaders");
 
 const base = runtime.base;
 const zgui = base.zgui;
@@ -125,18 +126,7 @@ pub fn main(init: std.process.Init) !void {
     for (&anims, 0..) |*a, i| a.* = try runtime.Animation.fromGltf(gpa, gltf_data, @intCast(i), &skeleton);
     defer for (&anims) |*a| a.deinit(gpa);
 
-    // Find the node that references mesh 0 and grab its world transform
-    // const target_mesh = &gltf_data.meshes.?[0];
     const mesh_world = zm.scaling(0.05, 0.05, 0.05);
-    // const mesh_world: zm.Mat = blk: {
-    //     for (gltf_data.nodes.?[0..gltf_data.nodes_count]) |*node| {
-    //         if (node.mesh == target_mesh) {
-    //             const w = node.transformWorld();
-    //             break :blk zm.matFromArr(w);
-    //         }
-    //     }
-    //     break :blk zm.identity();
-    // };
 
     const gltf_result0 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
     defer gpa.free(gltf_result0.name);
@@ -271,13 +261,61 @@ pub fn main(init: std.process.Init) !void {
     var culling = try Culling.init(&ctx);
     defer culling.deinit(&ctx);
 
+    // GRID drawing pipeline
+    const fullscreen_vert_spirv = shaders.get(.fullscreen_triangle);
+    const fullscreen_vert_mod = try base.ShaderModule.init(&ctx, fullscreen_vert_spirv);
+    defer fullscreen_vert_mod.deinit(&ctx);
+
+    const grid_spirv = shaders.get(.grid);
+    const grid_mod = try base.ShaderModule.init(&ctx, grid_spirv);
+    defer grid_mod.deinit(&ctx);
+
+    const GridPC = struct {
+        inv_vp: zm.Mat,
+        vp: zm.Mat,
+        cam_pos: [3]f32,
+        screen: [2]f32,
+    };
+
+    var grid_pipeline = try base.GraphicsPipeline.init(&ctx, .{
+        .fragment = grid_mod,
+        .vertex = fullscreen_vert_mod,
+        .push_constant_size = @sizeOf(GridPC),
+        .color_attachments = &.{
+            base.GraphicsPipeline.ColorAttachment{
+                .format = render_format,
+                .blend = .{
+                    .blend_enable = .true,
+                    .src_color_blend_factor = .one,
+                    .src_alpha_blend_factor = .one,
+                    .dst_color_blend_factor = .one_minus_src_alpha,
+                    .dst_alpha_blend_factor = .one_minus_src_alpha,
+                    .color_blend_op = .add,
+                    .alpha_blend_op = .add,
+                    .color_write_mask = .{
+                        .r_bit = true,
+                        .g_bit = true,
+                        .b_bit = true,
+                        .a_bit = true,
+                    }
+                },
+            },
+        },
+        .depth_format = base.Ctx.depth_texture,
+    });
+    defer grid_pipeline.deinit(&ctx.graphics);
+    grid_pipeline.depth_test_enable = .true;
+    grid_pipeline.depth_compare_op = .less;
+    grid_pipeline.depth_write_enable = .true;
+    grid_pipeline.cull_mode = .{};
+
     const aspect = @as(f32, @floatFromInt(ctx.render_extent.width)) / @as(f32, @floatFromInt(ctx.render_extent.height));
     var cam = base.Camera.initLookAt(
         zm.f32x4(0, 0, 2, 1),
         zm.f32x4(0, 0, 0, 1),
         std.math.pi / 4.0,
         aspect,
-        0.01,
+        0.1,
         100.0,
     );
 
@@ -545,7 +583,7 @@ pub fn main(init: std.process.Init) !void {
             const zero_pass = try rg.addTransferPass(.{});
             try zero_pass.clearImage(.{
                 .image = rt_ref,
-                .color = .{ .float_32 = .{ 0.1, 0.2, 0.6, 1.0 } },
+                .color = .{ .float_32 = .{ 36.0/255.0, 36.0/255.0, 36.0/255.0, 1.0 } },
             });
             try zero_pass.fillBuffer(.{ .buffer = renderables_ref, .size = renderables_buf.size });
             try zero_pass.fillBuffer(.{ .buffer = draw_cmds_ref, .size = draw_cmds_buf.size });
@@ -649,6 +687,7 @@ pub fn main(init: std.process.Init) !void {
                 .depth_attachment = .{
                     .image = depth_ref,
                     .view = dt.view,
+                    .load_op = .load,
                 },
                 .renderables_buf_ref = renderables_ref,
                 .draw_cmds_buf_ref = skinned_draw_cmds_ref,
@@ -691,8 +730,39 @@ pub fn main(init: std.process.Init) !void {
                 .view_proj = cam.view_projection,
                 .lights_address = 0,
                 .light_count = 0,
-                .schema_count = 1,
                 .pc_buf = &pbr_pc_buf,
+            });
+
+
+            var grid_pc_buf: [base.push_constant.size(GridPC, base.layout.scalar)]u8 = undefined;
+            base.push_constant.write(GridPC, &grid_pc_buf, .{
+                .inv_vp = zm.inverse(cam.view_projection),
+                .vp = cam.view_projection,
+                .cam_pos = .{ cam.position[0], cam.position[1], cam.position[2] },
+                .screen = .{ render_extent.width, render_extent.height },
+            }, base.layout.scalar);
+
+            const grid_pass = try rg.addGraphicsPass(.{
+                .pipeline = &grid_pipeline,
+                .color_attachments = &.{.{
+                    .image = rt_ref,
+                    .view = rt.view,
+                    .load_op = .load,
+                    .store_op = .store,
+                }},
+                .depth_attachment = .{
+                    .image = depth_ref,
+                    .view = dt.view,
+                    .load_op = .load,
+                },
+                .render_area = .{
+                    .offset = .{ .x = 0, .y = 0 },
+                    .extent = render_extent,
+                },
+            });
+            try grid_pass.draw(.{
+                .push_constant = &grid_pc_buf,
+                .vertex_count = 3,
             });
 
             try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());

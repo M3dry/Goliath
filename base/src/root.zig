@@ -40,6 +40,7 @@ pub const BlitStrategy = enum {
 
 pub const Ctx = struct {
     pub const frames_in_flight: u32 = 2;
+    pub const depth_texture: vk.Format = .d32_sfloat;
 
     window: *zglfw.Window,
     graphics: GraphicsCtx,
@@ -510,7 +511,7 @@ const Frame = struct {
 
     pub fn initDepthTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
         self.depth_target = try Image2D.init(gc, gc.vma_alloc, "depth_target", .{
-            .format = .d32_sfloat,
+            .format = Ctx.depth_texture,
             .extent = extent,
             .usage = .{ .depth_stencil_attachment_bit = true },
         });
@@ -705,10 +706,6 @@ const Swapchain = struct {
     }
 };
 
-// ponytail: import forces test runner to discover test blocks in sub-modules
 test {
-    _ = @import("push_constant.zig");
-    _ = @import("layout.zig");
-    _ = @import("util/ring_buffer.zig");
-    _ = @import("RenderGraph.zig");
+    std.testing.refAllDecls(@This());
 }

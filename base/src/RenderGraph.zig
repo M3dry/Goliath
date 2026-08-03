@@ -210,8 +210,11 @@ fn PassHandle(comptime pass_type: PassType) type {
         pub fn writeBuffer(self: @This(), buffer: BufferRef, usage: BufferUsage) Allocator.Error!void {
             try @field(self.rg.passes.items[self.index], pass_name).writes_buffers.append(self.rg.alloc, .{ .ref = buffer, .usage = usage });
         }
-        pub fn setDescriptorSets(self: @This(), sets: []const u64) void {
-            @field(self.rg.passes.items[self.index], pass_name).descriptor_sets = sets;
+        pub fn setDescriptorSets(self: @This(), sets: []const u64) Allocator.Error!void {
+            // Caller may pass a stack literal; own a copy (deinit frees it).
+            const old = @field(self.rg.passes.items[self.index], pass_name).descriptor_sets;
+            if (old.len > 0) self.rg.alloc.free(old);
+            @field(self.rg.passes.items[self.index], pass_name).descriptor_sets = try self.rg.alloc.dupe(u64, sets);
         }
 
         pub fn draw(self: @This(), call: DrawCall) Allocator.Error!void {
@@ -385,10 +388,18 @@ fn collectIoRequirements(
     writes_buffers: []const BufferRefUsage,
     alloc: Allocator,
 ) Allocator.Error!void {
-    for (reads_images) |ri| { try upsert(ImageUsage, pass_images, ri.ref.index, ri.usage, mergeImageUsage, alloc); }
-    for (reads_buffers) |rb| { try upsert(BufferUsage, pass_buffers, rb.ref.index, rb.usage, mergeBufferUsage, alloc); }
-    for (writes_images) |wi| { try upsert(ImageUsage, pass_images, wi.ref.index, wi.usage, mergeImageUsage, alloc); }
-    for (writes_buffers) |wb| { try upsert(BufferUsage, pass_buffers, wb.ref.index, wb.usage, mergeBufferUsage, alloc); }
+    for (reads_images) |ri| {
+        try upsert(ImageUsage, pass_images, ri.ref.index, ri.usage, mergeImageUsage, alloc);
+    }
+    for (reads_buffers) |rb| {
+        try upsert(BufferUsage, pass_buffers, rb.ref.index, rb.usage, mergeBufferUsage, alloc);
+    }
+    for (writes_images) |wi| {
+        try upsert(ImageUsage, pass_images, wi.ref.index, wi.usage, mergeImageUsage, alloc);
+    }
+    for (writes_buffers) |wb| {
+        try upsert(BufferUsage, pass_buffers, wb.ref.index, wb.usage, mergeBufferUsage, alloc);
+    }
 }
 
 fn collectPassRequirementsGraphics(
@@ -972,7 +983,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
                         .layout = sa.layout,
                     } else null,
                     .render_area = o_gp.render_area,
-                    .descriptor_sets = o_gp.descriptor_sets,
+                    .descriptor_sets = if (o_gp.descriptor_sets.len > 0) try self.alloc.dupe(u64, o_gp.descriptor_sets) else &.{}, // other.deinit() below frees the source; own a copy
                     .reads_images = .empty,
                     .reads_buffers = .empty,
                     .writes_images = .empty,
@@ -1017,7 +1028,7 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
             .compute => |*o_cp| {
                 var new_cp = ComputePass{
                     .pipeline = o_cp.pipeline,
-                    .descriptor_sets = o_cp.descriptor_sets,
+                    .descriptor_sets = if (o_cp.descriptor_sets.len > 0) try self.alloc.dupe(u64, o_cp.descriptor_sets) else &.{}, // other.deinit() below frees the source; own a copy
                     .reads_images = .empty,
                     .reads_buffers = .empty,
                     .writes_images = .empty,
@@ -1341,7 +1352,7 @@ test "builder: add images, buffers, passes and deinit" {
         .layout = .color_attachment_optimal,
     });
     try gp_handle.draw(.{ .vertex_count = 3 });
-    gp_handle.setDescriptorSets(&.{ 7 });
+    try gp_handle.setDescriptorSets(&.{7});
 
     try std.testing.expectEqual(@as(usize, 2), rg.images.items.len);
     try std.testing.expectEqual(@as(usize, 2), rg.buffers.items.len);
@@ -1383,7 +1394,7 @@ test "builder: add images, buffers, passes and deinit" {
         .access = .{ .shader_write_bit = true },
         .layout = .general,
     });
-    cp_handle.setDescriptorSets(&.{ 42 });
+    try cp_handle.setDescriptorSets(&.{42});
 
     try std.testing.expectEqual(@as(usize, 2), rg.passes.items.len);
 
@@ -1406,12 +1417,16 @@ test "indirect: drawIndirect and drawIndirectCount with BufferRef" {
     const cb: Buffer = .{ .handle = @enumFromInt(200) };
 
     const ind_buf = try rg.addBuffer(.{
-        .buffer = vb, .offset = 0, .size = 256,
+        .buffer = vb,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
     const cnt_buf = try rg.addBuffer(.{
-        .buffer = cb, .offset = 0, .size = 16,
+        .buffer = cb,
+        .offset = 0,
+        .size = 16,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1450,7 +1465,9 @@ test "indirect: dispatchIndirect with BufferRef" {
     const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const ind_buf = try rg.addBuffer(.{
-        .buffer = vb, .offset = 0, .size = 64,
+        .buffer = vb,
+        .offset = 0,
+        .size = 64,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1484,7 +1501,9 @@ test "merge: explicit read + indirect draw merge into one barrier" {
         .end_usage = .{ .stage = .{}, .access = .{}, .layout = .undefined },
     });
     const ind_buf = try rg.addBuffer(.{
-        .buffer = vb, .offset = 0, .size = 256,
+        .buffer = vb,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1594,7 +1613,9 @@ test "merge: two disjoint graphs concatenate cleanly" {
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
     });
     _ = try rg1.addBuffer(.{
-        .buffer = buf1, .offset = 0, .size = 64,
+        .buffer = buf1,
+        .offset = 0,
+        .size = 64,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1614,7 +1635,9 @@ test "merge: two disjoint graphs concatenate cleanly" {
         .end_usage = .{ .stage = .{ .color_attachment_output_bit = true }, .access = .{ .color_attachment_write_bit = true }, .layout = .color_attachment_optimal },
     });
     _ = try rg2.addBuffer(.{
-        .buffer = buf2, .offset = 0, .size = 128,
+        .buffer = buf2,
+        .offset = 0,
+        .size = 128,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1653,7 +1676,9 @@ test "merge: overlapping image dedup and end_usage inheritance" {
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .transfer_src_optimal },
     });
     _ = try rg1.addBuffer(.{
-        .buffer = shared_buf, .offset = 0, .size = 32,
+        .buffer = shared_buf,
+        .offset = 0,
+        .size = 32,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
         .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
     });
@@ -1671,7 +1696,9 @@ test "merge: overlapping image dedup and end_usage inheritance" {
         .end_usage = .{ .stage = .{ .all_transfer_bit = true }, .access = .{ .transfer_read_bit = true }, .layout = .present_src_khr },
     });
     _ = try rg2.addBuffer(.{
-        .buffer = shared_buf, .offset = 0, .size = 32,
+        .buffer = shared_buf,
+        .offset = 0,
+        .size = 32,
         .start_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
         .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
     });
@@ -1782,7 +1809,9 @@ test "merge: indirect BufferRef is rebased" {
 
     const buf: Buffer = .{ .handle = @enumFromInt(10) };
     _ = try rg1.addBuffer(.{
-        .buffer = buf, .offset = 0, .size = 256,
+        .buffer = buf,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1790,7 +1819,9 @@ test "merge: indirect BufferRef is rebased" {
     var rg2 = RenderGraph.init(alloc);
 
     const ind_buf = try rg2.addBuffer(.{
-        .buffer = buf, .offset = 0, .size = 256,
+        .buffer = buf,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1817,7 +1848,9 @@ test "transfer: fillBuffer records write with transfer barrier" {
     const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const buf = try rg.addBuffer(.{
-        .buffer = vb, .offset = 0, .size = 256,
+        .buffer = vb,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
         .end_usage = .{ .stage = .{ .vertex_input_bit = true }, .access = .{ .memory_read_bit = true } },
     });
@@ -1847,7 +1880,9 @@ test "transfer: collectPassRequirementsTransfer merges buffer writes" {
     const vb: Buffer = .{ .handle = @enumFromInt(100) };
 
     const buf = try rg.addBuffer(.{
-        .buffer = vb, .offset = 0, .size = 256,
+        .buffer = vb,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1884,7 +1919,9 @@ test "merge: transfer pass refs are rebased through dedup" {
 
     const buf: Buffer = .{ .handle = @enumFromInt(10) };
     _ = try rg1.addBuffer(.{
-        .buffer = buf, .offset = 0, .size = 256,
+        .buffer = buf,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });
@@ -1892,7 +1929,9 @@ test "merge: transfer pass refs are rebased through dedup" {
     var rg2 = RenderGraph.init(alloc);
 
     const fill_buf = try rg2.addBuffer(.{
-        .buffer = buf, .offset = 0, .size = 256,
+        .buffer = buf,
+        .offset = 0,
+        .size = 256,
         .start_usage = .{ .stage = .{}, .access = .{} },
         .end_usage = .{ .stage = .{}, .access = .{} },
     });

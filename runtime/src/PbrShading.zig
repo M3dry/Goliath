@@ -16,7 +16,8 @@ ubo_set_layout: base.vk.DescriptorSetLayout,
 // the pool's fallback texture before upload.
 pub const no_texture: u32 = std.math.maxInt(u32);
 
-// 21 u32, matches the slang PBRInstance struct byte-for-byte.
+pub const schema_id: u16 = 0;
+
 pub const PBRInstance = extern struct {
     albedo_map: u32,
     metallic_roughness_map: u32,
@@ -104,7 +105,6 @@ pub const PBRInstance = extern struct {
     }
 };
 
-// Scalar layout — must match the slang PBRPC struct byte-for-byte.
 pub const PBRPC = struct {
     screen: [2]u32,
     dispatch_address: u64,
@@ -114,7 +114,6 @@ pub const PBRPC = struct {
 };
 pub const pbr_pc_size = base.push_constant.size(PBRPC, base.layout.scalar);
 
-// UBO set 2 content — must match the slang ShadingData struct byte-for-byte.
 pub const ShadingData = extern struct {
     cam_pos: [3]f32,
     view_proj_matrix: [16]f32,
@@ -172,7 +171,6 @@ pub const ShadeParams = struct {
     view_proj: base.zmath.Mat,
     lights_address: u64,
     light_count: u32,
-    schema_count: u32,
     pc_buf: *[pbr_pc_size]u8,
 };
 
@@ -203,55 +201,54 @@ pub fn shade(
     dp.endUpdate(dev);
 
     const entry_stride = @sizeOf(Visbuffer.DispatchEntry);
-    for (0..p.schema_count) |schema| {
-        base.push_constant.write(PBRPC, p.pc_buf, .{
-            .screen = p.screen,
-            .dispatch_address = rg.getBuffer(p.dispatch_ref).address + schema * entry_stride,
-            .frag_ids_address = rg.getBuffer(p.frag_ids_ref).address,
-            .renderables_address = rg.getBuffer(p.renderables_ref).address,
-            .instances_address = rg.getBuffer(p.instances_ref).address,
-        }, base.layout.scalar);
 
-        const pass = try rg.addComputePass(.{
-            .pipeline = &self.pipeline,
-            .descriptor_sets = &.{ p.vis_set_id, texture_pool_set, ubo_set },
-            .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
-            .indirect = .{
-                .push_constant = p.pc_buf,
-                .buffer = p.dispatch_ref,
-                .offset = schema * entry_stride,
-            },
-        });
-        try pass.readImage(p.vis_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_read_bit = true },
-            .layout = .general,
-        });
-        try pass.writeImage(p.target_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_write_bit = true },
-            .layout = .general,
-        });
-        try pass.readBuffer(p.frag_ids_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_read_bit = true },
-        });
-        try pass.readBuffer(p.renderables_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_read_bit = true },
-        });
-        try pass.readBuffer(p.instances_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_read_bit = true },
-        });
-        try pass.readBuffer(p.dispatch_ref, .{
-            .stage = .{ .compute_shader_bit = true, .draw_indirect_bit = true },
-            .access = .{ .shader_storage_read_bit = true, .indirect_command_read_bit = true },
-        });
-        // Skinned geometry cache, written by the skinned raster earlier this frame.
-        try pass.readBuffer(p.arena_ref, .{
-            .stage = .{ .compute_shader_bit = true },
-            .access = .{ .shader_storage_read_bit = true },
-        });
-    }
+    base.push_constant.write(PBRPC, p.pc_buf, .{
+        .screen = p.screen,
+        .dispatch_address = rg.getBuffer(p.dispatch_ref).address + schema_id * entry_stride,
+        .frag_ids_address = rg.getBuffer(p.frag_ids_ref).address,
+        .renderables_address = rg.getBuffer(p.renderables_ref).address,
+        .instances_address = rg.getBuffer(p.instances_ref).address,
+    }, base.layout.scalar);
+
+    const pass = try rg.addComputePass(.{
+        .pipeline = &self.pipeline,
+        .descriptor_sets = &.{ p.vis_set_id, texture_pool_set, ubo_set },
+        .dispatch = .{ .group_count_x = 1, .group_count_y = 1, .group_count_z = 1 },
+        .indirect = .{
+            .push_constant = p.pc_buf,
+            .buffer = p.dispatch_ref,
+            .offset = schema_id * entry_stride,
+        },
+    });
+    try pass.readImage(p.vis_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_read_bit = true },
+        .layout = .general,
+    });
+    try pass.writeImage(p.target_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_write_bit = true },
+        .layout = .general,
+    });
+    try pass.readBuffer(p.frag_ids_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_read_bit = true },
+    });
+    try pass.readBuffer(p.renderables_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_read_bit = true },
+    });
+    try pass.readBuffer(p.instances_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_read_bit = true },
+    });
+    try pass.readBuffer(p.dispatch_ref, .{
+        .stage = .{ .compute_shader_bit = true, .draw_indirect_bit = true },
+        .access = .{ .shader_storage_read_bit = true, .indirect_command_read_bit = true },
+    });
+    // Skinned geometry cache, written by the skinned raster earlier this frame.
+    try pass.readBuffer(p.arena_ref, .{
+        .stage = .{ .compute_shader_bit = true },
+        .access = .{ .shader_storage_read_bit = true },
+    });
 }
