@@ -29,7 +29,7 @@ pub const Image2D = @import("image.zig").Image2D;
 pub const ImageView = @import("image.zig").ImageView;
 
 const std = @import("std");
-const vma = @import("vma.zig").vma;
+pub const vma = @import("vma.zig").vma;
 
 const Allocator = std.mem.Allocator;
 

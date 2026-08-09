@@ -628,7 +628,8 @@ fn beginRendering(
 ) Allocator.Error!void {
     var color_buf: SmallBuffer(vk.RenderingAttachmentInfo, 16) = .{};
     defer color_buf.deinit(alloc);
-    const colors = try color_buf.get(alloc, gp.color_attachments.len);
+    try color_buf.resize(alloc, gp.color_attachments.len);
+    const colors = color_buf.items();
 
     for (gp.color_attachments, 0..) |att, i| {
         colors[i] = .{

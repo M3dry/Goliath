@@ -1,6 +1,8 @@
 const std = @import("std");
 const vk = @import("vulkan");
 
+const DestroyQueue = @import("DestroyQueue.zig");
+
 const Self = @This();
 
 pool: vk.DescriptorPool = .null_handle,
@@ -62,13 +64,16 @@ pub fn init(dev: vk.DeviceProxy, capacity_: u32) !Self {
     return tp;
 }
 
-pub fn deinit(self: *Self, dev: vk.DeviceProxy) void {
+pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
     if (self.set_layout != .null_handle) {
-        dev.destroyDescriptorSetLayout(self.set_layout, null);
+        destroy_queue.enqueueDescriptorSetLayout(self.set_layout) catch @panic("OOM");
+        self.set_layout = .null_handle;
     }
     if (self.pool != .null_handle) {
-        dev.destroyDescriptorPool(self.pool, null);
+        destroy_queue.enqueueDescriptorPool(self.pool) catch @panic("OOM");
+        self.pool = .null_handle;
     }
+
     self.capacity = 0;
 }
 

@@ -18,3 +18,7 @@ pub fn fullRange(aspect: vk.ImageAspectFlags) vk.ImageSubresourceRange {
         .layer_count = vk.REMAINING_ARRAY_LAYERS,
     };
 }
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

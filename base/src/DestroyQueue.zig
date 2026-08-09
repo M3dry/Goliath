@@ -9,6 +9,8 @@ const Entry = union(enum) {
     image: struct { handle: vk.Image, allocation: vma.VmaAllocation },
     image_view: vk.ImageView,
     sampler: vk.Sampler,
+    descriptor_set_layout: vk.DescriptorSetLayout,
+    descriptor_pool: vk.DescriptorPool,
 };
 
 alloc: std.mem.Allocator,
@@ -30,6 +32,8 @@ pub fn deinit(self: *Self, vma_alloc: anytype, dev: *vk.DeviceProxy) void {
                 .image => |i| vma.vmaDestroyImage(vma_alloc, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
                 .image_view => |v| dev.destroyImageView(v, null),
                 .sampler => |s| dev.destroySampler(s, null),
+                .descriptor_set_layout => |s| dev.destroyDescriptorSetLayout(s, null),
+                .descriptor_pool => |p| dev.destroyDescriptorPool(p, null),
             }
         }
         frame.deinit(self.alloc);
@@ -52,6 +56,14 @@ pub fn enqueueSampler(self: *Self, sampler: vk.Sampler) !void {
     try self.frames[self.current_frame].append(self.alloc, .{ .sampler = sampler });
 }
 
+pub fn enqueueDescriptorSetLayout(self: *Self, set_layout: vk.DescriptorSetLayout) !void {
+    try self.frames[self.current_frame].append(self.alloc, .{ .descriptor_set_layout = set_layout });
+}
+
+pub fn enqueueDescriptorPool(self: *Self, pool: vk.DescriptorPool) !void {
+    try self.frames[self.current_frame].append(self.alloc, .{ .descriptor_pool = pool });
+}
+
 pub fn flush(self: *Self, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy) void {
     const frame = &self.frames[self.current_frame];
     for (frame.items) |entry| {
@@ -60,6 +72,8 @@ pub fn flush(self: *Self, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy) voi
             .image => |i| vma.vmaDestroyImage(vma_alloc, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
             .image_view => |v| dev.destroyImageView(v, null),
             .sampler => |s| dev.destroySampler(s, null),
+            .descriptor_set_layout => |s| dev.destroyDescriptorSetLayout(s, null),
+            .descriptor_pool => |p| dev.destroyDescriptorPool(p, null),
         }
     }
     frame.clearRetainingCapacity();

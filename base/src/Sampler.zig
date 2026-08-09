@@ -7,6 +7,10 @@ const Self = @This();
 
 handle: vk.Sampler = .null_handle,
 
+pub const null_handle: Self = .{
+    .handle = .null_handle,
+};
+
 pub const Description = struct {
     mag_filter: vk.Filter = .linear,
     min_filter: vk.Filter = .linear,

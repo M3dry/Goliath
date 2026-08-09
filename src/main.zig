@@ -178,7 +178,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Texture pool: index 0 = white, 1 = flat normal (0.5, 0.5, 1) fallbacks, then Paladin textures.
     var texture_pool = try base.TexturePool.init(ctx.graphics.dev, 16);
-    defer texture_pool.deinit(ctx.graphics.dev);
+    defer texture_pool.deinit(&ctx.destroy_queue);
 
     var pool_images: [pool_texture_count]base.Image2D = undefined;
     var pool_views: [pool_texture_count]base.ImageView = undefined;
