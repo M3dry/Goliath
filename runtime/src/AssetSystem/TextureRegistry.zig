@@ -3,10 +3,23 @@ const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 const Loader = @import("Loader.zig");
+const resolver = @import("resolver.zig");
+const types = @import("Types.zig");
+const Gid = types.Gid;
+
+const Image = struct {
+    image: base.Image2D = .{},
+    view: base.ImageView = .{},
+
+    pub fn deinit(self: *Image, destroy_queue: *base.DestroyQueue) void {
+        self.image.deinit(destroy_queue);
+        self.view.deinit(destroy_queue);
+    }
+};
 
 textures: std.MultiArrayList(struct {
     ref_count: u32 = 0,
-    image: base.Image2D = .{},
+    image: Image = .{},
 }) = .empty,
 textures_free_list: std.ArrayList(u32) = .empty,
 
@@ -21,9 +34,14 @@ alloc: Allocator,
 
 const TextureRegistry = @This();
 
+const Blob = struct {
+    sampler: base.Sampler.Description,
+    texture_gid: Gid,
+};
+
 pub fn init(gc: *const base.GraphicsCtx, alloc: Allocator) !TextureRegistry {
     return .{
-        .texture_pool = try .init(gc.dev, 1000),
+        .texture_pool = try .init(gc, 1000),
         .alloc = alloc,
     };
 }
@@ -62,10 +80,14 @@ pub fn new_sampled_texture(self: *TextureRegistry) !u32 {
 
     _ = try self.sampled_texture_free_list.addOne(self.alloc);
     _ = try self.sampled_textures.append(self.alloc, .{});
-    return @intCast(self.sampled_texture_free_list.items.len - 1);
+    return @intCast(self.sampled_textures.len - 1);
 }
 
-pub fn acquire_texture(self: *TextureRegistry, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+    std.debug.assert(delta > 0);
+    _ = gc;
+    _ = resolved;
+
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
     if (ref_count.* == 0) {
@@ -73,49 +95,68 @@ pub fn acquire_texture(self: *TextureRegistry, loader: *Loader, cold: *const Loa
         _ = data;
     }
 
-    ref_count.* += 1;
+    ref_count.* += delta;
 }
 
-pub fn acquire_sampled_texture(self: *TextureRegistry, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+pub fn acquire_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+    std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
 
     if (ref_count.* == 0) {
         const data = try loader.load(cold);
-        _ = data;
+
+        // var reader = std.Io.Reader.fixed(data);
+        // const blob = try reader.takeStruct(Blob, .little); - Can't use because takeStruct requires packed or extern on Blob
+        const parsed_blob = try std.json.parseFromSlice(Blob, self.alloc, data, .{ .duplicate_field_behavior = .@"error" });
+        defer parsed_blob.deinit();
+        const blob = parsed_blob.value;
+
+        var sampler = try base.Sampler.init(gc, blob.sampler);
+        errdefer sampler.deinitNow(gc);
+
+        const kind, const dense = resolver.lookup(resolved, blob.texture_gid) orelse return error.InvalidTextureGid;
+        if (kind != .texture) return error.KindNotTexture;
+
+        const image = self.textures.items(.image)[dense];
+        self.texture_pool.update(gc, id, image.view.handle, .shader_read_only_optimal, sampler.handle);
     }
 
-    ref_count.* += 1;
+    ref_count.* += delta;
 }
 
-pub fn release_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, id: u32) !void {
+pub fn release_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, id: u32, delta: u32) !types.ReleaseReturn {
+    std.debug.assert(delta > 0);
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
 
     std.debug.assert(ref_count.* != 0);
-    ref_count.* -= 1;
+    ref_count.* -= delta;
 
-    if (ref_count.* != 0) return;
+    if (ref_count.* != 0) return .kept;
 
     var image = slice.items(.image)[id];
     image.deinit(destroy_queue);
 
     try self.textures_free_list.append(self.alloc, id);
+    return .released;
 }
 
-pub fn release_sampled_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, id: u32) !void {
+pub fn release_sampled_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, id: u32, delta: u32) !types.ReleaseReturn {
+    std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
 
     std.debug.assert(ref_count.* != 0);
-    ref_count.* -= 1;
+    ref_count.* -= delta;
 
-    if (ref_count.* != 0) return;
+    if (ref_count.* != 0) return .kept;
 
     var sampler = slice.items(.sampler)[id];
     sampler.deinit(destroy_queue);
 
     try self.textures_free_list.append(self.alloc, id);
+    return .released;
 }
 
 test {

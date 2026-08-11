@@ -2,6 +2,7 @@ const vk = @import("vulkan");
 const zm = @import("zmath");
 
 pub const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
+pub const SmallBitset = @import("util/small_bitset.zig").SmallBitset;
 pub const RingBuffer = @import("util/ring_buffer.zig").RingBuffer;
 
 pub const AABB = struct {

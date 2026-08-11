@@ -77,7 +77,7 @@ fn uploadPoolTexture(
     sampler.* = try base.Sampler.init(&ctx.graphics, sampler_desc);
     errdefer sampler.deinit(&ctx.destroy_queue);
 
-    pool.update(&ctx.graphics.dev, index, view.handle, .shader_read_only_optimal, sampler.handle);
+    pool.update(&ctx.graphics, index, view.handle, .shader_read_only_optimal, sampler.handle);
 }
 
 fn remapTextureIndex(gltf_ix: u32, fallback: u32) u32 {
@@ -177,7 +177,7 @@ pub fn main(init: std.process.Init) !void {
     defer imgui.deinit(ctx.graphics.dev);
 
     // Texture pool: index 0 = white, 1 = flat normal (0.5, 0.5, 1) fallbacks, then Paladin textures.
-    var texture_pool = try base.TexturePool.init(ctx.graphics.dev, 16);
+    var texture_pool = try base.TexturePool.init(&ctx.graphics, 16);
     defer texture_pool.deinit(&ctx.destroy_queue);
 
     var pool_images: [pool_texture_count]base.Image2D = undefined;

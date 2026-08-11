@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 
+const GraphicsCtx = @import("GraphicsCtx.zig");
 const DestroyQueue = @import("DestroyQueue.zig");
 
 const Self = @This();
@@ -10,11 +11,11 @@ set_layout: vk.DescriptorSetLayout = .null_handle,
 set: vk.DescriptorSet = .null_handle,
 capacity: u32 = 0,
 
-pub fn init(dev: vk.DeviceProxy, capacity_: u32) !Self {
+pub fn init(gc: *const GraphicsCtx, capacity_: u32) !Self {
     var tp: Self = .{};
     tp.capacity = capacity_;
 
-    tp.pool = try dev.createDescriptorPool(&.{
+    tp.pool = try gc.dev.createDescriptorPool(&.{
         .flags = .{ .update_after_bind_bit = true },
         .max_sets = 1,
         .pool_size_count = 1,
@@ -42,7 +43,7 @@ pub fn init(dev: vk.DeviceProxy, capacity_: u32) !Self {
         .p_binding_flags = @ptrCast(&binding_flags),
     };
 
-    tp.set_layout = try dev.createDescriptorSetLayout(&.{
+    tp.set_layout = try gc.dev.createDescriptorSetLayout(&.{
         .p_next = &binding_flags_info,
         .flags = .{ .update_after_bind_pool_bit = true },
         .binding_count = 1,
@@ -54,7 +55,7 @@ pub fn init(dev: vk.DeviceProxy, capacity_: u32) !Self {
         .p_descriptor_counts = @ptrCast(&tp.capacity),
     };
 
-    try dev.allocateDescriptorSets(&.{
+    try gc.dev.allocateDescriptorSets(&.{
         .p_next = &count_info,
         .descriptor_pool = tp.pool,
         .descriptor_set_count = 1,
@@ -79,7 +80,7 @@ pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
 
 pub fn update(
     self: *Self,
-    dev: *vk.DeviceProxy,
+    gc: *const GraphicsCtx,
     index: u32,
     view: vk.ImageView,
     layout: vk.ImageLayout,
@@ -94,7 +95,7 @@ pub fn update(
     var dummy_buf: [1]vk.DescriptorBufferInfo = .{.{ .buffer = .null_handle, .offset = 0, .range = 0 }};
     var dummy_buf_view: [1]vk.BufferView = std.mem.zeroes([1]vk.BufferView);
 
-    dev.updateDescriptorSets(&.{
+    gc.dev.updateDescriptorSets(&.{
         .{
             .dst_set = self.set,
             .dst_binding = 0,
@@ -111,10 +112,10 @@ pub fn update(
 pub fn bind(
     self: *const Self,
     cmd_buf: vk.CommandBuffer,
-    dev: *vk.DeviceProxy,
+    gc: *const GraphicsCtx,
     bind_point: vk.PipelineBindPoint,
     layout: vk.PipelineLayout,
     set: u32,
 ) void {
-    dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.set}, null);
+    gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.set}, null);
 }

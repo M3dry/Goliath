@@ -34,8 +34,6 @@ pub fn SmallBuffer(comptime T: type, comptime stack_count: usize) type {
             std.debug.assert(new_len <= max_mask);
             if (self.onHeap()) {
                 if (new_len <= stack_count) return self.moveToStack(alloc, new_len);
-                // ponytail: exact-size realloc, no doubling; add a grow factor if
-                // profiles show allocator churn.
                 self.storage = .{ .heap = try alloc.realloc(self.storage.heap, new_len) };
             } else if (new_len > stack_count) {
                 try self.moveToHeap(alloc, new_len);
