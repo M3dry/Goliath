@@ -44,11 +44,11 @@ free_entries: std.ArrayList(u32) = .empty,
 texture_reg: TextureRegistry,
 // registires for the other asset kinds...
 
-pub fn init(io: std.Io, gc: *const base.GraphicsCtx, alloc: Allocator, asset_root: []const u8) !AssetSystem {
+pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, asset_root: []const u8) !AssetSystem {
     var self: AssetSystem = .{
         .alloc = alloc,
         .loader = try .init(io, asset_root),
-        .texture_reg = try .init(gc, alloc),
+        .texture_reg = try .init(gc, transport, alloc),
     };
 
     // TODO: populate locations - implementation
@@ -149,7 +149,7 @@ pub const CommandBuffer = struct {
     }
 };
 
-pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, cmds: *CommandBuffer) !void {
+pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, transport: *base.Transport, cmds: *CommandBuffer) !void {
     const slice = self.entries.slice();
     const cold_assets = slice.items(.cold_asset);
     const deps = slice.items(.deps);
@@ -165,7 +165,7 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
 
         op.dense = switch (op.kind) {
             .texture => try self.texture_reg.new_texture(),
-            .sampled_texture => try self.texture_reg.new_sampled_texture(),
+            .sampled_texture => try self.texture_reg.new_sampled_texture(gc, destroy_queue),
             .material_schema => unreachable,
             .material_instance => unreachable,
             .geometry => unreachable,
@@ -185,8 +185,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
         if (op.delta < 0) {
             const delta: u32 = @intCast(-op.delta);
             if (try switch (op.kind) {
-                .texture => self.texture_reg.release_texture(destroy_queue, op.dense, delta),
-                .sampled_texture => self.texture_reg.release_sampled_texture(destroy_queue, op.dense, delta),
+                .texture => self.texture_reg.release_texture(destroy_queue, transport, op.dense, delta),
+                .sampled_texture => self.texture_reg.release_sampled_texture(gc, destroy_queue, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable,
@@ -212,7 +212,7 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
 
             try switch (op.kind) {
                 .texture => self.texture_reg.acquire_texture(gc, &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .sampled_texture => self.texture_reg.acquire_sampled_texture(gc, &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .sampled_texture => self.texture_reg.acquire_sampled_texture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable, // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense

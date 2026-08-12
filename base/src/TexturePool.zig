@@ -78,6 +78,19 @@ pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
     self.capacity = 0;
 }
 
+pub fn deinitNow(self: *Self, gc: *const GraphicsCtx) void {
+    if (self.set_layout != .null_handle) {
+        gc.dev.destroyDescriptorSetLayout(self.set_layout, null);
+        self.set_layout = .null_handle;
+    }
+    if (self.pool != .null_handle) {
+        gc.dev.destroyDescriptorPool(self.pool, null);
+        self.pool = .null_handle;
+    }
+
+    self.capacity = 0;
+}
+
 pub fn update(
     self: *Self,
     gc: *const GraphicsCtx,
