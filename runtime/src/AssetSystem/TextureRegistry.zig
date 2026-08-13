@@ -49,7 +49,14 @@ pub const DefaultKind = enum(u8) {
     metallic_roughness,
 };
 
-const Blob = struct {
+const TextureBlob = extern struct {
+    format: base.vk.Format,
+    width: u32,
+    height: u32,
+    default_image: DefaultKind,
+};
+
+const SampledTextureBlob = struct {
     sampler: base.Sampler.Description,
     texture_gid: Gid,
 };
@@ -89,13 +96,14 @@ fn createDefaultImage(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
         .extent = .{ .width = 1, .height = 1 },
         .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
     });
-    errdefer image.deinitNow(gc.vma_alloc);
+    errdefer image.deinitNow(gc);
 
     const upload_tick = try transport.uploadImage(
         false,
         fmt,
         .{ .width = 1, .height = 1, .depth = 1 },
         &pixel,
+        null,
         null,
         image.handle,
         .{
@@ -119,17 +127,7 @@ fn createDefaultImage(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
     }
 
     self.default_images[index].image = image;
-    self.default_images[index].view = try base.ImageView.init(gc, .{
-        .image = image.handle,
-        .format = fmt,
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    });
+    self.default_images[index].view = try base.ImageView.init(gc, .fromImage(&image));
     errdefer self.default_images[index].view.deinitNow(gc);
 }
 
@@ -181,17 +179,60 @@ pub fn new_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, 
     return id;
 }
 
-pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
-    _ = gc;
     _ = resolved;
 
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
     if (ref_count.* == 0) {
         const data = try loader.load(cold);
-        _ = data;
+        errdefer loader.unload(cold);
 
+        var reader = std.Io.Reader.fixed(data);
+        const blob = try reader.takeStruct(TextureBlob, .little);
+        const ticket = &slice.items(.ticket)[id];
+        const image = &slice.items(.image)[id];
+
+        slice.items(.default_image)[id] = blob.default_image;
+
+        image.image = try base.Image2D.init(gc, gc.vma_alloc, "", .{
+            .format = blob.format,
+            .extent = .{
+                .width = blob.width,
+                .height = blob.height,
+            },
+            .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
+        });
+        errdefer image.image.deinitNow(gc);
+
+        image.view = try base.ImageView.init(gc, .fromImage(&image.image));
+        errdefer image.view.deinitNow(gc);
+
+        var free_fn = try loader.make_transport_unload(self.alloc, cold);
+        errdefer free_fn.deinit();
+
+        ticket.* = try transport.uploadImage(
+            false,
+            blob.format,
+            .{ .width = blob.width, .height = blob.height, .depth = 1 },
+            data[@sizeOf(TextureBlob)..],
+            free_fn.free_fn,
+            free_fn.ctx,
+            image.image.handle,
+            .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .{ .x = 0, .y = 0, .z = 0},
+            .undefined,
+            .shader_read_only_optimal,
+            .{ .fragment_shader_bit = true, .compute_shader_bit = true },
+            .{ .shader_read_bit = true }
+        );
+        errdefer transport.unqueue(ticket, false);
     }
 
     ref_count.* += delta;
@@ -210,7 +251,7 @@ pub fn acquire_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsC
 
         // var reader = std.Io.Reader.fixed(data);
         // const blob = try reader.takeStruct(Blob, .little); - Can't use because takeStruct requires packed or extern on Blob
-        const parsed_blob = try std.json.parseFromSlice(Blob, self.alloc, data, .{ .duplicate_field_behavior = .@"error" });
+        const parsed_blob = try std.json.parseFromSlice(SampledTextureBlob, self.alloc, data, .{ .duplicate_field_behavior = .@"error" });
         defer parsed_blob.deinit();
         const blob = parsed_blob.value;
 

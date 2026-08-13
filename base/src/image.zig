@@ -86,14 +86,17 @@ pub const Image2D = struct {
     pub fn deinit(self: *Image2D, destroy_queue: *DestroyQueue) void {
         if (self.handle != .null_handle) {
             destroy_queue.enqueueImage(self.handle, self.allocation) catch @panic("OOM");
+
             self.handle = .null_handle;
             self.allocation = null;
         }
     }
 
-    pub fn deinitNow(self: *Image2D, vma_alloc: vma.VmaAllocator) void {
+    pub fn deinitNow(self: *Image2D, gc: *const GraphicsCtx) void {
         if (self.handle != .null_handle) {
-            vma.vmaDestroyImage(vma_alloc, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
+            gc.dev.destroyImage(self.handle, null);
+            vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
+
             self.handle = .null_handle;
             self.allocation = null;
         }

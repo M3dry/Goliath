@@ -30,7 +30,7 @@ pub fn flush(self: *Self, gc: *const base.GraphicsCtx, transport: *base.Transpor
         }
 
         self.schema_bufs[schema] = try base.Buffer.init(gc, .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.PBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-        self.schema_tickets[schema] = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access);
+        self.schema_tickets[schema] = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access);
     }
 }
 

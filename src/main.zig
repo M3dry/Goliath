@@ -46,6 +46,7 @@ fn uploadPoolTexture(
         .{ .width = width, .height = height, .depth = 1 },
         pixels,
         null,
+        null,
         image.handle,
         .{
             .aspect_mask = .{ .color_bit = true },

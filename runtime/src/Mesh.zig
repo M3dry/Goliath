@@ -153,10 +153,10 @@ pub const Lod = struct {
 
         const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
         const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
-        const tick1 = try transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, buf.handle, 0, dst_stage, dst_access);
+        const tick1 = try transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, null, buf.handle, 0, dst_stage, dst_access);
         errdefer transport.unqueue(tick1, false);
 
-        const tick2 = try transport.uploadBuffer(false, self.geometry.data, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access);
+        const tick2 = try transport.uploadBuffer(false, self.geometry.data, null, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access);
         errdefer transport.unqueue(tick2, false);
 
         self.geometry_buffer = .{buf, tick2};

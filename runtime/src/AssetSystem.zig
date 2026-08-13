@@ -211,7 +211,7 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
             }
 
             try switch (op.kind) {
-                .texture => self.texture_reg.acquire_texture(gc, &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .texture => self.texture_reg.acquire_texture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .sampled_texture => self.texture_reg.acquire_sampled_texture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,

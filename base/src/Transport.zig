@@ -35,7 +35,12 @@ fn getFormatInfo(format: vk.Format) !FormatInfo {
     };
 }
 
-pub const FreeFn = *const fn (ptr: *anyopaque) void;
+pub const FreeFn = *const fn (ctx: ?*anyopaque, ptr: *anyopaque) void;
+
+const Owned = struct {
+    free_fn: FreeFn,
+    ctx: ?*anyopaque,
+};
 
 pub const Ticket = struct {
     value: u64,
@@ -89,7 +94,7 @@ const Task = struct {
     full_src_size: u32,
     parent_ticket_id: u32,
     ticket_id: u32,
-    owning: ?FreeFn,
+    owning: ?Owned,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
 
@@ -128,8 +133,8 @@ const Task = struct {
                 }
             },
         }
-        if (self.owning) |free_fn| {
-            free_fn(@ptrCast(@constCast(self.src)));
+        if (self.owning) |owned| {
+            owned.free_fn(owned.ctx, @ptrCast(@constCast(self.src)));
         }
     }
 
@@ -543,12 +548,14 @@ pub fn uploadBuffer(
     priority: bool,
     src: []const u8,
     owning: ?FreeFn,
+    owning_ctx: ?*anyopaque,
     dst: vk.Buffer,
     dst_offset: u32,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
 ) !Ticket {
     const ticket = try self.getFreeTicket();
+    const owned = if (owning) |f| Owned{ .free_fn = f, .ctx = owning_ctx } else null;
     const src_len: u32 = @intCast(src.len);
     const task = Task{
         .dst = .{ .buffer_dst = .{
@@ -562,7 +569,7 @@ pub fn uploadBuffer(
         .full_src_size = src_len,
         .parent_ticket_id = ticket.id(),
         .ticket_id = ticket.id(),
-        .owning = owning,
+        .owning = owned,
         .dst_stage = dst_stage,
         .dst_access = dst_access,
     };
@@ -580,6 +587,7 @@ pub fn uploadImage(
     dimension: vk.Extent3D,
     src: []const u8,
     owning: ?FreeFn,
+    owning_ctx: ?*anyopaque,
     dst: vk.Image,
     dst_layers: vk.ImageSubresourceLayers,
     dst_offset: vk.Offset3D,
@@ -623,6 +631,8 @@ pub fn uploadImage(
 
     const parent_ticket = try self.getFreeTicket();
 
+    const owned = if (owning) |f| Owned{ .free_fn = f, .ctx = owning_ctx } else null;
+
     try q.ensureUnusedCapacity(self.alloc, count);
     if (priority) {
         var i: usize = count;
@@ -650,7 +660,7 @@ pub fn uploadImage(
                 .full_src_size = total_size,
                 .parent_ticket_id = parent_ticket.id(),
                 .ticket_id = if (is_last) parent_ticket.id() else Ticket.none.id(),
-                .owning = if (is_last) owning else null,
+                .owning = if (is_last) owned else null,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
             };
@@ -679,7 +689,7 @@ pub fn uploadImage(
                 .full_src_size = total_size,
                 .parent_ticket_id = parent_ticket.id(),
                 .ticket_id = if (is_last) parent_ticket.id() else Ticket.none.id(),
-                .owning = if (is_last) owning else null,
+                .owning = if (is_last) owned else null,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
             });
@@ -774,7 +784,7 @@ pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
                     const owning_fn = task_ptr.owning;
                     _ = q.orderedRemove(i);
                     removed_any = true;
-                    if (free_src and owning_fn != null) owning_fn.?(@ptrCast(@constCast(task_ptr.src)));
+                    if (free_src and owning_fn != null) owning_fn.?.free_fn(owning_fn.?.ctx, @ptrCast(@constCast(task_ptr.src)));
                 } else {
                     i += 1;
                 }

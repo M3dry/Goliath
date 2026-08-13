@@ -70,9 +70,9 @@ pub fn flushDescriptorArrays(self: *MeshHandler, gc: *const base.GraphicsCtx, de
 
     const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
     const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
-    const tick1 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.mesh_descs.items), null, self.mesh_desc_buf.handle, 0, dst_stage, dst_access);
+    const tick1 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.mesh_descs.items), null, null, self.mesh_desc_buf.handle, 0, dst_stage, dst_access);
         errdefer transport.unqueue(tick1, false);
-    const tick2 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.lod_entries.items), null, self.lod_entry_buf.handle, 0, dst_stage, dst_access);
+    const tick2 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.lod_entries.items), null, null, self.lod_entry_buf.handle, 0, dst_stage, dst_access);
         errdefer transport.unqueue(tick2, false);
 
     self.ticket = tick2;

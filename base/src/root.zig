@@ -488,7 +488,7 @@ const Frame = struct {
             .extent = extent,
             .usage = .{ .color_attachment_bit = true, .storage_bit = true, .transfer_src_bit = true, .transfer_dst_bit = true },
         });
-        errdefer self.render_target.deinitNow(gc.vma_alloc);
+        errdefer self.render_target.deinitNow(gc);
 
         self.render_target_view = try ImageView.init(gc, .{
             .image = self.render_target.handle,
@@ -506,7 +506,7 @@ const Frame = struct {
 
     pub fn deinitRenderTexture(self: *Frame, gc: *const GraphicsCtx) void {
         self.render_target_view.deinitNow(gc);
-        self.render_target.deinitNow(gc.vma_alloc);
+        self.render_target.deinitNow(gc);
     }
 
     pub fn initDepthTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
@@ -515,7 +515,7 @@ const Frame = struct {
             .extent = extent,
             .usage = .{ .depth_stencil_attachment_bit = true },
         });
-        errdefer self.depth_target.deinitNow(gc.vma_alloc);
+        errdefer self.depth_target.deinitNow(gc);
 
         self.depth_target_view = try ImageView.init(gc, .{
             .image = self.depth_target.handle,
@@ -533,17 +533,17 @@ const Frame = struct {
 
     pub fn deinitDepthTexture(self: *Frame, gc: *const GraphicsCtx) void {
         self.depth_target_view.deinitNow(gc);
-        self.depth_target.deinitNow(gc.vma_alloc);
+        self.depth_target.deinitNow(gc);
     }
 
     pub fn deinit(self: *Frame, gc: *const GraphicsCtx) void {
         if (self.render_target.handle != .null_handle) {
             self.render_target_view.deinitNow(gc);
-            self.render_target.deinitNow(gc.vma_alloc);
+            self.render_target.deinitNow(gc);
         }
         if (self.depth_target.handle != .null_handle) {
             self.depth_target_view.deinitNow(gc);
-            self.depth_target.deinitNow(gc.vma_alloc);
+            self.depth_target.deinitNow(gc);
         }
         gc.dev.destroyCommandPool(self.cmd_pool, null);
         gc.dev.destroySemaphore(self.semaphore, null);

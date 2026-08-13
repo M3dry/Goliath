@@ -1,4 +1,5 @@
 const std = @import("std");
+const base = @import("base");
 
 const Loader = @This();
 const Allocator = std.mem.Allocator;
@@ -62,6 +63,44 @@ pub fn load(self: *Loader, cold_asset: *const ColdAsset) ![]const u8 {
     location.memory_map = m;
 
     return m.memory[cold_asset.offset..cold_asset.offset + cold_asset.size];
+}
+
+const Ctx = struct {
+    self: *Loader,
+    cold_asset: ColdAsset,
+    alloc: Allocator,
+};
+
+const FreeFnCtx = struct {
+    free_fn: base.Transport.FreeFn = transport_free_fn,
+    ctx: *Ctx,
+
+    pub fn deinit(self: *FreeFnCtx) void {
+        const alloc = self.ctx.alloc;
+        alloc.destroy(self);
+    }
+};
+
+fn transport_free_fn(anyctx: ?*anyopaque, ptr: *anyopaque) void {
+    _ = ptr;
+
+    const ctx: *Ctx = @ptrCast(@alignCast(anyctx.?));
+    const alloc = ctx.alloc;
+
+    ctx.self.unload(&ctx.cold_asset);
+    alloc.destroy(ctx);
+}
+
+pub fn make_transport_unload(self: *Loader, alloc: Allocator, cold_asset: *const ColdAsset) !FreeFnCtx {
+    const ctx = try alloc.create(Ctx);
+
+    ctx.self = self;
+    ctx.cold_asset = cold_asset.*;
+    ctx.alloc = alloc;
+
+    return .{
+        .ctx = ctx,
+    };
 }
 
 pub fn unload(self: *Loader, cold_asset: *const ColdAsset) void {
