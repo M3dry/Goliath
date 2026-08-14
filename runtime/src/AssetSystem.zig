@@ -15,22 +15,37 @@ const Kind = types.Kind;
 
 // fits into two cachelines
 const Deps = struct {
-    deps_necessary: SmallBitSet(13),
-    gids: SmallBuffer(Gid, 13),
+    necessary: SmallBitSet(13) = .empty,
+    gids: SmallBuffer(Gid, 13) = .empty,
 };
 
 const Entry = struct {
     name: []const u8 = &.{},
 
     generation: u32,
-    dense: u32, // == maxInt(u32) => not loaded into registry
+    dense: u32 = std.math.maxInt(u32), // == maxInt(u32) => not loaded into registry, == maxInt(u32) - 1 => entry deleted/none
 
     kind: Kind,
 
     cold_asset: Loader.ColdAsset,
 
-    deps: Deps,
-    rdeps: SmallBuffer(Gid, 8),
+    deps: Deps = .{},
+    rdeps: SmallBuffer(Gid, 8) = .empty,
+
+    pub const none: Entry = .{
+        .generation = 0,
+        .dense = std.math.maxInt(u32) - 1,
+        .kind = .texture,
+        .cold_asset = .{
+            .location = std.math.maxInt(u32),
+            .offset = 0,
+            .size = 0,
+        },
+    };
+
+    pub fn isNone(self: Entry) bool {
+        return self.dense == none.dense;
+    }
 };
 
 const AssetSystem = @This();
@@ -44,15 +59,106 @@ free_entries: std.ArrayList(u32) = .empty,
 texture_reg: TextureRegistry,
 // registires for the other asset kinds...
 
-pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, asset_root: []const u8) !AssetSystem {
-    var self: AssetSystem = .{
-        .alloc = alloc,
-        .loader = try .init(io, asset_root),
-        .texture_reg = try .init(gc, transport, alloc),
-    };
+pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: *std.Io.Reader) !AssetSystem {
+    var json_reader = std.json.Reader.init(tmp_alloc, manifest_reader);
+    defer json_reader.deinit();
 
-    // TODO: populate locations - implementation
-    self.loader.populate_locations();
+    const parsed_manifest = try std.json.parseFromTokenSource(Manifest, tmp_alloc, &json_reader, .{ .ignore_unknown_fields = true });
+    defer parsed_manifest.deinit();
+    const manifest = parsed_manifest.value;
+
+    var loader = try Loader.init(io, alloc, &manifest.loader);
+    errdefer loader.deinit(alloc);
+
+    var texture_reg = try TextureRegistry.init(gc, transport, alloc);
+    errdefer texture_reg.deinitNow(gc);
+
+    var entries: std.MultiArrayList(Entry) = .empty;
+    errdefer entries.deinit(alloc);
+    errdefer {
+        const slice = entries.slice();
+        for (slice.items(.dense), slice.items(.name), slice.items(.deps), slice.items(.rdeps)) |dense, name, *deps, *rdeps | {
+            if (dense == Entry.none.dense) continue;
+
+            alloc.free(name);
+            deps.necessary.deinit(alloc);
+            deps.gids.deinit(alloc);
+            rdeps.deinit(alloc);
+        }
+    }
+    try entries.ensureTotalCapacity(alloc, manifest.entries.len);
+
+    for (manifest.entries) |manifest_entry| {
+        const gid = manifest_entry.gid;
+        while (entries.len <= gid.slot) {
+            try entries.append(alloc, .none);
+        }
+
+        if (entries.get(gid.slot).isNone()) {
+            var entry: Entry = .{
+                .generation = gid.gen,
+                .kind = manifest_entry.kind,
+                .cold_asset = manifest_entry.cold_asset,
+            };
+
+            entry.name = try alloc.dupe(u8, manifest_entry.name);
+            errdefer alloc.free(entry.name);
+
+            try entry.deps.necessary.ensureCapacity(alloc, manifest_entry.deps.len);
+            errdefer entry.deps.necessary.deinit(alloc);
+
+            try entry.deps.gids.ensureCapacity(alloc, manifest_entry.deps.len);
+            errdefer entry.deps.gids.deinit(alloc);
+
+            for (0.., manifest_entry.deps) |i, dep| {
+                entry.deps.gids.addOneAssumeCapacity().* = dep.gid;
+                entry.deps.necessary.setAssumeCapacity(i);
+            }
+
+            try entry.rdeps.ensureCapacity(alloc, manifest_entry.rdeps.len);
+            errdefer entry.rdeps.deinit(alloc);
+
+            for (manifest_entry.rdeps) |rdep| {
+                entry.rdeps.addOneAssumeCapacity().* = rdep;
+            }
+
+            entries.set(gid.slot, entry);
+        } else return error.DuplicateGidEntry;
+    }
+
+    var free_entries: std.ArrayList(u32) = .empty;
+    errdefer free_entries.deinit(alloc);
+
+    const slice = entries.slice();
+    const dense = slice.items(.dense);
+    for (dense, 0..) |*d, i| {
+        if (d.* == Entry.none.dense) {
+            try free_entries.append(alloc, @intCast(i));
+        }
+    }
+
+    const gens = slice.items(.generation);
+    for (slice.items(.deps), slice.items(.rdeps)) |*deps, *rdeps| {
+        for (deps.gids.items()) |gid| {
+            if (gid.slot >= entries.len) return error.DanglingDependency;
+            if (dense[gid.slot] == Entry.none.dense) return error.DanglingDependency;
+            if (gens[gid.slot] != gid.gen) return error.DanglingDependency;
+        }
+
+        for (rdeps.items()) |gid| {
+            if (gid.slot >= entries.len) return error.DanglingDependency;
+            if (dense[gid.slot] == Entry.none.dense) return error.DanglingDependency;
+            if (gens[gid.slot] != gid.gen) return error.DanglingDependency;
+        }
+    }
+
+    return .{
+        .alloc = alloc,
+        .loader = loader,
+        .entries = entries,
+        .free_entries = free_entries,
+        .texture_reg = texture_reg,
+    };
 
     // UPDATE NOTE: let's not upload MeshDesc and LODEntries at load,
     //              instead acquire(gid of kind mesh & model) populates the MeshDesc and lod entries gpu buffers
@@ -63,8 +169,6 @@ pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport,
     //       this opens the possibility of the GPU requesting assets based on visibility
     //       uploaded LOD descs have -1 for material schema and instance, once geometry is loaded it gets patched to the right indices along with the geometry pointer
     //          thus stable GPU side material schema and instance indices aren't needed
-
-    return self;
 }
 
 pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
@@ -140,7 +244,7 @@ pub const CommandBuffer = struct {
 
         const deps: Deps = slice.items(.deps)[gid.slot];
         for (deps.gids.items(), 0..) |dep, ix| {
-            if (!deps.deps_necessary.isSet(ix)) continue;
+            if (!deps.necessary.isSet(ix)) continue;
 
             try self.walkRec(slice, dep, step);
         }
@@ -226,6 +330,73 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
 
     cmds.ops.clearRetainingCapacity();
     cmds.order.clearRetainingCapacity();
+}
+
+const ManifestEntry = struct {
+    const Dep = struct {
+        gid: Gid,
+        necessary: bool,
+    };
+
+    name: []const u8,
+
+    gid: Gid,
+    kind: Kind,
+
+    cold_asset: Loader.ColdAsset,
+
+    deps: []Dep,
+    rdeps: []Gid,
+};
+
+const Manifest = struct {
+    entries: []ManifestEntry,
+    loader: Loader.Manifest,
+};
+
+pub fn save_manifest(self: *const AssetSystem, jws: *std.json.Stringify) !void {
+    try jws.beginObject();
+
+    try jws.objectFieldRaw("\"entries\"");
+    const slice = self.entries.slice();
+    for (0.., slice.items(.generation), slice.items(.name), slice.items(.kind), slice.items(.cold_asset), slice.items(.deps), slice.items(.rdeps)) |i, gen, name, kind, cold_asset, *deps, *rdeps| {
+        if (self.entries.get(i).isNone()) continue;
+
+        try jws.objectFieldRaw("\"name\"");
+        try jws.write(name);
+
+        try jws.objectFieldRaw("\"gid\"");
+        try jws.write(Gid{ .gen = gen, .slot = @intCast(i) });
+
+        try jws.objectFieldRaw("\"kind\"");
+        try jws.write(kind);
+
+        try jws.objectFieldRaw("\"cold_asset\"");
+        try jws.write(cold_asset);
+
+        try jws.objectFieldRaw("\"deps\"");
+        try jws.beginArray();
+        for (0.., deps.gids.items()) |necessary_ix, gid| {
+            try jws.beginObject();
+
+            try jws.objectFieldRaw("\"gid\"");
+            try jws.write(gid);
+
+            try jws.objectFieldRaw("\"necessary\"");
+            try jws.write(deps.necessary.isSet(necessary_ix));
+
+            try jws.endObject();
+        }
+        try jws.endArray();
+
+        try jws.objectFieldRaw("\"rdeps\"");
+        try jws.write(rdeps.items());
+    }
+
+    try jws.objectFieldRaw("\"loader\"");
+    try jws.write(self.loader);
+
+    try jws.endObject();
 }
 
 test {

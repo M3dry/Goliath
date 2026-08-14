@@ -6,6 +6,8 @@ pub fn SmallBuffer(comptime T: type, comptime stack_count: usize) type {
         const Self = @This();
         const tag_mask: u32 = 1 << 31;
 
+        pub const empty: Self = .{};
+
         len_field: u32 = 0, // MSB set => heap-backed
         storage: union {
             stack: [stack_count]T,

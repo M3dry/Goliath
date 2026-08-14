@@ -8,6 +8,8 @@ pub fn SmallBitset(comptime stack_count: usize) type {
         const Self = @This();
         const tag_mask: u32 = 1 << 31;
 
+        pub const empty: Self = .{};
+
         len_field: u32 = 0, // bit length; MSB set => heap-backed
         words: union {
             stack: [stack_words]u64,

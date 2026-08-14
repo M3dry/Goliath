@@ -14,25 +14,66 @@ const Location = struct {
     path: []const u8,
     memory_map: ?std.Io.File.MemoryMap,
     ref_count: u32 = 0,
+    keep_loaded: bool,
+
+    pub fn jsonStringify(self: *const Location, jws: anytype) !void {
+        try jws.write(ManifestLocation{
+            .path = self.path,
+            .keep_loaded = self.keep_loaded,
+        });
+    }
 };
 
 io: std.Io,
 
+locations_path_prefix_str: []const u8,
 locations_path_prefix: std.Io.Dir,
 locations: []Location,
 
-pub fn init(io: std.Io, asset_root: []const u8) !Loader {
-    const self: Loader = .{
+pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
+    const prefix_str = try alloc.dupe(u8, manifest.path_prefix);
+    errdefer alloc.free(prefix_str);
+
+    const prefix_dir = try std.Io.Dir.openDir(.cwd(), io, manifest.path_prefix, .{});
+    errdefer prefix_dir.close(io);
+
+    var self: Loader = .{
         .io = io,
-        .locations_path_prefix = try std.Io.Dir.openDir(.cwd(), io, asset_root, .{}),
+        .locations_path_prefix_str = prefix_str,
+        .locations_path_prefix = prefix_dir,
         .locations = &.{},
     };
 
-    return self;
-}
+    self.locations = try alloc.alloc(Location, manifest.locations.len);
+    errdefer alloc.free(self.locations);
 
-pub fn populate_locations(self: *Loader) void {
-    _ = self;
+    var i: usize = 0;
+    errdefer for (0..i) |n| {
+        alloc.free(self.locations[n].path);
+        if (self.locations[n].memory_map) |*m| m.destroy(io);
+    };
+
+    for (self.locations, manifest.locations) |*loc, manifest_location| {
+        loc.path = try alloc.dupe(u8, manifest_location.path);
+        loc.memory_map = null;
+        loc.ref_count = 0;
+        loc.keep_loaded = manifest_location.keep_loaded;
+
+        i += 1;
+
+        if (loc.keep_loaded) {
+            const file = try self.locations_path_prefix.openFile(io, loc.path, .{});
+            defer file.close(self.io);
+
+            const m = try file.createMemoryMap(io, .{ .len = try file.length(self.io) });
+            errdefer m.destroy(io);
+
+            loc.memory_map = m;
+            loc.ref_count += 1;
+        }
+    }
+
+    return self;
 }
 
 pub fn deinit(self: *Loader, alloc: Allocator) void {
@@ -116,6 +157,28 @@ pub fn unload(self: *Loader, cold_asset: *const ColdAsset) void {
     } else std.debug.assert(false);
 
     location.memory_map = null;
+}
+
+pub const ManifestLocation = struct {
+    path: []const u8,
+    keep_loaded: bool,
+};
+
+pub const Manifest = struct {
+    path_prefix: []const u8,
+    locations: []ManifestLocation,
+};
+
+pub fn jsonStringify(self: *const Loader, jws: anytype) !void {
+    try jws.beginObject();
+
+    try jws.objectFieldRaw("\"path_prefix\"");
+    try jws.write(self.locations_path_prefix_str);
+
+    try jws.objectFieldRaw("\"locations\"");
+    try jws.write(self.locations);
+
+    try jws.endObject();
 }
 
 test {

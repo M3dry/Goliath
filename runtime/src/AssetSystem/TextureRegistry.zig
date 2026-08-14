@@ -15,6 +15,11 @@ const Image = struct {
         self.image.deinit(destroy_queue);
         self.view.deinit(destroy_queue);
     }
+
+    pub fn deinitNow(self: *Image, gc: *const base.GraphicsCtx) void {
+        self.image.deinitNow(gc);
+        self.view.deinitNow(gc);
+    }
 };
 
 textures: std.MultiArrayList(struct {
@@ -157,6 +162,34 @@ pub fn deinit(self: *TextureRegistry, destroy_queue: *base.DestroyQueue) void {
     self.default_sampler.deinit(destroy_queue);
 
     self.texture_pool.deinit(destroy_queue);
+}
+
+pub fn deinitNow(self: *TextureRegistry, gc: *const base.GraphicsCtx) void {
+    const textures_slice = self.textures.slice();
+    for (textures_slice.items(.ref_count), textures_slice.items(.image)) |ref_count, *tex| {
+        if (ref_count == 0) continue;
+
+        tex.deinitNow(gc);
+    }
+    self.textures.deinit(self.alloc);
+    self.textures_free_list.deinit(self.alloc);
+
+    const sampled_textures_slice = self.sampled_textures.slice();
+    for (sampled_textures_slice.items(.ref_count), sampled_textures_slice.items(.sampler)) |ref_count, *sampler| {
+        if (ref_count == 0) continue;
+
+        sampler.deinitNow(gc);
+    }
+    self.sampled_textures.deinit(self.alloc);
+    self.sampled_texture_free_list.deinit(self.alloc);
+    self.pending_sampled_textures.deinit(self.alloc);
+
+    for (&self.default_images) |*img| {
+        img.deinitNow(gc);
+    }
+    self.default_sampler.deinitNow(gc);
+
+    self.texture_pool.deinitNow(gc);
 }
 
 pub fn new_texture(self: *TextureRegistry) !u32 {
