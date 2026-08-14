@@ -94,7 +94,6 @@ pub const Image2D = struct {
 
     pub fn deinitNow(self: *Image2D, gc: *const GraphicsCtx) void {
         if (self.handle != .null_handle) {
-            gc.dev.destroyImage(self.handle, null);
             vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
 
             self.handle = .null_handle;

@@ -59,13 +59,37 @@ free_entries: std.ArrayList(u32) = .empty,
 texture_reg: TextureRegistry,
 // registires for the other asset kinds...
 
-pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: *std.Io.Reader) !AssetSystem {
-    var json_reader = std.json.Reader.init(tmp_alloc, manifest_reader);
-    defer json_reader.deinit();
+pub const ManifestReader = union(enum) {
+    reader: *std.Io.Reader,
+    default: struct {
+        path_prefix: []const u8,
+    },
+};
 
-    const parsed_manifest = try std.json.parseFromTokenSource(Manifest, tmp_alloc, &json_reader, .{ .ignore_unknown_fields = true });
-    defer parsed_manifest.deinit();
-    const manifest = parsed_manifest.value;
+pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: ManifestReader) !AssetSystem {
+    var arena_alloc = std.heap.ArenaAllocator.init(tmp_alloc);
+    defer arena_alloc.deinit();
+    const tmp_arena_alloc = arena_alloc.allocator();
+
+    const manifest = switch (manifest_reader) {
+        .default => |d| Manifest{
+            .loader = .{
+                .path_prefix = d.path_prefix,
+            },
+        },
+        .reader => |r| blk: {
+            var json_reader = std.json.Reader.init(tmp_arena_alloc, r);
+            defer json_reader.deinit();
+
+            break :blk try std.json.parseFromTokenSourceLeaky(Manifest, tmp_arena_alloc, &json_reader, .{ .ignore_unknown_fields = true });
+        },
+    };
+    // const manifest = if (manifest_reader) |reader| blk: {
+    //     var json_reader = std.json.Reader.init(tmp_arena_alloc, reader);
+    //     defer json_reader.deinit();
+    //
+    //     break :blk try std.json.parseFromTokenSourceLeaky(Manifest, tmp_arena_alloc, &json_reader, .{ .ignore_unknown_fields = true });
+    // } else .{};
 
     var loader = try Loader.init(io, alloc, &manifest.loader);
     errdefer loader.deinit(alloc);
@@ -174,6 +198,9 @@ pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport,
 pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
     self.loader.deinit(self.alloc);
 
+    for (self.entries.items(.name)) |name| {
+        self.alloc.free(name);
+    }
     self.entries.deinit(self.alloc);
     self.free_entries.deinit(self.alloc);
 
@@ -350,7 +377,7 @@ const ManifestEntry = struct {
 };
 
 const Manifest = struct {
-    entries: []ManifestEntry,
+    entries: []ManifestEntry = &.{},
     loader: Loader.Manifest,
 };
 
@@ -358,6 +385,7 @@ pub fn save_manifest(self: *const AssetSystem, jws: *std.json.Stringify) !void {
     try jws.beginObject();
 
     try jws.objectFieldRaw("\"entries\"");
+    try jws.beginArray();
     const slice = self.entries.slice();
     for (0.., slice.items(.generation), slice.items(.name), slice.items(.kind), slice.items(.cold_asset), slice.items(.deps), slice.items(.rdeps)) |i, gen, name, kind, cold_asset, *deps, *rdeps| {
         if (self.entries.get(i).isNone()) continue;
@@ -392,6 +420,7 @@ pub fn save_manifest(self: *const AssetSystem, jws: *std.json.Stringify) !void {
         try jws.objectFieldRaw("\"rdeps\"");
         try jws.write(rdeps.items());
     }
+    try jws.endArray();
 
     try jws.objectFieldRaw("\"loader\"");
     try jws.write(self.loader);

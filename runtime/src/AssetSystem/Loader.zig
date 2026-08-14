@@ -16,7 +16,7 @@ const Location = struct {
     ref_count: u32 = 0,
     keep_loaded: bool,
 
-    pub fn jsonStringify(self: *const Location, jws: anytype) !void {
+    pub fn jsonStringify(self: *const Location, jws: anytype) std.json.Stringify.Error!void {
         try jws.write(ManifestLocation{
             .path = self.path,
             .keep_loaded = self.keep_loaded,
@@ -77,6 +77,7 @@ pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
 }
 
 pub fn deinit(self: *Loader, alloc: Allocator) void {
+    alloc.free(self.locations_path_prefix_str);
     self.locations_path_prefix.close(self.io);
 
     for (self.locations) |*location| {
@@ -166,7 +167,7 @@ pub const ManifestLocation = struct {
 
 pub const Manifest = struct {
     path_prefix: []const u8,
-    locations: []ManifestLocation,
+    locations: []ManifestLocation = &.{},
 };
 
 pub fn jsonStringify(self: *const Loader, jws: anytype) !void {

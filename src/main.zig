@@ -323,6 +323,18 @@ pub fn main(init: std.process.Init) !void {
     var mouse_captured = false;
     var camera_speed: f32 = 2.0;
 
+
+
+    const file = try std.Io.Dir.openFile(.cwd(), init.io, "./testing_asset_system/manifest.json", .{});
+    defer file.close(init.io);
+
+    var file_reader_buffer: [512]u8 = undefined;
+    var file_reader = file.readerStreaming(init.io, &file_reader_buffer);
+    var asset_system = try runtime.AssetSystem.init(init.io, &ctx.graphics, &transport, init.gpa, init.gpa, .{ .reader = &file_reader.interface });
+    defer asset_system.deinit(&ctx.destroy_queue);
+
+
+
     defer ctx.graphics.dev.deviceWaitIdle() catch {};
     var timer = base.timing.FrameTimer.init(1.0 / 60.0);
     while (!ctx.window.shouldClose()) {

@@ -1,10 +1,27 @@
+const std = @import("std");
+
 pub const Gid = packed struct(u64) {
     gen: u32,
     slot: u32,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!Gid {
+        const pair = try std.json.innerParse([2]u32, allocator, source, options);
+        return .{
+            .gen = pair[0],
+            .slot = pair[1],
+        };
+    }
+
+     pub fn jsonStringify(self: *const Gid, jws: anytype) std.json.Stringify.Error!void {
+         try jws.beginArray();
+         try jws.write(self.gen);
+         try jws.write(self.slot);
+         try jws.endArray();
+     }
 };
 
 // mesh get loaded at init into GPU buffers, omitting the geometry and material
-pub const Kind = enum(u8) {
+pub const Kind = enum {
     texture,
     sampled_texture, // sampler description + texture
     material_schema, // reflection data on how to read a material_instance
