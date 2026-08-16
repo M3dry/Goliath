@@ -222,12 +222,6 @@ pub fn main(init: std.process.Init) !void {
     var pbr = try runtime.PbrShading.init(&ctx, vis.set_layout, texture_pool.set_layout);
     defer pbr.deinit(&ctx);
 
-    // Give the graph a bindable id for the texture pool's own set, on every frame pool.
-    var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
-    for (0..base.Ctx.frames_in_flight) |i| {
-        texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, texture_pool.set);
-    }
-
     var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
     defer world_instances_buf.deinit(&ctx.destroy_queue);
     {
@@ -330,9 +324,20 @@ pub fn main(init: std.process.Init) !void {
 
     var file_reader_buffer: [512]u8 = undefined;
     var file_reader = file.readerStreaming(init.io, &file_reader_buffer);
-    var asset_system = try runtime.AssetSystem.init(init.io, &ctx.graphics, &transport, init.gpa, init.gpa, .{ .reader = &file_reader.interface });
+    var asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .reader = &file_reader.interface });
     defer asset_system.deinit(&ctx.destroy_queue);
 
+    var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
+    defer asset_cmd_buf.deinit();
+    try asset_cmd_buf.request(&asset_system, .{.gen = 0, .slot = 0});
+    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &transport, &asset_cmd_buf);
+
+    // Give the graph a bindable id for the texture pool's own set, on every frame pool.
+    var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
+    for (0..base.Ctx.frames_in_flight) |i| {
+        texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, texture_pool.set);
+        // texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, asset_system.texture_reg.texture_pool.set);
+    }
 
 
     defer ctx.graphics.dev.deviceWaitIdle() catch {};
@@ -399,6 +404,8 @@ pub fn main(init: std.process.Init) !void {
                 zgui.text("x: {any}, y: {any}, z: {any}", .{ cam.position[0], cam.position[1], cam.position[2] });
             }
             zgui.end();
+
+            try transport.drain(&ctx.graphics);
 
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();

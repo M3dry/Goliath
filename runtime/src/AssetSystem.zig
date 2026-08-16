@@ -2,56 +2,22 @@ const std = @import("std");
 const base = @import("base");
 
 const Allocator = std.mem.Allocator;
-const SmallBuffer = base.util.SmallBuffer;
-const SmallBitSet = base.util.SmallBitset;
 
-const TextureRegistry = @import("AssetSystem/TextureRegistry.zig");
+pub const TextureRegistry = @import("AssetSystem/TextureRegistry.zig");
 const Loader = @import("AssetSystem/Loader.zig");
 const resolver = @import("AssetSystem/resolver.zig");
 
 const types = @import("AssetSystem/Types.zig");
 const Gid = types.Gid;
 const Kind = types.Kind;
-
-// fits into two cachelines
-const Deps = struct {
-    necessary: SmallBitSet(13) = .empty,
-    gids: SmallBuffer(Gid, 13) = .empty,
-};
-
-const Entry = struct {
-    name: []const u8 = &.{},
-
-    generation: u32,
-    dense: u32 = std.math.maxInt(u32), // == maxInt(u32) => not loaded into registry, == maxInt(u32) - 1 => entry deleted/none
-
-    kind: Kind,
-
-    cold_asset: Loader.ColdAsset,
-
-    deps: Deps = .{},
-    rdeps: SmallBuffer(Gid, 8) = .empty,
-
-    pub const none: Entry = .{
-        .generation = 0,
-        .dense = std.math.maxInt(u32) - 1,
-        .kind = .texture,
-        .cold_asset = .{
-            .location = std.math.maxInt(u32),
-            .offset = 0,
-            .size = 0,
-        },
-    };
-
-    pub fn isNone(self: Entry) bool {
-        return self.dense == none.dense;
-    }
-};
+const Entry = types.Entry;
 
 const AssetSystem = @This();
 
 alloc: Allocator,
 loader: Loader,
+threaded_io: std.Io.Threaded,
+io: std.Io,
 
 entries: std.MultiArrayList(Entry) = .empty,
 free_entries: std.ArrayList(u32) = .empty,
@@ -66,7 +32,15 @@ pub const ManifestReader = union(enum) {
     },
 };
 
-pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: ManifestReader) !AssetSystem {
+/// allocator needs to be thread safe
+pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: ManifestReader) !AssetSystem {
+    var threaded_io = std.Io.Threaded.init(alloc, .{
+        .disable_memory_mapping = false,
+        .concurrent_limit = .unlimited,
+    });
+    errdefer threaded_io.deinit();
+    const io = threaded_io.io();
+
     var arena_alloc = std.heap.ArenaAllocator.init(tmp_alloc);
     defer arena_alloc.deinit();
     const tmp_arena_alloc = arena_alloc.allocator();
@@ -84,12 +58,6 @@ pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport,
             break :blk try std.json.parseFromTokenSourceLeaky(Manifest, tmp_arena_alloc, &json_reader, .{ .ignore_unknown_fields = true });
         },
     };
-    // const manifest = if (manifest_reader) |reader| blk: {
-    //     var json_reader = std.json.Reader.init(tmp_arena_alloc, reader);
-    //     defer json_reader.deinit();
-    //
-    //     break :blk try std.json.parseFromTokenSourceLeaky(Manifest, tmp_arena_alloc, &json_reader, .{ .ignore_unknown_fields = true });
-    // } else .{};
 
     var loader = try Loader.init(io, alloc, &manifest.loader);
     errdefer loader.deinit(alloc);
@@ -179,6 +147,8 @@ pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport,
     return .{
         .alloc = alloc,
         .loader = loader,
+        .threaded_io = threaded_io,
+        .io = io,
         .entries = entries,
         .free_entries = free_entries,
         .texture_reg = texture_reg,
@@ -197,6 +167,7 @@ pub fn init(io: std.Io, gc: *const base.GraphicsCtx, transport: *base.Transport,
 
 pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
     self.loader.deinit(self.alloc);
+    self.threaded_io.deinit();
 
     for (self.entries.items(.name)) |name| {
         self.alloc.free(name);
@@ -205,6 +176,104 @@ pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
     self.free_entries.deinit(self.alloc);
 
     self.texture_reg.deinit(destroy_queue);
+}
+
+pub const KindData = union(Kind) {
+    texture: TextureRegistry.IngestTexture,
+    sampled_texture: TextureRegistry.IngestSampledTexture,
+    material_schema: void,
+    material_instance: void,
+    geometry: void,
+    mesh: void,
+    model: void,
+    skeleton: void,
+};
+
+pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !Gid {
+    if (entry.isNone()) return error.EntryIsNone;
+
+    var e = entry;
+    // TODO: verify that deps of entry are valid
+    // TODO: udpate rdeps of deps
+
+    if (dupe_entry_name) {
+        e.name = try self.alloc.dupe(u8, entry.name);
+    }
+    errdefer if (dupe_entry_name) self.alloc.free(e.name);
+
+    if (self.free_entries.pop()) |slot| {
+        e.generation = self.entries.items(.generation)[slot] + 1;
+        self.entries.set(slot, e);
+
+        return Gid{ .gen = e.generation, .slot = slot };
+    } else {
+        e.generation = 0;
+        try self.entries.append(self.alloc, e);
+
+        return Gid{
+            .gen = e.generation,
+            .slot = @intCast(self.entries.len - 1),
+        };
+    }
+}
+
+fn makeTargetPath(self: *AssetSystem, target_path: []const u8) ![]u8 {
+    var target_exists = true;
+    var increment: usize = 0;
+    var path: []const u8 = &.{};
+    var buf: []u8 = &.{};
+    while (true) {
+        path = if (increment == 0) target_path else blk: {
+            if (increment == 1) buf = try self.alloc.alloc(u8, target_path.len + 20); // 20 digits in 2^64
+            break :blk try std.fmt.bufPrint(buf, "{s}-{}", .{target_path, increment});
+        };
+
+        target_exists = false;
+        self.loader.locations_path_prefix.access(self.io, target_path, .{}) catch |e| switch (e) {
+            error.FileNotFound => target_exists = true,
+            else => return e,
+        };
+
+        if (!target_exists) break;
+        increment += 1;
+    }
+
+    const ret = try self.alloc.dupe(u8, path);
+    self.alloc.free(buf);
+    return ret;
+
+}
+
+/// up to the caller to clean up `data` after awaiting/cancelling the future
+/// cleanup after cancelling via `ingest_asset_cleanup`
+/// after awaiting asset needs to be finalized via `finalize_asset` to get a Gid
+pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) !std.Io.Future(types.IngestError!Entry) {
+    const path = try makeTargetPath(self, target_path);
+    const loc = self.loader.newLocation(self.alloc, path) catch |e| { self.alloc.free(path); return e; };
+    errdefer self.loader.removeLocation(self.alloc, loc) catch {};
+
+    const location: types.IngestLocation = .{
+        .loc = loc,
+        .path = self.loader.locations.items[loc].path,
+        .prefix_dir = self.loader.locations_path_prefix,
+    };
+
+    return try switch (data) {
+        .texture => |d| self.io.concurrent(TextureRegistry.ingestTexture, .{ self.io, location, d }),
+        .sampled_texture => |d| self.io.concurrent(TextureRegistry.ingestSampledTexture, .{ &self.texture_reg, &self.loader, d }),
+        .material_schema => unreachable,
+        .material_instance => unreachable,
+        .geometry => unreachable,
+        .mesh => unreachable,
+        .model => unreachable,
+        .skeleton => unreachable,
+    };
+}
+
+/// only to be called on an entry returned from `ingest_asset` to cancel the ingestion
+pub fn ingestAssetCleanup(self: *AssetSystem, e: Entry) !void {
+    const loc = e.cold_asset.location;
+    try self.loader.removeLocation(self.alloc, loc);
 }
 
 pub const GidError = error{
@@ -236,20 +305,20 @@ pub const CommandBuffer = struct {
         self.order.deinit(self.alloc);
     }
 
-    pub fn request(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) error{ GidError, OutOfMemory }!void {
+    pub fn request(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) (GidError || error{ OutOfMemory })!void {
         try self.walk(system, gid, 1);
     }
 
-    pub fn release(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) error{ GidError, OutOfMemory }!void {
+    pub fn release(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) (GidError || error{ OutOfMemory })!void {
         try self.walk(system, gid, -1);
     }
 
-    fn walk(self: *CommandBuffer, system: *const AssetSystem, gid: Gid, step: i32) error{ GidError, OutOfMemory }!void {
+    fn walk(self: *CommandBuffer, system: *const AssetSystem, gid: Gid, step: i32) (GidError || error{ OutOfMemory })!void {
         defer self.visited.clearRetainingCapacity();
         try self.walkRec(system.entries.slice(), gid, step);
     }
 
-    fn walkRec(self: *CommandBuffer, slice: std.MultiArrayList(Entry).Slice, gid: Gid, step: i32) error{ GidError, OutOfMemory }!void {
+    fn walkRec(self: *CommandBuffer, slice: std.MultiArrayList(Entry).Slice, gid: Gid, step: i32) (GidError || error{ OutOfMemory })!void {
         if (self.visited.contains(gid)) return;
 
         if (gid.slot >= slice.len) return GidError.IdOutOfRange;
@@ -269,7 +338,7 @@ pub const CommandBuffer = struct {
         }
         gop.value_ptr.delta += step;
 
-        const deps: Deps = slice.items(.deps)[gid.slot];
+        var deps = &slice.items(.deps)[gid.slot];
         for (deps.gids.items(), 0..) |dep, ix| {
             if (!deps.necessary.isSet(ix)) continue;
 
@@ -295,8 +364,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
         std.debug.assert(op.delta > 0); // implies a double release
 
         op.dense = switch (op.kind) {
-            .texture => try self.texture_reg.new_texture(),
-            .sampled_texture => try self.texture_reg.new_sampled_texture(gc, destroy_queue),
+            .texture => try self.texture_reg.newTexture(),
+            .sampled_texture => try self.texture_reg.newSampledTexture(gc, destroy_queue),
             .material_schema => unreachable,
             .material_instance => unreachable,
             .geometry => unreachable,
@@ -316,8 +385,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
         if (op.delta < 0) {
             const delta: u32 = @intCast(-op.delta);
             if (try switch (op.kind) {
-                .texture => self.texture_reg.release_texture(destroy_queue, transport, op.dense, delta),
-                .sampled_texture => self.texture_reg.release_sampled_texture(gc, destroy_queue, op.dense, delta),
+                .texture => self.texture_reg.releaseTexture(destroy_queue, transport, op.dense, delta),
+                .sampled_texture => self.texture_reg.releaseSampledTexture(gc, destroy_queue, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable,
@@ -342,8 +411,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
             }
 
             try switch (op.kind) {
-                .texture => self.texture_reg.acquire_texture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .sampled_texture => self.texture_reg.acquire_sampled_texture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .texture => self.texture_reg.acquireTexture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .sampled_texture => self.texture_reg.acquireSampledTexture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable, // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense

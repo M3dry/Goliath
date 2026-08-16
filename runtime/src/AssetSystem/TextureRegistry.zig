@@ -6,6 +6,7 @@ const Loader = @import("Loader.zig");
 const resolver = @import("resolver.zig");
 const types = @import("Types.zig");
 const Gid = types.Gid;
+const Entry = types.Entry;
 
 const Image = struct {
     image: base.Image2D = .{},
@@ -54,7 +55,35 @@ pub const DefaultKind = enum(u8) {
     metallic_roughness,
 };
 
-const TextureBlob = extern struct {
+pub const IngestTexture = struct {
+    default_image: DefaultKind,
+    data: union(enum) {
+        file_path: []const u8,
+        uri: []const u8,
+        encoded_blob: []const u8,
+        decoded_blob: struct {
+            format: base.vk.Format,
+            width: u32,
+            height: u32,
+            blob: []const u8,
+        },
+    },
+};
+
+pub const IngestSampledTexture = struct {
+    texture: Gid,
+    sampler: base.Sampler.Description,
+};
+
+pub const IngestTextureError = error {
+    WriteFailed
+} || std.Io.File.OpenError;
+
+pub const IngestSampledTextureError = error {
+
+};
+
+const TextureBlobHeader = extern struct {
     format: base.vk.Format,
     width: u32,
     height: u32,
@@ -192,14 +221,14 @@ pub fn deinitNow(self: *TextureRegistry, gc: *const base.GraphicsCtx) void {
     self.texture_pool.deinitNow(gc);
 }
 
-pub fn new_texture(self: *TextureRegistry) !u32 {
+pub fn newTexture(self: *TextureRegistry) !u32 {
     if (self.textures_free_list.pop()) |id| return id;
 
     _ = try self.textures.append(self.alloc, .{});
     return @intCast(self.textures.len - 1);
 }
 
-pub fn new_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue) !u32 {
+pub fn newSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue) !u32 {
     if (self.sampled_texture_free_list.pop()) |id| return id;
 
     _ = try self.sampled_textures.append(self.alloc, .{});
@@ -212,7 +241,7 @@ pub fn new_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, 
     return id;
 }
 
-pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     _ = resolved;
 
@@ -223,13 +252,13 @@ pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, tran
         errdefer loader.unload(cold);
 
         var reader = std.Io.Reader.fixed(data);
-        const blob = try reader.takeStruct(TextureBlob, .little);
+        const blob = try reader.takeStruct(TextureBlobHeader, .little);
         const ticket = &slice.items(.ticket)[id];
         const image = &slice.items(.image)[id];
 
         slice.items(.default_image)[id] = blob.default_image;
 
-        image.image = try base.Image2D.init(gc, gc.vma_alloc, "", .{
+        image.image = try base.Image2D.init(gc, gc.vma_alloc, "TextureRegistry image", .{
             .format = blob.format,
             .extent = .{
                 .width = blob.width,
@@ -249,7 +278,7 @@ pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, tran
             false,
             blob.format,
             .{ .width = blob.width, .height = blob.height, .depth = 1 },
-            data[@sizeOf(TextureBlob)..],
+            data[@sizeOf(TextureBlobHeader)..],
             free_fn.free_fn,
             free_fn.ctx,
             image.image.handle,
@@ -271,7 +300,7 @@ pub fn acquire_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, tran
     ref_count.* += delta;
 }
 
-pub fn acquire_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -315,7 +344,7 @@ pub fn acquire_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsC
     ref_count.* += delta;
 }
 
-pub fn release_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, transport: *base.Transport, id: u32, delta: u32) !types.ReleaseReturn {
+pub fn releaseTexture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, transport: *base.Transport, id: u32, delta: u32) !types.ReleaseReturn {
     std.debug.assert(delta > 0);
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -335,7 +364,7 @@ pub fn release_texture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue
     return .released;
 }
 
-pub fn release_sampled_texture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, id: u32, delta: u32) !types.ReleaseReturn {
+pub fn releaseSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, id: u32, delta: u32) !types.ReleaseReturn {
     std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -382,6 +411,54 @@ pub fn tick(self: *TextureRegistry, transport: *base.Transport, gc: *const base.
             _ = self.pending_sampled_textures.swapRemove(i);
         } else i += 1;
     }
+}
+
+pub fn ingestTexture(io: std.Io, location: types.IngestLocation, tex: IngestTexture) types.IngestError!Entry {
+    const file = try location.prefix_dir.createFile(io, location.path, .{});
+    defer file.close(io);
+
+    var writer_buffer: [1024]u8 = undefined;
+    var file_writer = file.writer(io, &writer_buffer);
+    const writer = &file_writer.interface;
+
+    const blob_size = switch (tex.data) {
+        .decoded_blob => |d| blk: {
+            try writer.writeStruct(TextureBlobHeader{
+                .format = d.format,
+                .width = d.width,
+                .height = d.height,
+                .default_image = tex.default_image
+            }, .little);
+
+            // NOTE: potentially could replace with writer.write and manual loop that also calls io.checkCancel(), but don't think it's worth it
+            try writer.writeAll(d.blob);
+
+            break :blk d.blob.len;
+        },
+        .encoded_blob => unreachable,
+        .file_path => unreachable,
+        .uri => unreachable,
+    };
+
+    const cold_asset: Loader.ColdAsset = .{
+        .location = location.loc,
+        .offset = 0,
+        .size = @sizeOf(TextureBlobHeader) + blob_size,
+    };
+
+    return .{
+        .generation = 0,
+        .kind = .texture,
+        .cold_asset = cold_asset,
+    };
+}
+
+pub fn ingestSampledTexture(self: *TextureRegistry, loader: *Loader, data: IngestSampledTexture) types.IngestError!Entry {
+    _ = self;
+    _ = loader;
+    _ = data;
+
+    @panic("todo");
 }
 
 fn resizeTexturePool(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, new_cap: u32) !void {

@@ -1,4 +1,11 @@
 const std = @import("std");
+const base = @import("base");
+
+const SmallBuffer = base.util.SmallBuffer;
+const SmallBitSet = base.util.SmallBitset;
+
+const ColdAsset = @import("Loader.zig").ColdAsset;
+const TextureRegistry = @import("TextureRegistry.zig");
 
 pub const Gid = packed struct(u64) {
     gen: u32,
@@ -37,3 +44,46 @@ pub const ReleaseReturn = enum {
     kept,
     released,
 };
+
+// fits into two cachelines
+pub const Deps = struct {
+    necessary: SmallBitSet(13) = .empty,
+    gids: SmallBuffer(Gid, 13) = .empty,
+};
+
+pub const Entry = struct {
+    name: []const u8 = &.{},
+
+    generation: u32,
+    dense: u32 = std.math.maxInt(u32), // == maxInt(u32) => not loaded into registry, == maxInt(u32) - 1 => entry deleted/none
+
+    kind: Kind,
+
+    cold_asset: ColdAsset,
+
+    deps: Deps = .{},
+    rdeps: SmallBuffer(Gid, 8) = .empty,
+
+    pub const none: Entry = .{
+        .generation = 0,
+        .dense = std.math.maxInt(u32) - 1,
+        .kind = .texture,
+        .cold_asset = .{
+            .location = std.math.maxInt(u32),
+            .offset = 0,
+            .size = 0,
+        },
+    };
+
+    pub fn isNone(self: Entry) bool {
+        return self.dense == none.dense;
+    }
+};
+
+pub const IngestLocation = struct {
+    loc: u32,
+    path: []const u8,
+    prefix_dir: std.Io.Dir,
+};
+
+pub const IngestError = std.mem.Allocator.Error || std.Io.Cancelable || TextureRegistry.IngestTextureError || TextureRegistry.IngestSampledTextureError;
