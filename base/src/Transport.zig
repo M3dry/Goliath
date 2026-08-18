@@ -210,7 +210,7 @@ const Task = struct {
                     .full_src_size = self.full_src_size,
                     .parent_ticket_id = self.parent_ticket_id,
                     .ticket_id = if (sub2_is_last) Ticket.none.id() else original_ticket_id,
-                    .owning = null,
+                    .owning = if (sub2_is_last) null else self.owning,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
                 };
@@ -527,7 +527,13 @@ pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
 
     gc.dev.destroySemaphore(self.timeline_semaphore, null);
 
-    for (&self.task_queues) |*q| q.deinit(self.alloc);
+    for (&self.task_queues) |*q| {
+        while (q.popFirst()) |task| {
+            if (task.owning) |owned|
+                owned.free_fn(owned.ctx, @ptrCast(@constCast(task.src)));
+        }
+        q.deinit(self.alloc);
+    }
 
     self.transport_buffer_barriers.deinit(self.alloc);
     self.transport_image_barriers.deinit(self.alloc);
@@ -535,6 +541,11 @@ pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
     self.free_tickets.deinit(self.alloc);
 
     for (self.pending_submissions.items) |*ps| {
+        if (ps.wait_semaphore != .null_handle) {
+            if (ps.wait_semaphore == self.last_wait_semaphore)
+                self.last_wait_semaphore = .null_handle;
+            gc.dev.destroySemaphore(ps.wait_semaphore, null);
+        }
         ps.buffer_barriers.deinit(self.alloc);
         ps.image_barriers.deinit(self.alloc);
         ps.ticket_ids.deinit(self.alloc);
@@ -1005,7 +1016,8 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
             defer rest.deinit(self.alloc);
 
             if (budget < try task.requiredSize()) {
-                if (try task.split(budget, &rest, self)) break;
+                const split_result = try task.split(budget, &rest, self);
+                if (split_result) break;
 
                 _ = queue.popFirst();
 

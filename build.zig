@@ -8,6 +8,11 @@ pub fn build(b: *std.Build) !void {
     const shaders = build_shaders.shadersStep(b, "shaders");
     b.getInstallStep().dependOn(shaders.step);
 
+    const rebuild_assets = b.option(bool, "asset_system_rebuild", "Rebuild the asset system manifest from the model textures (wipes testing_asset_system)") orelse false;
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "asset_system_rebuild", rebuild_assets);
+    const build_options_mod = build_options.createModule();
+
     const runtime_mod = b.dependency("runtime", .{
         .target = target,
         .optimize = optimize,
@@ -22,6 +27,7 @@ pub fn build(b: *std.Build) !void {
             .imports = &.{
                 .{ .name = "shaders", .module = shaders.mod },
                 .{ .name = "runtime", .module = runtime_mod },
+                .{ .name = "build_options", .module = build_options_mod },
             },
         }),
     };

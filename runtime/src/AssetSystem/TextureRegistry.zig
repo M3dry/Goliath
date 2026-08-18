@@ -75,14 +75,6 @@ pub const IngestSampledTexture = struct {
     sampler: base.Sampler.Description,
 };
 
-pub const IngestTextureError = error {
-    WriteFailed
-} || std.Io.File.OpenError;
-
-pub const IngestSampledTextureError = error {
-
-};
-
 const TextureBlobHeader = extern struct {
     format: base.vk.Format,
     width: u32,
@@ -241,15 +233,15 @@ pub fn newSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, de
     return id;
 }
 
-pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     _ = resolved;
 
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
     if (ref_count.* == 0) {
-        const data = try loader.load(cold);
-        errdefer loader.unload(cold);
+        const data = try loader.load(io, cold);
+        errdefer loader.unload(io, cold);
 
         var reader = std.Io.Reader.fixed(data);
         const blob = try reader.takeStruct(TextureBlobHeader, .little);
@@ -271,7 +263,7 @@ pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
         image.view = try base.ImageView.init(gc, .fromImage(&image.image));
         errdefer image.view.deinitNow(gc);
 
-        var free_fn = try loader.make_transport_unload(self.alloc, cold);
+        var free_fn = try loader.make_transport_unload(io, self.alloc, cold);
         errdefer free_fn.deinit();
 
         ticket.* = try transport.uploadImage(
@@ -300,7 +292,7 @@ pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
     ref_count.* += delta;
 }
 
-pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -309,7 +301,7 @@ pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
         const sampler = &slice.items(.sampler)[id];
         const dense = &slice.items(.texture)[id];
 
-        const data = try loader.load(cold);
+        const data = try loader.load(io, cold);
 
         // var reader = std.Io.Reader.fixed(data);
         // const blob = try reader.takeStruct(Blob, .little); - Can't use because takeStruct requires packed or extern on Blob
@@ -440,6 +432,8 @@ pub fn ingestTexture(io: std.Io, location: types.IngestLocation, tex: IngestText
         .uri => unreachable,
     };
 
+    try file_writer.flush();
+
     const cold_asset: Loader.ColdAsset = .{
         .location = location.loc,
         .offset = 0,
@@ -453,12 +447,38 @@ pub fn ingestTexture(io: std.Io, location: types.IngestLocation, tex: IngestText
     };
 }
 
-pub fn ingestSampledTexture(self: *TextureRegistry, loader: *Loader, data: IngestSampledTexture) types.IngestError!Entry {
-    _ = self;
-    _ = loader;
-    _ = data;
+pub fn ingestSampledTexture(alloc: Allocator, io: std.Io, location: types.IngestLocation, tex: IngestSampledTexture) types.IngestError!Entry {
+    const file = try location.prefix_dir.createFile(io, location.path, .{});
+    defer file.close(io);
 
-    @panic("todo");
+    var writer_buffer: [512]u8 = undefined;
+    var file_writer = file.writer(io, &writer_buffer);
+    var stringify: std.json.Stringify = .{
+        .writer = &file_writer.interface,
+        .options = .{
+            .whitespace = .indent_2,
+        }
+    };
+
+    try stringify.write(SampledTextureBlob{
+        .sampler = tex.sampler,
+        .texture_gid = tex.texture,
+    });
+    try file_writer.flush();
+
+    var entry: Entry = .{
+        .generation = 0,
+        .kind = .sampled_texture,
+        .cold_asset = .{
+            .location = location.loc,
+            .offset = 0,
+            .size = file_writer.logicalPos(),
+        },
+    };
+    try entry.deps.necessary.set(alloc, 0);
+    (try entry.deps.gids.addOne(alloc)).* = tex.texture;
+
+    return entry;
 }
 
 fn resizeTexturePool(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, new_cap: u32) !void {

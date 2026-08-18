@@ -1,6 +1,9 @@
 const std = @import("std");
 const runtime = @import("runtime");
 const shaders = @import("shaders");
+const build_options = @import("build_options");
+
+const rebuild_assets = build_options.asset_system_rebuild;
 
 const base = runtime.base;
 const zgui = base.zgui;
@@ -10,8 +13,6 @@ const zmesh = runtime.zmesh;
 
 const Culling = runtime.Culling;
 
-const pool_texture_count = 5; // 2 fallbacks + 3 Paladin textures
-
 fn waitForTick(transport: *base.Transport, gc: *const base.GraphicsCtx, tick: base.Transport.Ticket) !void {
     while (!try transport.isReady(tick)) {
         try transport.drain(gc);
@@ -19,70 +20,27 @@ fn waitForTick(transport: *base.Transport, gc: *const base.GraphicsCtx, tick: ba
     }
 }
 
-fn uploadPoolTexture(
-    ctx: *base.Ctx,
-    transport: *base.Transport,
-    pool: *base.TexturePool,
-    image: *base.Image2D,
-    view: *base.ImageView,
-    sampler: *base.Sampler,
-    index: u32,
-    width: u32,
-    height: u32,
-    pixels: []const u8,
-    sampler_desc: base.Sampler.Description,
-) !void {
-    const fmt = base.vk.Format.r8g8b8a8_srgb;
-    image.* = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "texture_pool", .{
-        .format = fmt,
-        .extent = .{ .width = width, .height = height },
-        .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
-    });
-    errdefer image.deinit(&ctx.destroy_queue);
+const Slot = enum { albedo, metallic_roughness, normal, occlusion, emissive };
 
-    const tick = try transport.uploadImage(
-        false,
-        fmt,
-        .{ .width = width, .height = height, .depth = 1 },
-        pixels,
-        null,
-        null,
-        image.handle,
-        .{
-            .aspect_mask = .{ .color_bit = true },
-            .mip_level = 0,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-        .{ .x = 0, .y = 0, .z = 0 },
-        .undefined,
-        .shader_read_only_optimal,
-        .{ .fragment_shader_bit = true, .compute_shader_bit = true },
-        .{ .shader_read_bit = true },
-    );
-    try waitForTick(transport, &ctx.graphics, tick);
-
-    view.* = try base.ImageView.init(&ctx.graphics, .{
-        .image = image.handle,
-        .format = fmt,
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    });
-    errdefer view.deinit(&ctx.destroy_queue);
-
-    sampler.* = try base.Sampler.init(&ctx.graphics, sampler_desc);
-    errdefer sampler.deinit(&ctx.destroy_queue);
-
-    pool.update(&ctx.graphics, index, view.handle, .shader_read_only_optimal, sampler.handle);
+/// name of the sampled texture backing a material slot; missing slots fall back
+/// to the white / flat-normal entries
+fn slotName(slot: Slot, texture_index: u32, buf: *[64]u8) []const u8 {
+    if (texture_index == runtime.PbrShading.no_texture) {
+        return switch (slot) {
+            .normal => "sampled_flat_normal",
+            else => "sampled_white",
+        };
+    }
+    return std.fmt.bufPrint(buf, "sampled_gltf_texture_{d}", .{texture_index}) catch unreachable;
 }
 
-fn remapTextureIndex(gltf_ix: u32, fallback: u32) u32 {
-    return if (gltf_ix == runtime.PbrShading.no_texture) fallback else 2 + gltf_ix;
+/// ingest a texture into the asset system and finalize it as a named entry;
+/// the underlying file is kept on disk for the manifest
+fn ingestAndFinalize(asset_system: *runtime.AssetSystem, data: runtime.AssetSystem.KindData, name: []const u8) !runtime.AssetSystem.Gid {
+    var future = try asset_system.ingestAsset(data, name);
+    var entry = try future.await(asset_system.io());
+    entry.name = name;
+    return asset_system.finalizeAsset(entry, true);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -128,6 +86,7 @@ pub fn main(init: std.process.Init) !void {
     defer for (&anims) |*a| a.deinit(gpa);
 
     const mesh_world = zm.scaling(0.05, 0.05, 0.05);
+    const mesh_world2: zm.Mat = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05));
 
     const gltf_result0 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
     defer gpa.free(gltf_result0.name);
@@ -177,49 +136,135 @@ pub fn main(init: std.process.Init) !void {
     var imgui = try base.Imgui.init(gpa, &ctx);
     defer imgui.deinit(ctx.graphics.dev);
 
-    // Texture pool: index 0 = white, 1 = flat normal (0.5, 0.5, 1) fallbacks, then Paladin textures.
-    var texture_pool = try base.TexturePool.init(&ctx.graphics, 16);
-    defer texture_pool.deinit(&ctx.destroy_queue);
+    // PBR material instance: gltf texture indices → texture pool indices, resolved
+    // against the asset system's sampled textures.
+    var inst = try runtime.PbrShading.PBRInstance.fromGltf(gltf_data, 0);
 
-    var pool_images: [pool_texture_count]base.Image2D = undefined;
-    var pool_views: [pool_texture_count]base.ImageView = undefined;
-    var pool_samplers: [pool_texture_count]base.Sampler = undefined;
-    defer for (0..pool_texture_count) |i| {
-        pool_samplers[i].deinit(&ctx.destroy_queue);
-        pool_views[i].deinit(&ctx.destroy_queue);
-        pool_images[i].deinit(&ctx.destroy_queue);
-    };
-
-    const white_pixel = [4]u8{ 255, 255, 255, 255 };
-    try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[0], &pool_views[0], &pool_samplers[0], 0, 1, 1, &white_pixel, .{});
-    const flat_normal_pixel = [4]u8{ 128, 128, 255, 255 };
-    try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[1], &pool_views[1], &pool_samplers[1], 1, 1, 1, &flat_normal_pixel, .{});
-
-    for (0..3) |gltf_ix| {
-        const tex = (try runtime.Texture.fromGltf(gpa, init.io, gltf_data, @intCast(gltf_ix), null)) orelse continue;
-        defer tex.deinit(gpa);
-        const pool_ix = 2 + gltf_ix;
-        try uploadPoolTexture(&ctx, &transport, &texture_pool, &pool_images[pool_ix], &pool_views[pool_ix], &pool_samplers[pool_ix], @intCast(pool_ix), tex.width, tex.height, tex.pixels, tex.sampler);
+    const asset_dir = "testing_asset_system";
+    if (rebuild_assets) {
+        std.Io.Dir.deleteTree(.cwd(), init.io, asset_dir) catch {};
+        try std.Io.Dir.createDir(.cwd(), init.io, asset_dir, .default_dir);
     }
 
-    // PBR material instance: gltf texture indices → pool indices, then upload.
+    var manifest_file: ?std.Io.File = null;
+    if (!rebuild_assets) {
+        manifest_file = try std.Io.Dir.openFile(.cwd(), init.io, asset_dir ++ "/manifest.json", .{});
+    }
+    defer if (manifest_file) |*f| f.close(init.io);
+
+    var asset_system: runtime.AssetSystem = undefined;
+    if (rebuild_assets) {
+        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .default = .{ .path_prefix = asset_dir } });
+    } else {
+        var file_reader_buffer: [512]u8 = undefined;
+        var file_reader = manifest_file.?.readerStreaming(init.io, &file_reader_buffer);
+        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .reader = &file_reader.interface });
+    }
+    defer asset_system.deinit(&ctx.destroy_queue);
+
+    if (rebuild_assets) {
+        // fallback 1x1 textures: white + flat normal
+        const white = [4]u8{ 255, 255, 255, 255 };
+        const flat_normal = [4]u8{ 128, 128, 255, 255 };
+        const white_gid = try ingestAndFinalize(&asset_system, .{
+            .texture = .{
+                .default_image = .white,
+                .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_srgb, .width = 1, .height = 1, .blob = &white } },
+            },
+        }, "white");
+        const flat_normal_gid = try ingestAndFinalize(&asset_system, .{
+            .texture = .{
+                .default_image = .flat_normal,
+                .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_srgb, .width = 1, .height = 1, .blob = &flat_normal } },
+            },
+        }, "flat_normal");
+
+        // Paladin textures, decoded from the gltf
+        var gltf_textures: [3]runtime.Texture = undefined;
+        for (0..gltf_textures.len) |i| {
+            gltf_textures[i] = (try runtime.Texture.fromGltf(gpa, init.io, gltf_data, @intCast(i), null)) orelse return error.GltfTextureMissing;
+        }
+        defer for (&gltf_textures) |*t| t.deinit(gpa);
+
+        var gltf_gids: [3]runtime.AssetSystem.Gid = undefined;
+        for (0..gltf_textures.len) |i| {
+            var name_buf: [64]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "gltf_texture_{d}", .{i});
+            gltf_gids[i] = try ingestAndFinalize(&asset_system, .{
+                .texture = .{
+                    .default_image = .white,
+                    .data = .{ .decoded_blob = .{
+                        .format = .r8g8b8a8_srgb,
+                        .width = gltf_textures[i].width,
+                        .height = gltf_textures[i].height,
+                        .blob = gltf_textures[i].pixels,
+                    } },
+                },
+            }, name);
+        }
+
+        // one sampled texture per raw texture, carrying its gltf sampler
+        _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = white_gid, .sampler = .{} } }, "sampled_white");
+        _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = flat_normal_gid, .sampler = .{} } }, "sampled_flat_normal");
+        for (0..gltf_textures.len) |i| {
+            var name_buf: [64]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "sampled_gltf_texture_{d}", .{i});
+            _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = gltf_gids[i], .sampler = gltf_textures[i].sampler } }, name);
+        }
+
+        // write the manifest
+        var manifest_writer_buf: [1024]u8 = undefined;
+        var manifest_file_w = try std.Io.Dir.createFile(.cwd(), init.io, asset_dir ++ "/manifest.json", .{});
+        defer manifest_file_w.close(init.io);
+        var manifest_writer = manifest_file_w.writer(init.io, &manifest_writer_buf);
+        var stringify: std.json.Stringify = .{ .writer = &manifest_writer.interface, .options = .{ .whitespace = .indent_2 } };
+        try asset_system.save_manifest(&stringify);
+        try manifest_writer.flush();
+    }
+
+    // Map the material's 5 texture slots to sampled textures in the manifest.
+    const slot_fields = [5]u32{ inst.albedo_map, inst.metallic_roughness_map, inst.normal_map, inst.occlusion_map, inst.emissive_map };
+    const slot_tags = [_]Slot{ .albedo, .metallic_roughness, .normal, .occlusion, .emissive };
+    var slot_bufs: [5][64]u8 = undefined;
+    var slot_gids: [5]runtime.AssetSystem.Gid = undefined;
+    for (&slot_gids, slot_tags, slot_fields, &slot_bufs) |*gid, slot, field, *buf| {
+        gid.* = (asset_system.findEntry(.sampled_texture, slotName(slot, field, buf))) orelse return error.SampledTextureNotFound;
+    }
+
+    var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
+    defer asset_cmd_buf.deinit();
+    for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
+    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &transport, &asset_cmd_buf);
+
+    // Let the sampled texture bindings land in the pool before the first frame.
+    while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
+        try transport.drain(&ctx.graphics);
+        try asset_system.texture_reg.tick(&transport, &ctx.graphics);
+        std.Thread.yield() catch {};
+    }
+
     var mat_handler = runtime.MaterialHandler{};
     defer mat_handler.deinit(gpa, &ctx.destroy_queue, &transport);
 
-    var inst = try runtime.PbrShading.PBRInstance.fromGltf(gltf_data, 0);
-    inst.albedo_map = remapTextureIndex(inst.albedo_map, 0);
-    inst.metallic_roughness_map = remapTextureIndex(inst.metallic_roughness_map, 0);
-    inst.normal_map = remapTextureIndex(inst.normal_map, 1);
-    inst.occlusion_map = remapTextureIndex(inst.occlusion_map, 0);
-    inst.emissive_map = remapTextureIndex(inst.emissive_map, 0);
+    inst.albedo_map = asset_system.denseIndex(slot_gids[0]);
+    inst.metallic_roughness_map = asset_system.denseIndex(slot_gids[1]);
+    inst.normal_map = asset_system.denseIndex(slot_gids[2]);
+    inst.occlusion_map = asset_system.denseIndex(slot_gids[3]);
+    inst.emissive_map = asset_system.denseIndex(slot_gids[4]);
     try mat_handler.append(gpa, 0, inst);
     try mat_handler.flush(&ctx.graphics, &transport, &ctx.destroy_queue);
     try waitForTick(&transport, &ctx.graphics, mat_handler.schema_tickets[0]);
 
+    // Give the graph a bindable id for the asset system's texture pool set, on every frame.
+    var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
+    for (0..base.Ctx.frames_in_flight) |i| {
+        texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, asset_system.texture_reg.texture_pool.set);
+    }
+
     var vis = try runtime.Visbuffer.init(&ctx, render_extent);
     defer vis.deinit(&ctx);
 
-    var pbr = try runtime.PbrShading.init(&ctx, vis.set_layout, texture_pool.set_layout);
+    var pbr = try runtime.PbrShading.init(&ctx, vis.set_layout, asset_system.texture_reg.texture_pool.set_layout);
     defer pbr.deinit(&ctx);
 
     var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
@@ -249,7 +294,7 @@ pub fn main(init: std.process.Init) !void {
     defer skinned_draw_cmds_buf.deinit(&ctx.destroy_queue);
 
     // Skinned world instances (mesh_ix + joint_offset + transform)
-    const skinned_instance_count: u32 = 2;
+    const skinned_instance_count: u32 = 4;
     var skinned_world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinned_world_instances_buf", skinned_instance_count * Culling.skinned_world_instance_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
     defer skinned_world_instances_buf.deinit(&ctx.destroy_queue);
 
@@ -316,29 +361,6 @@ pub fn main(init: std.process.Init) !void {
 
     var mouse_captured = false;
     var camera_speed: f32 = 2.0;
-
-
-
-    const file = try std.Io.Dir.openFile(.cwd(), init.io, "./testing_asset_system/manifest.json", .{});
-    defer file.close(init.io);
-
-    var file_reader_buffer: [512]u8 = undefined;
-    var file_reader = file.readerStreaming(init.io, &file_reader_buffer);
-    var asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .reader = &file_reader.interface });
-    defer asset_system.deinit(&ctx.destroy_queue);
-
-    var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
-    defer asset_cmd_buf.deinit();
-    try asset_cmd_buf.request(&asset_system, .{.gen = 0, .slot = 0});
-    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &transport, &asset_cmd_buf);
-
-    // Give the graph a bindable id for the texture pool's own set, on every frame pool.
-    var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
-    for (0..base.Ctx.frames_in_flight) |i| {
-        texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, texture_pool.set);
-        // texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, asset_system.texture_reg.texture_pool.set);
-    }
-
 
     defer ctx.graphics.dev.deviceWaitIdle() catch {};
     var timer = base.timing.FrameTimer.init(1.0 / 60.0);
@@ -656,9 +678,28 @@ pub fn main(init: std.process.Init) !void {
                 @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&mesh_world));
                 const base_off = Culling.skinned_world_instance_size;
                 const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
+
                 inst2[0] = 0; // mesh_desc_ix
                 inst2[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&mesh_world));
+                if (!skinned_world_instances_buf.coherent)
+                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+
+                const base_off2 = Culling.skinned_world_instance_size*2;
+                const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
+
+                inst3[0] = 1; // mesh_desc_ix
+                inst3[1] = 0; // joint_offset
+                @memcpy(std.mem.sliceAsBytes(inst3[2..18]), std.mem.asBytes(&mesh_world2));
+                if (!skinned_world_instances_buf.coherent)
+                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+
+                const base_off3 = Culling.skinned_world_instance_size*3;
+                const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
+
+                inst4[0] = 0; // mesh_desc_ix
+                inst4[1] = 0; // joint_offset
+                @memcpy(std.mem.sliceAsBytes(inst4[2..18]), std.mem.asBytes(&mesh_world2));
                 if (!skinned_world_instances_buf.coherent)
                     skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
             }

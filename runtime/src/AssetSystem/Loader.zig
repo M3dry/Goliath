@@ -26,8 +26,6 @@ const Location = struct {
     }
 };
 
-io: std.Io,
-
 locations_path_prefix_str: []const u8,
 locations_path_prefix: std.Io.Dir,
 locations: std.ArrayList(Location),
@@ -42,7 +40,6 @@ pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
     errdefer prefix_dir.close(io);
 
     var self: Loader = .{
-        .io = io,
         .locations_path_prefix_str = prefix_str,
         .locations_path_prefix = prefix_dir,
         .locations = .empty,
@@ -65,18 +62,18 @@ pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
     return self;
 }
 
-pub fn deinit(self: *Loader, alloc: Allocator) void {
+pub fn deinit(self: *Loader, alloc: Allocator, io: std.Io) void {
     alloc.free(self.locations_path_prefix_str);
-    self.locations_path_prefix.close(self.io);
+    self.locations_path_prefix.close(io);
 
     for (self.locations.items) |*location| {
-        if (location.memory_map) |*m| m.destroy(self.io);
+        if (location.memory_map) |*m| m.destroy(io);
         alloc.free(location.path);
     }
     self.locations.deinit(alloc);
 }
 
-pub fn load(self: *Loader, cold_asset: *const ColdAsset) ![]const u8 {
+pub fn load(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) ![]const u8 {
     const location = &self.locations.items[cold_asset.location];
 
     if (location.memory_map) |memory_map| {
@@ -84,11 +81,11 @@ pub fn load(self: *Loader, cold_asset: *const ColdAsset) ![]const u8 {
         return memory_map.memory[cold_asset.offset..cold_asset.offset + cold_asset.size];
     }
 
-    const file = try self.locations_path_prefix.openFile(self.io, location.path, .{});
-    defer file.close(self.io);
+    const file = try self.locations_path_prefix.openFile(io, location.path, .{});
+    defer file.close(io);
 
-    const m = try file.createMemoryMap(self.io, .{ .len = try file.length(self.io), .protection = .{ .read = true } });
-    errdefer m.destroy(self.io);
+    const m = try file.createMemoryMap(io, .{ .len = try file.length(io), .protection = .{ .read = true } });
+    errdefer m.destroy(io);
 
     location.ref_count += 1;
     location.memory_map = m;
@@ -98,6 +95,7 @@ pub fn load(self: *Loader, cold_asset: *const ColdAsset) ![]const u8 {
 
 const Ctx = struct {
     self: *Loader,
+    io: std.Io,
     cold_asset: ColdAsset,
     alloc: Allocator,
 };
@@ -114,18 +112,19 @@ const FreeFnCtx = struct {
 
 fn transport_free_fn(anyctx: ?*anyopaque, ptr: *anyopaque) void {
     _ = ptr;
-
     const ctx: *Ctx = @ptrCast(@alignCast(anyctx.?));
+
     const alloc = ctx.alloc;
 
-    ctx.self.unload(&ctx.cold_asset);
+    ctx.self.unload(ctx.io, &ctx.cold_asset);
     alloc.destroy(ctx);
 }
 
-pub fn make_transport_unload(self: *Loader, alloc: Allocator, cold_asset: *const ColdAsset) !FreeFnCtx {
+pub fn make_transport_unload(self: *Loader, io: std.Io, alloc: Allocator, cold_asset: *const ColdAsset) !FreeFnCtx {
     const ctx = try alloc.create(Ctx);
 
     ctx.self = self;
+    ctx.io = io;
     ctx.cold_asset = cold_asset.*;
     ctx.alloc = alloc;
 
@@ -134,7 +133,7 @@ pub fn make_transport_unload(self: *Loader, alloc: Allocator, cold_asset: *const
     };
 }
 
-pub fn unload(self: *Loader, cold_asset: *const ColdAsset) void {
+pub fn unload(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) void {
     const location = &self.locations.items[cold_asset.location];
 
     std.debug.assert(location.ref_count != 0);
@@ -143,7 +142,7 @@ pub fn unload(self: *Loader, cold_asset: *const ColdAsset) void {
     if (location.ref_count != 0) return;
 
     if (location.memory_map) |*m| {
-        m.destroy(self.io);
+        m.destroy(io);
     } else std.debug.assert(false);
 
     location.memory_map = null;
@@ -161,11 +160,11 @@ pub fn newLocation(self: *Loader, alloc: Allocator, path: []const u8) error{OutO
     return @intCast(self.locations.items.len - 1);
 }
 
-pub fn removeLocation(self: *Loader, alloc: Allocator, loc: u32) !void {
+pub fn removeLocation(self: *Loader, alloc: Allocator, io: std.Io, loc: u32) !void {
     var location = &self.locations.items[loc];
 
-    if (location.memory_map) |*m| m.destroy(self.io);
-    self.locations_path_prefix.deleteFile(self.io, location.path) catch {};
+    if (location.memory_map) |*m| m.destroy(io);
+    self.locations_path_prefix.deleteFile(io, location.path) catch {};
     alloc.free(location.path);
 
     location.* = .none;

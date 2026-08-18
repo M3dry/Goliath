@@ -8,8 +8,8 @@ const Loader = @import("AssetSystem/Loader.zig");
 const resolver = @import("AssetSystem/resolver.zig");
 
 const types = @import("AssetSystem/Types.zig");
-const Gid = types.Gid;
-const Kind = types.Kind;
+pub const Gid = types.Gid;
+pub const Kind = types.Kind;
 const Entry = types.Entry;
 
 const AssetSystem = @This();
@@ -17,13 +17,16 @@ const AssetSystem = @This();
 alloc: Allocator,
 loader: Loader,
 threaded_io: std.Io.Threaded,
-io: std.Io,
 
 entries: std.MultiArrayList(Entry) = .empty,
 free_entries: std.ArrayList(u32) = .empty,
 
 texture_reg: TextureRegistry,
 // registires for the other asset kinds...
+
+pub fn io(self: *AssetSystem) std.Io {
+    return self.threaded_io.io();
+}
 
 pub const ManifestReader = union(enum) {
     reader: *std.Io.Reader,
@@ -39,7 +42,7 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
         .concurrent_limit = .unlimited,
     });
     errdefer threaded_io.deinit();
-    const io = threaded_io.io();
+    const init_io = threaded_io.io();
 
     var arena_alloc = std.heap.ArenaAllocator.init(tmp_alloc);
     defer arena_alloc.deinit();
@@ -59,8 +62,8 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
         },
     };
 
-    var loader = try Loader.init(io, alloc, &manifest.loader);
-    errdefer loader.deinit(alloc);
+    var loader = try Loader.init(init_io, alloc, &manifest.loader);
+    errdefer loader.deinit(alloc, init_io);
 
     var texture_reg = try TextureRegistry.init(gc, transport, alloc);
     errdefer texture_reg.deinitNow(gc);
@@ -148,7 +151,6 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
         .alloc = alloc,
         .loader = loader,
         .threaded_io = threaded_io,
-        .io = io,
         .entries = entries,
         .free_entries = free_entries,
         .texture_reg = texture_reg,
@@ -166,7 +168,7 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
 }
 
 pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
-    self.loader.deinit(self.alloc);
+    self.loader.deinit(self.alloc, self.io());
     self.threaded_io.deinit();
 
     for (self.entries.items(.name)) |name| {
@@ -191,30 +193,50 @@ pub const KindData = union(Kind) {
 
 pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !Gid {
     if (entry.isNone()) return error.EntryIsNone;
+    const gens = self.entries.items(.generation);
 
     var e = entry;
-    // TODO: verify that deps of entry are valid
-    // TODO: udpate rdeps of deps
+    for (e.deps.gids.items()) |gid| {
+        if (gid.slot >= self.entries.len) return error.NonExistentGidReferenced;
+        if (gens[gid.slot] != gid.gen) return error.StaleGidReferenced;
+    }
 
     if (dupe_entry_name) {
         e.name = try self.alloc.dupe(u8, entry.name);
     }
     errdefer if (dupe_entry_name) self.alloc.free(e.name);
 
-    if (self.free_entries.pop()) |slot| {
-        e.generation = self.entries.items(.generation)[slot] + 1;
+    const gid = if (self.free_entries.pop()) |slot| blk: {
+        e.generation = gens[slot] + 1;
         self.entries.set(slot, e);
 
-        return Gid{ .gen = e.generation, .slot = slot };
-    } else {
+        break :blk Gid{ .gen = e.generation, .slot = slot };
+    } else blk: {
         e.generation = 0;
         try self.entries.append(self.alloc, e);
 
-        return Gid{
+        break :blk Gid{
             .gen = e.generation,
             .slot = @intCast(self.entries.len - 1),
         };
+    };
+    errdefer if (self.entries.items(.generation)[gid.slot] == gid.gen) {
+        e.deps.necessary.deinit(self.alloc);
+        e.deps.gids.deinit(self.alloc);
+        e.rdeps.deinit(self.alloc);
+        self.entries.set(gid.slot, .none);
+    };
+
+    const rdepss = self.entries.items(.rdeps);
+    for (e.deps.gids.items()) |dep_gid| {
+        const rdeps = &rdepss[dep_gid.slot];
+        for (rdeps.items()) |rdep_gid| {
+            std.debug.assert(rdep_gid != gid);
+        }
+        (try rdeps.addOne(self.alloc)).* = gid;
     }
+
+    return gid;
 }
 
 fn makeTargetPath(self: *AssetSystem, target_path: []const u8) ![]u8 {
@@ -222,15 +244,17 @@ fn makeTargetPath(self: *AssetSystem, target_path: []const u8) ![]u8 {
     var increment: usize = 0;
     var path: []const u8 = &.{};
     var buf: []u8 = &.{};
+    defer self.alloc.free(buf);
+
     while (true) {
         path = if (increment == 0) target_path else blk: {
-            if (increment == 1) buf = try self.alloc.alloc(u8, target_path.len + 20); // 20 digits in 2^64
+            if (increment == 1) buf = try self.alloc.alloc(u8, target_path.len + 21); // 20 digits in 2^64 + '-'
             break :blk try std.fmt.bufPrint(buf, "{s}-{}", .{target_path, increment});
         };
 
-        target_exists = false;
-        self.loader.locations_path_prefix.access(self.io, target_path, .{}) catch |e| switch (e) {
-            error.FileNotFound => target_exists = true,
+        target_exists = true;
+        self.loader.locations_path_prefix.access(self.io(), path, .{}) catch |e| switch (e) {
+            error.FileNotFound => target_exists = false,
             else => return e,
         };
 
@@ -238,9 +262,7 @@ fn makeTargetPath(self: *AssetSystem, target_path: []const u8) ![]u8 {
         increment += 1;
     }
 
-    const ret = try self.alloc.dupe(u8, path);
-    self.alloc.free(buf);
-    return ret;
+    return self.alloc.dupe(u8, path);
 
 }
 
@@ -250,7 +272,7 @@ fn makeTargetPath(self: *AssetSystem, target_path: []const u8) ![]u8 {
 pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) !std.Io.Future(types.IngestError!Entry) {
     const path = try makeTargetPath(self, target_path);
     const loc = self.loader.newLocation(self.alloc, path) catch |e| { self.alloc.free(path); return e; };
-    errdefer self.loader.removeLocation(self.alloc, loc) catch {};
+    errdefer self.loader.removeLocation(self.alloc, self.io(), loc) catch {};
 
     const location: types.IngestLocation = .{
         .loc = loc,
@@ -258,9 +280,10 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
         .prefix_dir = self.loader.locations_path_prefix,
     };
 
-    return try switch (data) {
-        .texture => |d| self.io.concurrent(TextureRegistry.ingestTexture, .{ self.io, location, d }),
-        .sampled_texture => |d| self.io.concurrent(TextureRegistry.ingestSampledTexture, .{ &self.texture_reg, &self.loader, d }),
+    const asset_io = self.io();
+    const ret = try switch (data) {
+        .texture => |d| asset_io.concurrent(TextureRegistry.ingestTexture, .{ asset_io, location, d }),
+        .sampled_texture => |d| asset_io.concurrent(TextureRegistry.ingestSampledTexture, .{ self.alloc, asset_io, location, d }),
         .material_schema => unreachable,
         .material_instance => unreachable,
         .geometry => unreachable,
@@ -268,12 +291,39 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
         .model => unreachable,
         .skeleton => unreachable,
     };
+    return ret;
 }
 
 /// only to be called on an entry returned from `ingest_asset` to cancel the ingestion
-pub fn ingestAssetCleanup(self: *AssetSystem, e: Entry) !void {
+pub fn ingestAssetCleanup(self: *AssetSystem, e: *Entry) void {
     const loc = e.cold_asset.location;
-    try self.loader.removeLocation(self.alloc, loc);
+    self.loader.removeLocation(self.alloc, self.io(), loc) catch {};
+
+    e.deps.gids.deinit(self.alloc);
+    e.deps.necessary.deinit(self.alloc);
+    e.rdeps.deinit(self.alloc);
+}
+
+pub fn removeAsset(self: *AssetSystem, gid: Gid) void {
+    _ = self;
+    _ = gid;
+}
+
+/// gid of the first non-none entry with the given kind and name
+pub fn findEntry(self: *const AssetSystem, kind: Kind, name: []const u8) ?Gid {
+    const slice = self.entries.slice();
+    for (0.., slice.items(.name), slice.items(.kind)) |i, entry_name, entry_kind| {
+        if (entry_kind == kind and std.mem.eql(u8, entry_name, name)) {
+            return .{ .gen = slice.items(.generation)[i], .slot = @intCast(i) };
+        }
+    }
+    return null;
+}
+
+/// registry index of a requested (acquired) asset; for sampled textures this is
+/// the texture pool slot
+pub fn denseIndex(self: *const AssetSystem, gid: Gid) u32 {
+    return self.entries.items(.dense)[gid.slot];
 }
 
 pub const GidError = error{
@@ -411,11 +461,13 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
             }
 
             try switch (op.kind) {
-                .texture => self.texture_reg.acquireTexture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .sampled_texture => self.texture_reg.acquireSampledTexture(gc, transport, &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .texture => self.texture_reg.acquireTexture(gc, transport, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .sampled_texture => self.texture_reg.acquireSampledTexture(gc, transport, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable, // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense
+                                          // needs to be deffered after geometry upload ticket completion
+                                          //    - probably easiest is to store the geometry ticket in Self, and via a tick function check for completion, then call into mesh registry
                 .mesh => unreachable, // loads just the MeshDesc&LODEntries
                 .model => unreachable,
 
@@ -459,6 +511,7 @@ pub fn save_manifest(self: *const AssetSystem, jws: *std.json.Stringify) !void {
     for (0.., slice.items(.generation), slice.items(.name), slice.items(.kind), slice.items(.cold_asset), slice.items(.deps), slice.items(.rdeps)) |i, gen, name, kind, cold_asset, *deps, *rdeps| {
         if (self.entries.get(i).isNone()) continue;
 
+        try jws.beginObject();
         try jws.objectFieldRaw("\"name\"");
         try jws.write(name);
 
@@ -488,6 +541,8 @@ pub fn save_manifest(self: *const AssetSystem, jws: *std.json.Stringify) !void {
 
         try jws.objectFieldRaw("\"rdeps\"");
         try jws.write(rdeps.items());
+
+        try jws.endObject();
     }
     try jws.endArray();
 

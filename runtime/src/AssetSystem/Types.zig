@@ -86,4 +86,4 @@ pub const IngestLocation = struct {
     prefix_dir: std.Io.Dir,
 };
 
-pub const IngestError = std.mem.Allocator.Error || std.Io.Cancelable || TextureRegistry.IngestTextureError || TextureRegistry.IngestSampledTextureError;
+pub const IngestError = std.mem.Allocator.Error || std.Io.Cancelable || std.Io.File.OpenError || std.Io.Writer.Error || std.Io.File.Writer.Error;
