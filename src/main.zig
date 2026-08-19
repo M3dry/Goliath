@@ -13,9 +13,9 @@ const zmesh = runtime.zmesh;
 
 const Culling = runtime.Culling;
 
-fn waitForTick(transport: *base.Transport, gc: *const base.GraphicsCtx, tick: base.Transport.Ticket) !void {
-    while (!try transport.isReady(tick)) {
-        try transport.drain(gc);
+fn waitForTick(ctx: *base.Ctx, tick: base.Transport.Ticket) !void {
+    while (!try ctx.transport.isReady(tick)) {
+        try ctx.transport.drain(&ctx.graphics);
         std.Thread.yield() catch {};
     }
 }
@@ -52,7 +52,8 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const render_extent: base.vk.Extent2D = .{ .width = 1920, .height = 1080 };
     const render_format: base.vk.Format = .r32g32b32a32_sfloat;
-    var ctx = try base.Ctx.init(gpa, "Demo", .{
+    var ctx: base.Ctx = undefined;
+    try ctx.init(gpa, init.io, "Demo", .{
         .name = "Demo",
         .resizable = false,
         .size = .fullscreen,
@@ -62,12 +63,8 @@ pub fn main(init: std.process.Init) !void {
     });
     defer ctx.deinit(gpa);
 
-    var transport: base.Transport = undefined;
-    try transport.init(&ctx.graphics, gpa, init.io);
-    defer transport.deinit(&ctx.graphics);
-
     var mh = runtime.MeshHandler.empty;
-    defer mh.deinit(gpa, &ctx.destroy_queue, &transport);
+    defer mh.deinit(gpa, &ctx.destroy_queue, &ctx.transport);
 
     zmesh.init(gpa);
     defer zmesh.deinit();
@@ -102,11 +99,11 @@ pub fn main(init: std.process.Init) !void {
     var helmet_mesh = try runtime.Mesh.init(gpa, gltf_result0.mesh_io.source);
     defer helmet_mesh.deinit(gpa);
 
-    try mh.registerMesh(&body_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
-    defer mh.unregisterMesh(&body_mesh, &ctx.destroy_queue, &transport);
+    try mh.registerMesh(&body_mesh, gpa, &ctx.graphics, &ctx.transport, &ctx.destroy_queue);
+    defer mh.unregisterMesh(&body_mesh, &ctx.destroy_queue, &ctx.transport);
 
-    try mh.registerMesh(&helmet_mesh, gpa, &ctx.graphics, &transport, &ctx.destroy_queue);
-    defer mh.unregisterMesh(&helmet_mesh, &ctx.destroy_queue, &transport);
+    try mh.registerMesh(&helmet_mesh, gpa, &ctx.graphics, &ctx.transport, &ctx.destroy_queue);
+    defer mh.unregisterMesh(&helmet_mesh, &ctx.destroy_queue, &ctx.transport);
 
     var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
     for (&joint_matrices_bufs, 0..) |*buf, i| {
@@ -115,17 +112,17 @@ pub fn main(init: std.process.Init) !void {
     }
     defer for (&joint_matrices_bufs) |*buf| buf.deinit(&ctx.destroy_queue);
 
-    try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &transport);
+    try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &ctx.transport);
 
     {
         const geo_buf = body_mesh.lods[0].geometry_buffer.?;
-        while (!try transport.isReady(geo_buf.@"1")) {
-            try transport.drain(&ctx.graphics);
+        while (!try ctx.transport.isReady(geo_buf.@"1")) {
+            try ctx.transport.drain(&ctx.graphics);
             std.Thread.yield() catch {};
         }
     }
-    while (!try transport.isReady(mh.ticket)) {
-        try transport.drain(&ctx.graphics);
+    while (!try ctx.transport.isReady(mh.ticket)) {
+        try ctx.transport.drain(&ctx.graphics);
         std.Thread.yield() catch {};
     }
 
@@ -133,8 +130,8 @@ pub fn main(init: std.process.Init) !void {
     input.init(ctx.window);
     defer input.deinit(ctx.window);
 
-    var imgui = try base.Imgui.init(gpa, &ctx);
-    defer imgui.deinit(ctx.graphics.dev);
+    var imgui = try base.Imgui.init(gpa, .from(&ctx));
+    defer imgui.deinit(.from(&ctx));
 
     // PBR material instance: gltf texture indices → texture pool indices, resolved
     // against the asset system's sampled textures.
@@ -154,11 +151,11 @@ pub fn main(init: std.process.Init) !void {
 
     var asset_system: runtime.AssetSystem = undefined;
     if (rebuild_assets) {
-        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .default = .{ .path_prefix = asset_dir } });
+        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &ctx.transport, gpa, gpa, .{ .default = .{ .path_prefix = asset_dir } });
     } else {
         var file_reader_buffer: [512]u8 = undefined;
         var file_reader = manifest_file.?.readerStreaming(init.io, &file_reader_buffer);
-        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &transport, gpa, gpa, .{ .reader = &file_reader.interface });
+        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &ctx.transport, gpa, gpa, .{ .reader = &file_reader.interface });
     }
     defer asset_system.deinit(&ctx.destroy_queue);
 
@@ -234,17 +231,17 @@ pub fn main(init: std.process.Init) !void {
     var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
     defer asset_cmd_buf.deinit();
     for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
-    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &transport, &asset_cmd_buf);
+    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &ctx.transport, &asset_cmd_buf);
 
-    // Let the sampled texture bindings land in the pool before the first frame.
-    while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
-        try transport.drain(&ctx.graphics);
-        try asset_system.texture_reg.tick(&transport, &ctx.graphics);
-        std.Thread.yield() catch {};
-    }
+    // // Let the sampled texture bindings land in the pool before the first frame.
+    // while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
+    //     try ctx.transport.drain(&ctx.graphics);
+    //     try asset_system.texture_reg.tick(&ctx.transport, &ctx.graphics);
+    //     std.Thread.yield() catch {};
+    // }
 
     var mat_handler = runtime.MaterialHandler{};
-    defer mat_handler.deinit(gpa, &ctx.destroy_queue, &transport);
+    defer mat_handler.deinit(gpa, &ctx.destroy_queue, &ctx.transport);
 
     inst.albedo_map = asset_system.denseIndex(slot_gids[0]);
     inst.metallic_roughness_map = asset_system.denseIndex(slot_gids[1]);
@@ -252,8 +249,8 @@ pub fn main(init: std.process.Init) !void {
     inst.occlusion_map = asset_system.denseIndex(slot_gids[3]);
     inst.emissive_map = asset_system.denseIndex(slot_gids[4]);
     try mat_handler.append(gpa, 0, inst);
-    try mat_handler.flush(&ctx.graphics, &transport, &ctx.destroy_queue);
-    try waitForTick(&transport, &ctx.graphics, mat_handler.schema_tickets[0]);
+    try mat_handler.flush(&ctx.graphics, &ctx.transport, &ctx.destroy_queue);
+    try waitForTick(&ctx, mat_handler.schema_tickets[0]);
 
     // Give the graph a bindable id for the asset system's texture pool set, on every frame.
     var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
@@ -427,7 +424,8 @@ pub fn main(init: std.process.Init) !void {
             }
             zgui.end();
 
-            try transport.drain(&ctx.graphics);
+            try ctx.transport.drain(&ctx.graphics);
+            try asset_system.tick(&ctx.graphics, &ctx.transport);
 
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();
@@ -830,7 +828,7 @@ pub fn main(init: std.process.Init) !void {
 
             ctx.end_drawing();
 
-            imgui.render(&ctx);
+            imgui.render(.from(&ctx), frame.cmd_buf);
         }
 
         if (try ctx.end_frame(gpa) == .recreated) {}

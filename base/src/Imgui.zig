@@ -1,6 +1,8 @@
 const std = @import("std");
 const zgui = @import("zgui");
-const vk = @import("vulkan");
+const root = @import("root.zig");
+const vk = root.vk;
+const Ctx = root.Ctx;
 
 const Allocator = std.mem.Allocator;
 const util = @import("util.zig");
@@ -14,8 +16,8 @@ descriptor_pool: vk.DescriptorPool,
 api_version: u32,
 enabled: bool = true,
 
-pub fn init(allocator: Allocator, ctx: anytype) !Self {
-    const dev = ctx.graphics.dev;
+pub fn init(allocator: Allocator, ctx: Ctx.Query(&.{ .device, .instance, .vkb, .swapchain_format, .pdevice, .graphics_queue, .graphics_family, .window })) !Self {
+    const dev = ctx.view.device;
     const pool = try createDescriptorPool(dev);
 
     const api_version = vk.makeApiVersion(0, 1, 3, 0).toU32();
@@ -23,26 +25,26 @@ pub fn init(allocator: Allocator, ctx: anytype) !Self {
     zgui.init(allocator);
 
     {
-        vk_loader_instance = ctx.graphics.instance.handle;
-        vk_loader_get_proc = ctx.graphics.vkb.dispatch.vkGetInstanceProcAddr.?;
+        vk_loader_instance = ctx.view.instance.handle;
+        vk_loader_get_proc = ctx.view.vkb.dispatch.vkGetInstanceProcAddr.?;
         if (!zgui.backend.loadFunctions(api_version, vkLoader, null)) {
             return error.VulkanFunctionLoadError;
         }
     }
 
-    const color_attachment_formats = [_]c_int{@intFromEnum(ctx.swapchain.format)};
+    const color_attachment_formats = [_]c_int{@intFromEnum(ctx.view.swapchain_format)};
     zgui.backend.init(
         .{
             .api_version = api_version,
-            .instance = @ptrFromInt(@intFromEnum(ctx.graphics.instance.handle)),
-            .physical_device = @ptrFromInt(@intFromEnum(ctx.graphics.pdev)),
+            .instance = @ptrFromInt(@intFromEnum(ctx.view.instance.handle)),
+            .physical_device = @ptrFromInt(@intFromEnum(ctx.view.pdevice)),
             .device = @ptrFromInt(@intFromEnum(dev.handle)),
-            .queue_family = ctx.graphics.graphics_family,
-            .queue = @ptrFromInt(@intFromEnum(ctx.graphics.graphics_queue)),
+            .queue_family = ctx.view.graphics_family,
+            .queue = @ptrFromInt(@intFromEnum(ctx.view.graphics_queue)),
             .descriptor_pool = @ptrFromInt(@intFromEnum(pool)),
             .render_pass = null,
-            .min_image_count = @intCast(ctx.frames.len),
-            .image_count = @intCast(ctx.frames.len),
+            .min_image_count = @intCast(Ctx.frames_in_flight),
+            .image_count = @intCast(Ctx.frames_in_flight),
             .use_dynamic_rendering = true,
             .pipeline_rendering_create_info = .{
                 .s_type = @intFromEnum(vk.StructureType.pipeline_rendering_create_info),
@@ -50,7 +52,7 @@ pub fn init(allocator: Allocator, ctx: anytype) !Self {
                 .p_color_attachment_formats = color_attachment_formats[0..].ptr,
             },
         },
-        ctx.window,
+        ctx.view.window,
     );
 
     zgui.io.setConfigFlags(.{ .nav_enable_keyboard = true, .dock_enable = true });
@@ -62,10 +64,10 @@ pub fn init(allocator: Allocator, ctx: anytype) !Self {
     };
 }
 
-pub fn deinit(self: *Self, dev: anytype) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     zgui.backend.deinit();
     zgui.deinit();
-    dev.destroyDescriptorPool(self.descriptor_pool, null);
+    ctx.view.device.destroyDescriptorPool(self.descriptor_pool, null);
 }
 
 pub fn enable(self: *Self, v: bool) void {
@@ -85,15 +87,13 @@ pub fn newFrame(self: *Self, dt: f32, fb_width: u32, fb_height: u32) void {
     }
 }
 
-pub fn render(self: *Self, ctx: anytype) void {
+pub fn render(self: *Self, ctx: Ctx.Query(&.{ .device, .graphics_family, .frame_acquired_swapchain, .swapchain_extent, .swapchain_images }), cmd_buf: root.vk.CommandBuffer) void {
     _ = self;
-    const frame = ctx.frames[ctx.current_frame];
-    const cmd_buf = frame.cmd_buf;
-    const dev = ctx.graphics.dev;
-    const qf = ctx.graphics.graphics_family;
-    const acquired = frame.acquired_swapchain orelse return;
-    const swap = ctx.swapchain.images[acquired];
-    const extent = ctx.swapchain.extent;
+    const dev = ctx.view.device;
+    const qf = ctx.view.graphics_family;
+    const acquired = ctx.view.frame_acquired_swapchain orelse return;
+    const swap = ctx.view.swapchain_images[acquired];
+    const extent = ctx.view.swapchain_extent;
 
     {
         const barrier = vk.ImageMemoryBarrier2{
