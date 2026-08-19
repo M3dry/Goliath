@@ -146,18 +146,18 @@ pub const Lod = struct {
     material_instance: u32,
     error_metric: f32,
 
-    pub fn initGeometryBuffer(self: *Lod, gc: *const base.GraphicsCtx, transport: *base.Transport) !struct{base.Buffer, base.Transport.Ticket} {
-        const buf = try base.Buffer.init(gc, .graphics, "Geometry buffer", gpu_geometry_header_size + self.geometry.data.len, .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+    pub fn initGeometryBuffer(self: *Lod, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport })) !struct{base.Buffer, base.Transport.Ticket} {
+        const buf = try base.Buffer.init(.from(ctx), .graphics, "Geometry buffer", gpu_geometry_header_size + self.geometry.data.len, .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
 
         self.geometry.geo.indices_address = buf.address + gpu_geometry_header_size;
 
         const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
         const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
-        const tick1 = try transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, null, buf.handle, 0, dst_stage, dst_access);
-        errdefer transport.unqueue(tick1, false);
+        const tick1 = try ctx.view.transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, null, buf.handle, 0, dst_stage, dst_access);
+        errdefer ctx.view.transport.unqueue(tick1, false);
 
-        const tick2 = try transport.uploadBuffer(false, self.geometry.data, null, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access);
-        errdefer transport.unqueue(tick2, false);
+        const tick2 = try ctx.view.transport.uploadBuffer(false, self.geometry.data, null, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access);
+        errdefer ctx.view.transport.unqueue(tick2, false);
 
         self.geometry_buffer = .{buf, tick2};
 
@@ -185,10 +185,10 @@ pub const Lod = struct {
         return @sizeOf(GeometryMeta) + @as(isize, @intCast(self.geometry.data.len));
     }
 
-    pub fn deinitGeometryBuffer(self: *Lod, destroy_queue: *base.DestroyQueue, transport: *base.Transport) void {
+    pub fn deinitGeometryBuffer(self: *Lod, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
         if (self.geometry_buffer) |*buf| {
-            transport.unqueue(buf.@"1", false);
-            buf.@"0".deinit(destroy_queue);
+            ctx.view.transport.unqueue(buf.@"1", false);
+            buf.@"0".deinit(.from(ctx));
 
             self.geometry_buffer = null;
         }

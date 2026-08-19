@@ -36,7 +36,7 @@ pub const ManifestReader = union(enum) {
 };
 
 /// allocator needs to be thread safe
-pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator, tmp_alloc: Allocator, manifest_reader: ManifestReader) !AssetSystem {
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphics_queue }), alloc: Allocator, tmp_alloc: Allocator, manifest_reader: ManifestReader) !AssetSystem {
     var threaded_io = std.Io.Threaded.init(alloc, .{
         .disable_memory_mapping = false,
         .concurrent_limit = .unlimited,
@@ -65,8 +65,8 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
     var loader = try Loader.init(init_io, alloc, &manifest.loader);
     errdefer loader.deinit(alloc, init_io);
 
-    var texture_reg = try TextureRegistry.init(gc, transport, alloc);
-    errdefer texture_reg.deinitNow(gc);
+    var texture_reg = try TextureRegistry.init(ctx, alloc);
+    errdefer texture_reg.deinitNow(.from(ctx));
 
     var entries: std.MultiArrayList(Entry) = .empty;
     errdefer entries.deinit(alloc);
@@ -167,7 +167,7 @@ pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allo
     //          thus stable GPU side material schema and instance indices aren't needed
 }
 
-pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
+pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue })) void {
     self.loader.deinit(self.alloc, self.io());
     self.threaded_io.deinit();
 
@@ -177,7 +177,7 @@ pub fn deinit(self: *AssetSystem, destroy_queue: *base.DestroyQueue) void {
     self.entries.deinit(self.alloc);
     self.free_entries.deinit(self.alloc);
 
-    self.texture_reg.deinit(destroy_queue);
+    self.texture_reg.deinit(ctx);
 }
 
 pub const KindData = union(Kind) {
@@ -326,8 +326,8 @@ pub fn denseIndex(self: *const AssetSystem, gid: Gid) u32 {
     return self.entries.items(.dense)[gid.slot];
 }
 
-pub fn tick(self: *AssetSystem, gc: *const base.GraphicsCtx, transport: *base.Transport) !void {
-    try self.texture_reg.tick(transport, gc);
+pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport })) !void {
+    try self.texture_reg.tick(ctx);
 }
 
 pub const GidError = error{
@@ -403,7 +403,7 @@ pub const CommandBuffer = struct {
     }
 };
 
-pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, transport: *base.Transport, cmds: *CommandBuffer) !void {
+pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .transport }), cmds: *CommandBuffer) !void {
     const slice = self.entries.slice();
     const cold_assets = slice.items(.cold_asset);
     const deps = slice.items(.deps);
@@ -419,7 +419,7 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
 
         op.dense = switch (op.kind) {
             .texture => try self.texture_reg.newTexture(),
-            .sampled_texture => try self.texture_reg.newSampledTexture(gc, destroy_queue),
+            .sampled_texture => try self.texture_reg.newSampledTexture(.from(ctx)),
             .material_schema => unreachable,
             .material_instance => unreachable,
             .geometry => unreachable,
@@ -439,8 +439,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
         if (op.delta < 0) {
             const delta: u32 = @intCast(-op.delta);
             if (try switch (op.kind) {
-                .texture => self.texture_reg.releaseTexture(destroy_queue, transport, op.dense, delta),
-                .sampled_texture => self.texture_reg.releaseSampledTexture(gc, destroy_queue, op.dense, delta),
+                .texture => self.texture_reg.releaseTexture(.from(ctx), op.dense, delta),
+                .sampled_texture => self.texture_reg.releaseSampledTexture(.from(ctx), op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable,
@@ -465,8 +465,8 @@ pub fn submit(self: *AssetSystem, gc: *const base.GraphicsCtx, destroy_queue: *b
             }
 
             try switch (op.kind) {
-                .texture => self.texture_reg.acquireTexture(gc, transport, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .sampled_texture => self.texture_reg.acquireSampledTexture(gc, transport, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .texture => self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
+                .sampled_texture => self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
                 .geometry => unreachable, // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense

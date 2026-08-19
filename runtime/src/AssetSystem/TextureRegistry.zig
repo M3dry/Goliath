@@ -12,14 +12,14 @@ const Image = struct {
     image: base.Image2D = .{},
     view: base.ImageView = .{},
 
-    pub fn deinit(self: *Image, destroy_queue: *base.DestroyQueue) void {
-        self.image.deinit(destroy_queue);
-        self.view.deinit(destroy_queue);
+    pub fn deinit(self: *Image, ctx: base.Ctx.Query(&.{ .destroy_queue })) void {
+        self.image.deinit(.from(ctx));
+        self.view.deinit(.from(ctx));
     }
 
-    pub fn deinitNow(self: *Image, gc: *const base.GraphicsCtx) void {
-        self.image.deinitNow(gc);
-        self.view.deinitNow(gc);
+    pub fn deinitNow(self: *Image, ctx: base.Ctx.Query(&.{ .device, .vma_allocator })) void {
+        self.image.deinitNow(.from(ctx));
+        self.view.deinitNow(.from(ctx));
     }
 };
 
@@ -87,28 +87,28 @@ const SampledTextureBlob = struct {
     texture_gid: Gid,
 };
 
-pub fn init(gc: *const base.GraphicsCtx, transport: *base.Transport, alloc: Allocator) !TextureRegistry {
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphics_queue }), alloc: Allocator) !TextureRegistry {
     var self: TextureRegistry = .{
-        .texture_pool = try .init(gc, 1000),
+        .texture_pool = try .init(.from(ctx), 1000),
         .texture_pool_capacity = 1000,
         .alloc = alloc,
     };
-    errdefer self.texture_pool.deinitNow(gc);
+    errdefer self.texture_pool.deinitNow(.from(ctx));
 
-    try self.createDefaultImages(gc, transport);
+    try self.createDefaultImages(ctx);
     return self;
 }
 
-fn createDefaultImages(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport) !void {
+fn createDefaultImages(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphics_queue })) !void {
     inline for (@typeInfo(DefaultKind).@"enum".fields, 0..) |kind_field, i| {
-        try self.createDefaultImage(gc, transport, std.meta.stringToEnum(DefaultKind, kind_field.name).?, i);
+        try self.createDefaultImage(ctx, std.meta.stringToEnum(DefaultKind, kind_field.name).?, i);
     }
 
-    self.default_sampler = try base.Sampler.init(gc, .{});
-    errdefer self.default_sampler.deinitNow(gc);
+    self.default_sampler = try base.Sampler.init(.from(ctx), .{});
+    errdefer self.default_sampler.deinitNow(.from(ctx));
 }
 
-fn createDefaultImage(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, kind: DefaultKind, index: usize) !void {
+fn createDefaultImage(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphics_queue }), kind: DefaultKind, index: usize) !void {
     const fmt = base.vk.Format.r8g8b8a8_srgb;
     const pixel = switch (kind) {
         .white => [4]u8{ 255, 255, 255, 255 },
@@ -117,14 +117,14 @@ fn createDefaultImage(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
         .metallic_roughness => [4]u8{ 255, 255, 0, 255 },
     };
 
-    var image = try base.Image2D.init(gc, gc.vma_alloc, "default_image", .{
+    var image = try base.Image2D.init(.from(ctx), "default_image", .{
         .format = fmt,
         .extent = .{ .width = 1, .height = 1 },
         .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
     });
-    errdefer image.deinitNow(gc);
+    errdefer image.deinitNow(.from(ctx));
 
-    const upload_tick = try transport.uploadImage(
+    const upload_tick = try ctx.view.transport.uploadImage(
         false,
         fmt,
         .{ .width = 1, .height = 1, .depth = 1 },
@@ -144,25 +144,25 @@ fn createDefaultImage(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
         .{ .fragment_shader_bit = true, .compute_shader_bit = true },
         .{ .shader_read_bit = true },
     );
-    errdefer transport.unqueue(upload_tick, false);
+    errdefer ctx.view.transport.unqueue(upload_tick, false);
 
     // Startup, one-time: block until the pixel lands.
-    while (!try transport.isReady(upload_tick)) {
-        try transport.drain(gc);
+    while (!try ctx.view.transport.isReady(upload_tick)) {
+        try ctx.view.transport.drain(.from(ctx));
         std.Thread.yield() catch {};
     }
 
     self.default_images[index].image = image;
-    self.default_images[index].view = try base.ImageView.init(gc, .fromImage(&image));
-    errdefer self.default_images[index].view.deinitNow(gc);
+    self.default_images[index].view = try base.ImageView.init(.from(ctx), .fromImage(&image));
+    errdefer self.default_images[index].view.deinitNow(.from(ctx));
 }
 
-pub fn deinit(self: *TextureRegistry, destroy_queue: *base.DestroyQueue) void {
+pub fn deinit(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue })) void {
     const textures_slice = self.textures.slice();
     for (textures_slice.items(.ref_count), textures_slice.items(.image)) |ref_count, *tex| {
         if (ref_count == 0) continue;
 
-        tex.deinit(destroy_queue);
+        tex.deinit(ctx);
     }
     self.textures.deinit(self.alloc);
     self.textures_free_list.deinit(self.alloc);
@@ -171,26 +171,26 @@ pub fn deinit(self: *TextureRegistry, destroy_queue: *base.DestroyQueue) void {
     for (sampled_textures_slice.items(.ref_count), sampled_textures_slice.items(.sampler)) |ref_count, *sampler| {
         if (ref_count == 0) continue;
 
-        sampler.deinit(destroy_queue);
+        sampler.deinit(.from(ctx));
     }
     self.sampled_textures.deinit(self.alloc);
     self.sampled_texture_free_list.deinit(self.alloc);
     self.pending_sampled_textures.deinit(self.alloc);
 
     for (&self.default_images) |*img| {
-        img.deinit(destroy_queue);
+        img.deinit(ctx);
     }
-    self.default_sampler.deinit(destroy_queue);
+    self.default_sampler.deinit(.from(ctx));
 
-    self.texture_pool.deinit(destroy_queue);
+    self.texture_pool.deinit(.from(ctx));
 }
 
-pub fn deinitNow(self: *TextureRegistry, gc: *const base.GraphicsCtx) void {
+pub fn deinitNow(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator })) void {
     const textures_slice = self.textures.slice();
     for (textures_slice.items(.ref_count), textures_slice.items(.image)) |ref_count, *tex| {
         if (ref_count == 0) continue;
 
-        tex.deinitNow(gc);
+        tex.deinitNow(ctx);
     }
     self.textures.deinit(self.alloc);
     self.textures_free_list.deinit(self.alloc);
@@ -199,18 +199,18 @@ pub fn deinitNow(self: *TextureRegistry, gc: *const base.GraphicsCtx) void {
     for (sampled_textures_slice.items(.ref_count), sampled_textures_slice.items(.sampler)) |ref_count, *sampler| {
         if (ref_count == 0) continue;
 
-        sampler.deinitNow(gc);
+        sampler.deinitNow(.from(ctx));
     }
     self.sampled_textures.deinit(self.alloc);
     self.sampled_texture_free_list.deinit(self.alloc);
     self.pending_sampled_textures.deinit(self.alloc);
 
     for (&self.default_images) |*img| {
-        img.deinitNow(gc);
+        img.deinitNow(ctx);
     }
-    self.default_sampler.deinitNow(gc);
+    self.default_sampler.deinitNow(.from(ctx));
 
-    self.texture_pool.deinitNow(gc);
+    self.texture_pool.deinitNow(.from(ctx));
 }
 
 pub fn newTexture(self: *TextureRegistry) !u32 {
@@ -220,20 +220,20 @@ pub fn newTexture(self: *TextureRegistry) !u32 {
     return @intCast(self.textures.len - 1);
 }
 
-pub fn newSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue) !u32 {
+pub fn newSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .destroy_queue })) !u32 {
     if (self.sampled_texture_free_list.pop()) |id| return id;
 
     _ = try self.sampled_textures.append(self.alloc, .{});
     const id: u32 = @intCast(self.sampled_textures.len - 1);
 
-    if (id >= self.texture_pool_capacity) try self.resizeTexturePool(gc, destroy_queue, @intFromFloat(@as(f64, @floatFromInt(self.texture_pool_capacity)) * 1.5));
+    if (id >= self.texture_pool_capacity) try self.resizeTexturePool(ctx, @intFromFloat(@as(f64, @floatFromInt(self.texture_pool_capacity)) * 1.5));
 
-    self.texture_pool.update(gc, id, self.default_images[0].view.handle, .shader_read_only_optimal, self.default_sampler.handle); // provisional; the role default is set at acquire
+    self.texture_pool.update(.from(ctx), id, self.default_images[0].view.handle, .shader_read_only_optimal, self.default_sampler.handle); // provisional; the role default is set at acquire
 
     return id;
 }
 
-pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     _ = resolved;
 
@@ -250,7 +250,7 @@ pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
 
         slice.items(.default_image)[id] = blob.default_image;
 
-        image.image = try base.Image2D.init(gc, gc.vma_alloc, "TextureRegistry image", .{
+        image.image = try base.Image2D.init(.from(ctx), "TextureRegistry image", .{
             .format = blob.format,
             .extent = .{
                 .width = blob.width,
@@ -258,15 +258,15 @@ pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
             },
             .usage = .{ .transfer_dst_bit = true, .sampled_bit = true },
         });
-        errdefer image.image.deinitNow(gc);
+        errdefer image.image.deinitNow(.from(ctx));
 
-        image.view = try base.ImageView.init(gc, .fromImage(&image.image));
-        errdefer image.view.deinitNow(gc);
+        image.view = try base.ImageView.init(.from(ctx), .fromImage(&image.image));
+        errdefer image.view.deinitNow(.from(ctx));
 
         var free_fn = try loader.make_transport_unload(io, self.alloc, cold);
         errdefer free_fn.deinit();
 
-        ticket.* = try transport.uploadImage(
+        ticket.* = try ctx.view.transport.uploadImage(
             false,
             blob.format,
             .{ .width = blob.width, .height = blob.height, .depth = 1 },
@@ -286,13 +286,13 @@ pub fn acquireTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, trans
             .{ .fragment_shader_bit = true, .compute_shader_bit = true },
             .{ .shader_read_bit = true }
         );
-        errdefer transport.unqueue(ticket, false);
+        errdefer ctx.view.transport.unqueue(ticket, false);
     }
 
     ref_count.* += delta;
 }
 
-pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, transport: *base.Transport, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -309,8 +309,8 @@ pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
         defer parsed_blob.deinit();
         const blob = parsed_blob.value;
 
-        sampler.* = try base.Sampler.init(gc, blob.sampler);
-        errdefer sampler.deinitNow(gc);
+        sampler.* = try base.Sampler.init(.from(ctx), blob.sampler);
+        errdefer sampler.deinitNow(.from(ctx));
 
         const kind, dense.* = resolver.lookup(resolved, blob.texture_gid) orelse return error.InvalidTextureGid;
         if (kind != .texture) return error.KindNotTexture;
@@ -322,13 +322,13 @@ pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
         const ticket = tex_slice.items(.ticket)[dense.*];
         const view = tex_slice.items(.image)[dense.*].view.handle;
 
-        if (try transport.isReady(ticket)) {
+        if (try ctx.view.transport.isReady(ticket)) {
             // texture already on the GPU — bind now
-            self.texture_pool.update(gc, id, view, .shader_read_only_optimal, sampler.handle);
+            self.texture_pool.update(.from(ctx), id, view, .shader_read_only_optimal, sampler.handle);
         } else {
             // show the role's placeholder until the upload lands; tick()
             // applies the real binding.
-            self.texture_pool.update(gc, id, self.default_images[@intFromEnum(role_default)].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
+            self.texture_pool.update(.from(ctx), id, self.default_images[@intFromEnum(role_default)].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
             try self.pending_sampled_textures.append(self.alloc, id);
         }
     }
@@ -336,7 +336,7 @@ pub fn acquireSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
     ref_count.* += delta;
 }
 
-pub fn releaseTexture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue, transport: *base.Transport, id: u32, delta: u32) !types.ReleaseReturn {
+pub fn releaseTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport }), id: u32, delta: u32) !types.ReleaseReturn {
     std.debug.assert(delta > 0);
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -347,16 +347,16 @@ pub fn releaseTexture(self: *TextureRegistry, destroy_queue: *base.DestroyQueue,
     if (ref_count.* != 0) return .kept;
 
     const ticket = slice.items(.ticket)[id];
-    transport.unqueue(ticket, true);
+    ctx.view.transport.unqueue(ticket, true);
 
     var image = slice.items(.image)[id];
-    image.deinit(destroy_queue);
+    image.deinit(.from(ctx));
 
     try self.textures_free_list.append(self.alloc, id);
     return .released;
 }
 
-pub fn releaseSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, id: u32, delta: u32) !types.ReleaseReturn {
+pub fn releaseSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .destroy_queue }), id: u32, delta: u32) !types.ReleaseReturn {
     std.debug.assert(delta > 0);
     const slice = self.sampled_textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -367,7 +367,7 @@ pub fn releaseSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
     if (ref_count.* != 0) return .kept;
 
     var sampler = slice.items(.sampler)[id];
-    sampler.deinit(destroy_queue);
+    sampler.deinit(.from(ctx));
 
     try self.sampled_texture_free_list.append(self.alloc, id);
     // Drop any pending binding — the sampler is gone, and the slot must not be
@@ -379,12 +379,12 @@ pub fn releaseSampledTexture(self: *TextureRegistry, gc: *const base.GraphicsCtx
         } else i += 1;
     }
 
-    self.texture_pool.update(gc, id, self.default_images[@intFromEnum(slice.items(.default_image)[id])].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
+    self.texture_pool.update(.from(ctx), id, self.default_images[@intFromEnum(slice.items(.default_image)[id])].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
 
     return .released;
 }
 
-pub fn tick(self: *TextureRegistry, transport: *base.Transport, gc: *const base.GraphicsCtx) !void {
+pub fn tick(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .transport })) !void {
     const tex_slice = self.textures.slice();
     const sam_tex_slice = self.sampled_textures.slice();
 
@@ -398,8 +398,8 @@ pub fn tick(self: *TextureRegistry, transport: *base.Transport, gc: *const base.
     while (i < self.pending_sampled_textures.items.len) {
         const id = self.pending_sampled_textures.items[i];
         const texture = textures[id];
-        if (try transport.isReady(tickets[texture])) {
-            self.texture_pool.update(gc, id, images[texture].view.handle, .shader_read_only_optimal, samplers[id].handle);
+        if (try ctx.view.transport.isReady(tickets[texture])) {
+            self.texture_pool.update(.from(ctx), id, images[texture].view.handle, .shader_read_only_optimal, samplers[id].handle);
             _ = self.pending_sampled_textures.swapRemove(i);
         } else i += 1;
     }
@@ -481,20 +481,20 @@ pub fn ingestSampledTexture(alloc: Allocator, io: std.Io, location: types.Ingest
     return entry;
 }
 
-fn resizeTexturePool(self: *TextureRegistry, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, new_cap: u32) !void {
+fn resizeTexturePool(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .destroy_queue }), new_cap: u32) !void {
     if (self.texture_pool_capacity >= new_cap) return;
 
-    self.texture_pool.deinit(destroy_queue);
-    self.texture_pool = try .init(gc, new_cap);
-    errdefer self.texture_pool.deinitNow(destroy_queue);
+    self.texture_pool.deinit(.from(ctx));
+    self.texture_pool = try .init(.from(ctx), new_cap);
+    errdefer self.texture_pool.deinitNow(.from(ctx));
 
     const slice = self.sampled_textures.slice();
     const images = self.textures.items(.image);
     for (0.., slice.items(.ref_count), slice.items(.sampler)) |id, ref_count, sampler| {
         if (ref_count == 0) {
-            self.texture_pool.update(gc, @intCast(id), self.default_images[@intFromEnum(slice.items(.default_image)[id])].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
+            self.texture_pool.update(.from(ctx), @intCast(id), self.default_images[@intFromEnum(slice.items(.default_image)[id])].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
         } else {
-            self.texture_pool.update(gc, @intCast(id), images[id].view.handle, .shader_read_only_optimal, sampler.handle);
+            self.texture_pool.update(.from(ctx), @intCast(id), images[id].view.handle, .shader_read_only_optimal, sampler.handle);
         }
     }
 }

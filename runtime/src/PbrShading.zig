@@ -121,8 +121,8 @@ pub const ShadingData = extern struct {
     light_count: u32,
 };
 
-pub fn init(ctx: *base.Ctx, vis_set_layout: base.vk.DescriptorSetLayout, texture_pool_set_layout: base.vk.DescriptorSetLayout) !Self {
-    const ubo_set_layout = try ctx.graphics.dev.createDescriptorSetLayout(&.{
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .render_extent }), vis_set_layout: base.vk.DescriptorSetLayout, texture_pool_set_layout: base.vk.DescriptorSetLayout) !Self {
+    const ubo_set_layout = try ctx.view.device.createDescriptorSetLayout(&.{
         .binding_count = 1,
         .p_bindings = &.{
             base.vk.DescriptorSetLayoutBinding{
@@ -133,18 +133,18 @@ pub fn init(ctx: *base.Ctx, vis_set_layout: base.vk.DescriptorSetLayout, texture
             },
         },
     }, null);
-    errdefer ctx.graphics.dev.destroyDescriptorSetLayout(ubo_set_layout, null);
+    errdefer ctx.view.device.destroyDescriptorSetLayout(ubo_set_layout, null);
 
-    const pbr_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_pbr_shading));
-    defer pbr_mod.deinit(ctx);
+    const pbr_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_pbr_shading));
+    defer pbr_mod.deinit(.from(ctx));
 
-    const pipeline = try base.ComputePipeline.init(ctx, .{
+    const pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = pbr_mod,
         .entry_point = "compute",
         .set_layouts = &.{ vis_set_layout, texture_pool_set_layout, ubo_set_layout },
         .push_constant_size = @intCast(pbr_pc_size),
     });
-    errdefer pipeline.deinit(&ctx.graphics);
+    errdefer pipeline.deinit(.from(ctx));
 
     return .{
         .pipeline = pipeline,
@@ -152,9 +152,9 @@ pub fn init(ctx: *base.Ctx, vis_set_layout: base.vk.DescriptorSetLayout, texture
     };
 }
 
-pub fn deinit(self: *Self, ctx: *base.Ctx) void {
-    self.pipeline.deinit(&ctx.graphics);
-    ctx.graphics.dev.destroyDescriptorSetLayout(self.ubo_set_layout, null);
+pub fn deinit(self: *Self, ctx: base.Ctx.Query(&.{ .device })) void {
+    self.pipeline.deinit(ctx);
+    ctx.view.device.destroyDescriptorSetLayout(self.ubo_set_layout, null);
 }
 
 pub const ShadeParams = struct {
@@ -180,8 +180,7 @@ pub fn shade(
     self: *Self,
     rg: *base.RenderGraph,
     alloc: std.mem.Allocator,
-    dev: *base.vk.DeviceProxy,
-    dp: *base.DescriptorPool,
+    ctx: base.Ctx.Query(&.{ .device, .descriptor_pool }),
     texture_pool_set: u64,
     params: ShadeParams,
 ) !void {
@@ -195,10 +194,10 @@ pub fn shade(
     };
     @memcpy(std.mem.asBytes(&sd.view_proj_matrix), std.mem.asBytes(&p.view_proj));
 
-    const ubo_set = try dp.newSet(dev, self.ubo_set_layout);
-    dp.beginUpdate(ubo_set);
-    try dp.updateUbo(alloc, 0, std.mem.asBytes(&sd));
-    dp.endUpdate(dev);
+    const ubo_set = try ctx.view.descriptor_pool.newSet(.from(ctx), self.ubo_set_layout);
+    ctx.view.descriptor_pool.beginUpdate(ubo_set);
+    try ctx.view.descriptor_pool.updateUbo(alloc, 0, std.mem.asBytes(&sd));
+    ctx.view.descriptor_pool.endUpdate(.from(ctx));
 
     const entry_stride = @sizeOf(Visbuffer.DispatchEntry);
 

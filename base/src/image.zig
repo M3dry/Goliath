@@ -2,8 +2,8 @@ const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
-const DestroyQueue = @import("DestroyQueue.zig");
-const GraphicsCtx = @import("GraphicsCtx.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 fn aspectFromFormat(format: vk.Format) vk.ImageAspectFlags {
     return switch (format) {
@@ -31,8 +31,7 @@ pub const Image2D = struct {
     };
 
     pub fn init(
-        gc: *const GraphicsCtx,
-        vma_alloc: vma.VmaAllocator,
+        ctx: Ctx.Query(&.{ .device, .vma_allocator }),
         name: [:0]const u8,
         desc: Description,
     ) !Image2D {
@@ -60,7 +59,7 @@ pub const Image2D = struct {
         var img: Image2D = undefined;
         var alloc_info_out: vma.VmaAllocationInfo = undefined;
         const res = vma.vmaCreateImage(
-            vma_alloc,
+            ctx.view.vma_allocator,
             @ptrCast(&image_info),
             &alloc_info,
             @ptrCast(&img.handle),
@@ -69,7 +68,7 @@ pub const Image2D = struct {
         );
         if (res < 0) return error.VmaImageError;
 
-        try gc.dev.setDebugUtilsObjectNameEXT(&.{
+        try ctx.view.device.setDebugUtilsObjectNameEXT(&.{
             .object_type = .image,
             .object_handle = @intFromEnum(img.handle),
             .p_object_name = name,
@@ -83,18 +82,18 @@ pub const Image2D = struct {
         return img;
     }
 
-    pub fn deinit(self: *Image2D, destroy_queue: *DestroyQueue) void {
+    pub fn deinit(self: *Image2D, ctx: Ctx.Query(&.{ .destroy_queue })) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueImage(self.handle, self.allocation) catch @panic("OOM");
+            ctx.view.destroy_queue.enqueueImage(self.handle, self.allocation) catch @panic("OOM");
 
             self.handle = .null_handle;
             self.allocation = null;
         }
     }
 
-    pub fn deinitNow(self: *Image2D, gc: *const GraphicsCtx) void {
+    pub fn deinitNow(self: *Image2D, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
         if (self.handle != .null_handle) {
-            vma.vmaDestroyImage(gc.vma_alloc, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
+            vma.vmaDestroyImage(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
 
             self.handle = .null_handle;
             self.allocation = null;
@@ -138,8 +137,8 @@ pub const ImageView = struct {
         }
     };
 
-    pub fn init(gc: *const GraphicsCtx, desc: Description) !ImageView {
-        const handle = try gc.dev.createImageView(&.{
+    pub fn init(ctx: Ctx.Query(&.{ .device }), desc: Description) !ImageView {
+        const handle = try ctx.view.device.createImageView(&.{
             .image = desc.image,
             .view_type = desc.view_type,
             .format = desc.format,
@@ -150,16 +149,16 @@ pub const ImageView = struct {
         return .{ .handle = handle };
     }
 
-    pub fn deinit(self: *ImageView, destroy_queue: *DestroyQueue) void {
+    pub fn deinit(self: *ImageView, ctx: Ctx.Query(&.{ .destroy_queue })) void {
         if (self.handle != .null_handle) {
-            destroy_queue.enqueueImageView(self.handle) catch @panic("OOM");
+            ctx.view.destroy_queue.enqueueImageView(self.handle) catch @panic("OOM");
             self.handle = .null_handle;
         }
     }
 
-    pub fn deinitNow(self: *ImageView, gc: *const GraphicsCtx) void {
+    pub fn deinitNow(self: *ImageView, ctx: Ctx.Query(&.{ .device })) void {
         if (self.handle != .null_handle) {
-            gc.dev.destroyImageView(self.handle, null);
+            ctx.view.device.destroyImageView(self.handle, null);
             self.handle = .null_handle;
         }
     }

@@ -76,7 +76,7 @@ pub const Capability = enum {
             .vma_allocator, => ctx.graphics.vma_alloc,
             .graphics_family, => ctx.graphics.graphics_family,
             .graphics_queue, => ctx.graphics.graphics_queue,
-            .transport => *ctx.transport,
+            .transport => &ctx.transport,
             .transport_family, => ctx.graphics.transport_family,
             .transport_queue, => ctx.graphics.transport_queue,
             .dedicated_transport, => ctx.graphics.has_dedicated_transport,
@@ -152,7 +152,7 @@ pub fn Query(comptime cs: []const Capability) type {
                     if (!found) not_found = not_found ++ &[_]Capability{ cap };
                 }
 
-                if (not_found.len != 0) @compileError(std.fmt.comptimePrint("Query doesn't include {}", .{not_found}));
+                if (not_found.len != 0) @compileError(std.fmt.comptimePrint("Query doesn't include {any}", .{not_found}));
             }
 
             var view: View = undefined;

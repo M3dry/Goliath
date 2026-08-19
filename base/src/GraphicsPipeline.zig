@@ -3,7 +3,6 @@ const vk = @import("vulkan");
 const ShaderModule = @import("Shader.zig");
 
 const Ctx = @import("root.zig").Ctx;
-const GraphicsCtx = @import("GraphicsCtx.zig");
 
 const Self = @This();
 
@@ -89,9 +88,9 @@ pub const Description = struct {
 
 const max_attachments = 16;
 
-pub fn init(ctx: *const Ctx, desc: Description) !Self {
-    const dev = ctx.graphics.dev;
-    const extent = ctx.render_extent;
+pub fn init(ctx: Ctx.Query(&.{ .device, .render_extent }), desc: Description) !Self {
+    const dev = ctx.view.device;
+    const extent = ctx.view.render_extent;
 
     const attachment_count = desc.color_attachments.len;
     if (attachment_count > max_attachments) return error.TooManyColorAttachments;
@@ -264,41 +263,41 @@ pub fn init(ctx: *const Ctx, desc: Description) !Self {
     };
 }
 
-pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     if (self.handle != .null_handle) {
-        gc.dev.destroyPipeline(self.handle, null);
+        ctx.view.device.destroyPipeline(self.handle, null);
         self.handle = .null_handle;
     }
     if (self.layout != .null_handle) {
-        gc.dev.destroyPipelineLayout(self.layout, null);
+        ctx.view.device.destroyPipelineLayout(self.layout, null);
         self.layout = .null_handle;
     }
 }
 
-pub fn bind(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer) void {
-    gc.dev.cmdSetPrimitiveTopology(cmd_buf, self.topology);
-    gc.dev.cmdSetPrimitiveRestartEnable(cmd_buf, self.primitive_restart_enable);
-    gc.dev.cmdSetViewport(cmd_buf, 0, (&self.viewport)[0..1]);
-    gc.dev.cmdSetScissor(cmd_buf, 0, (&self.scissor)[0..1]);
-    gc.dev.cmdSetCullMode(cmd_buf, self.cull_mode);
-    gc.dev.cmdSetFrontFace(cmd_buf, self.front_face);
-    gc.dev.cmdSetLineWidth(cmd_buf, self.line_width);
-    gc.dev.cmdSetStencilTestEnable(cmd_buf, self.stencil_test_enable);
+pub fn bind(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer) void {
+    ctx.view.device.cmdSetPrimitiveTopology(cmd_buf, self.topology);
+    ctx.view.device.cmdSetPrimitiveRestartEnable(cmd_buf, self.primitive_restart_enable);
+    ctx.view.device.cmdSetViewport(cmd_buf, 0, (&self.viewport)[0..1]);
+    ctx.view.device.cmdSetScissor(cmd_buf, 0, (&self.scissor)[0..1]);
+    ctx.view.device.cmdSetCullMode(cmd_buf, self.cull_mode);
+    ctx.view.device.cmdSetFrontFace(cmd_buf, self.front_face);
+    ctx.view.device.cmdSetLineWidth(cmd_buf, self.line_width);
+    ctx.view.device.cmdSetStencilTestEnable(cmd_buf, self.stencil_test_enable);
     if (self.stencil_test_enable == .true) {
-        gc.dev.cmdSetStencilOp(cmd_buf, self.stencil_face_flags, self.stencil_fail_op, self.stencil_pass_op, self.stencil_depth_fail_op, self.stencil_compare_op);
-        gc.dev.cmdSetStencilCompareMask(cmd_buf, self.stencil_face_flags, self.stencil_compare_mask);
-        gc.dev.cmdSetStencilWriteMask(cmd_buf, self.stencil_face_flags, self.stencil_write_mask);
+        ctx.view.device.cmdSetStencilOp(cmd_buf, self.stencil_face_flags, self.stencil_fail_op, self.stencil_pass_op, self.stencil_depth_fail_op, self.stencil_compare_op);
+        ctx.view.device.cmdSetStencilCompareMask(cmd_buf, self.stencil_face_flags, self.stencil_compare_mask);
+        ctx.view.device.cmdSetStencilWriteMask(cmd_buf, self.stencil_face_flags, self.stencil_write_mask);
     }
-    gc.dev.cmdSetDepthTestEnable(cmd_buf, self.depth_test_enable);
+    ctx.view.device.cmdSetDepthTestEnable(cmd_buf, self.depth_test_enable);
     if (self.depth_test_enable == .true) {
-        gc.dev.cmdSetDepthCompareOp(cmd_buf, self.depth_compare_op);
+        ctx.view.device.cmdSetDepthCompareOp(cmd_buf, self.depth_compare_op);
     }
-    gc.dev.cmdSetDepthWriteEnable(cmd_buf, self.depth_write_enable);
-    gc.dev.cmdSetDepthBiasEnable(cmd_buf, self.depth_bias_enable);
+    ctx.view.device.cmdSetDepthWriteEnable(cmd_buf, self.depth_write_enable);
+    ctx.view.device.cmdSetDepthBiasEnable(cmd_buf, self.depth_bias_enable);
     if (self.depth_bias_enable == .true) {
-        gc.dev.cmdSetDepthBias(cmd_buf, self.depth_bias_constant_factor, self.depth_bias_clamp, self.depth_bias_slope_factor);
+        ctx.view.device.cmdSetDepthBias(cmd_buf, self.depth_bias_constant_factor, self.depth_bias_clamp, self.depth_bias_slope_factor);
     }
-    gc.dev.cmdBindPipeline(cmd_buf, .graphics, self.handle);
+    ctx.view.device.cmdBindPipeline(cmd_buf, .graphics, self.handle);
 }
 
 pub fn updateViewport(self: *Self, extent: vk.Extent2D) void {
@@ -316,25 +315,25 @@ pub fn updateViewport(self: *Self, extent: vk.Extent2D) void {
     };
 }
 
-pub fn draw(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DrawParams) void {
+pub fn draw(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer, params: DrawParams) void {
     if (params.push_constant) |pc| {
-        gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
+        ctx.view.device.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
     }
 
-    gc.dev.cmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex, params.first_instance);
+    ctx.view.device.cmdDraw(cmd_buf, params.vertex_count, params.instance_count, params.first_vertex, params.first_instance);
 }
 
-pub fn drawIndirect(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DrawIndirectParams) void {
+pub fn drawIndirect(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer, params: DrawIndirectParams) void {
     if (params.push_constant) |pc| {
-        gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
+        ctx.view.device.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
     }
 
-    gc.dev.cmdDrawIndirect(cmd_buf, params.buffer, params.offset, params.draw_count, params.stride);
+    ctx.view.device.cmdDrawIndirect(cmd_buf, params.buffer, params.offset, params.draw_count, params.stride);
 }
 
-pub fn drawIndirectCount(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DrawIndirectCountParams) void {
+pub fn drawIndirectCount(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer, params: DrawIndirectCountParams) void {
     if (params.push_constant) |pc| {
-        gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
+        ctx.view.device.cmdPushConstants(cmd_buf, self.layout, .{ .vertex_bit = true, .fragment_bit = true }, 0, @intCast(pc.len), pc.ptr);
     }
-    gc.dev.cmdDrawIndirectCount(cmd_buf, params.buffer, params.offset, params.count_buffer, params.count_offset, params.max_draw_count, params.stride);
+    ctx.view.device.cmdDrawIndirectCount(cmd_buf, params.buffer, params.offset, params.count_buffer, params.count_offset, params.max_draw_count, params.stride);
 }

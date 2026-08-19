@@ -76,21 +76,21 @@ count_pipeline: base.ComputePipeline,
 offsets_pipeline: base.ComputePipeline,
 fragments_pipeline: base.ComputePipeline,
 
-pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .graphics_family, .transport_family, .render_extent }), render_extent: base.vk.Extent2D) !Self {
     const vis_format: base.vk.Format = .r32_uint;
 
     var images: [base.Ctx.frames_in_flight]base.Image2D = undefined;
     var views: [base.Ctx.frames_in_flight]base.ImageView = undefined;
 
     for (0..base.Ctx.frames_in_flight) |n| {
-        images[n] = try base.Image2D.init(&ctx.graphics, ctx.graphics.vma_alloc, "vis_buffer", .{
+        images[n] = try base.Image2D.init(.from(ctx), "vis_buffer", .{
             .format = vis_format,
             .extent = render_extent,
             .usage = .{ .color_attachment_bit = true, .storage_bit = true, .transfer_dst_bit = true },
         });
-        errdefer for (0..n) |i| if (i == n) break else images[i].deinit(&ctx.destroy_queue);
+        errdefer for (0..n) |i| if (i == n) break else images[i].deinit(.from(ctx));
 
-        views[n] = try base.ImageView.init(&ctx.graphics, .{
+        views[n] = try base.ImageView.init(.from(ctx), .{
             .image = images[n].handle,
             .format = vis_format,
             .subresource_range = .{
@@ -101,13 +101,13 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
                 .layer_count = 1,
             },
         });
-        errdefer for (0..n) |i| if (i == n) break else images[i].deinit(&ctx.destroy_queue);
+        errdefer for (0..n) |i| if (i == n) break else images[i].deinit(.from(ctx));
     }
 
-    const vis_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_raster));
-    defer vis_mod.deinit(ctx);
+    const vis_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_raster));
+    defer vis_mod.deinit(.from(ctx));
 
-    var pipeline = try base.GraphicsPipeline.init(ctx, .{
+    var pipeline = try base.GraphicsPipeline.init(.from(ctx), .{
         .vertex = vis_mod,
         .vertex_entry_point = "vertex",
         .fragment = vis_mod,
@@ -121,10 +121,10 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
     pipeline.depth_write_enable = .true;
     pipeline.depth_compare_op = .less;
 
-    const skinned_vert_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_raster_skinned));
-    defer skinned_vert_mod.deinit(ctx);
+    const skinned_vert_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_raster_skinned));
+    defer skinned_vert_mod.deinit(.from(ctx));
 
-    var skinned_pipeline = try base.GraphicsPipeline.init(ctx, .{
+    var skinned_pipeline = try base.GraphicsPipeline.init(.from(ctx), .{
         .vertex = skinned_vert_mod,
         .vertex_entry_point = "vertex",
         .fragment = vis_mod,
@@ -138,7 +138,7 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
     skinned_pipeline.depth_write_enable = .true;
     skinned_pipeline.depth_compare_op = .less;
 
-    const set_layout = try ctx.graphics.dev.createDescriptorSetLayout(&.{
+    const set_layout = try ctx.view.device.createDescriptorSetLayout(&.{
         .binding_count = 2,
         .p_bindings = &.{
             base.vk.DescriptorSetLayoutBinding{
@@ -155,45 +155,45 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
             },
         },
     }, null);
-    errdefer ctx.graphics.dev.destroyDescriptorSetLayout(set_layout, null);
+    errdefer ctx.view.device.destroyDescriptorSetLayout(set_layout, null);
 
-    var counters_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Schema counters", @sizeOf(SchemaCounters), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    errdefer counters_buf.deinit(&ctx.destroy_queue);
-    var offsets_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Schema offsets", @sizeOf(SchemaOffsets), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    errdefer offsets_buf.deinit(&ctx.destroy_queue);
-    var dispatch_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Schema dispatch", @sizeOf(SchemaDispatch), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    errdefer dispatch_buf.deinit(&ctx.destroy_queue);
-    var frag_ids_buf = try base.Buffer.init(&ctx.graphics, .graphics, "Fragment ids", @as(u64, render_extent.width) * render_extent.height * 4, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    errdefer frag_ids_buf.deinit(&ctx.destroy_queue);
+    var counters_buf = try base.Buffer.init(.from(ctx), .graphics, "Schema counters", @sizeOf(SchemaCounters), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    errdefer counters_buf.deinit(.from(ctx));
+    var offsets_buf = try base.Buffer.init(.from(ctx), .graphics, "Schema offsets", @sizeOf(SchemaOffsets), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    errdefer offsets_buf.deinit(.from(ctx));
+    var dispatch_buf = try base.Buffer.init(.from(ctx), .graphics, "Schema dispatch", @sizeOf(SchemaDispatch), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    errdefer dispatch_buf.deinit(.from(ctx));
+    var frag_ids_buf = try base.Buffer.init(.from(ctx), .graphics, "Fragment ids", @as(u64, render_extent.width) * render_extent.height * 4, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    errdefer frag_ids_buf.deinit(.from(ctx));
 
-    const count_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_schema_count));
-    defer count_mod.deinit(ctx);
-    const offsets_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_schema_offsets));
-    defer offsets_mod.deinit(ctx);
-    const fragments_mod = try base.ShaderModule.init(ctx, shaders.get(.visbuffer_schema_fragments));
-    defer fragments_mod.deinit(ctx);
+    const count_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_count));
+    defer count_mod.deinit(.from(ctx));
+    const offsets_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_offsets));
+    defer offsets_mod.deinit(.from(ctx));
+    const fragments_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_fragments));
+    defer fragments_mod.deinit(.from(ctx));
 
-    var count_pipeline = try base.ComputePipeline.init(ctx, .{
+    var count_pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = count_mod,
         .entry_point = "compute",
         .set_layouts = &.{set_layout},
         .push_constant_size = @intCast(count_pc_size),
     });
-    errdefer count_pipeline.deinit(&ctx.graphics);
-    var offsets_pipeline = try base.ComputePipeline.init(ctx, .{
+    errdefer count_pipeline.deinit(.from(ctx));
+    var offsets_pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = offsets_mod,
         .entry_point = "compute",
         .set_layouts = &.{set_layout},
         .push_constant_size = @intCast(offsets_pc_size),
     });
-    errdefer offsets_pipeline.deinit(&ctx.graphics);
-    var fragments_pipeline = try base.ComputePipeline.init(ctx, .{
+    errdefer offsets_pipeline.deinit(.from(ctx));
+    var fragments_pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = fragments_mod,
         .entry_point = "compute",
         .set_layouts = &.{set_layout},
         .push_constant_size = @intCast(fragments_pc_size),
     });
-    errdefer fragments_pipeline.deinit(&ctx.graphics);
+    errdefer fragments_pipeline.deinit(.from(ctx));
 
     return .{
         .extent = render_extent,
@@ -212,23 +212,23 @@ pub fn init(ctx: *base.Ctx, render_extent: base.vk.Extent2D) !Self {
     };
 }
 
-pub fn deinit(self: *Self, ctx: *base.Ctx) void {
-    self.fragments_pipeline.deinit(&ctx.graphics);
-    self.offsets_pipeline.deinit(&ctx.graphics);
-    self.count_pipeline.deinit(&ctx.graphics);
-    self.skinned_pipeline.deinit(&ctx.graphics);
-    self.pipeline.deinit(&ctx.graphics);
+pub fn deinit(self: *Self, ctx: base.Ctx.Query(&.{ .device, .destroy_queue })) void {
+    self.fragments_pipeline.deinit(.from(ctx));
+    self.offsets_pipeline.deinit(.from(ctx));
+    self.count_pipeline.deinit(.from(ctx));
+    self.skinned_pipeline.deinit(.from(ctx));
+    self.pipeline.deinit(.from(ctx));
 
-    self.frag_ids_buf.deinit(&ctx.destroy_queue);
-    self.dispatch_buf.deinit(&ctx.destroy_queue);
-    self.offsets_buf.deinit(&ctx.destroy_queue);
-    self.counters_buf.deinit(&ctx.destroy_queue);
+    self.frag_ids_buf.deinit(.from(ctx));
+    self.dispatch_buf.deinit(.from(ctx));
+    self.offsets_buf.deinit(.from(ctx));
+    self.counters_buf.deinit(.from(ctx));
 
-    ctx.graphics.dev.destroyDescriptorSetLayout(self.set_layout, null);
+    ctx.view.device.destroyDescriptorSetLayout(self.set_layout, null);
 
     for (0..base.Ctx.frames_in_flight) |i| {
-        self.views[i].deinit(&ctx.destroy_queue);
-        self.images[i].deinit(&ctx.destroy_queue);
+        self.views[i].deinit(.from(ctx));
+        self.images[i].deinit(.from(ctx));
     }
 }
 
@@ -362,12 +362,12 @@ pub fn rasterSkinned(self: *Self, rg: *base.RenderGraph, params: SkinnedRasterPa
 
 /// Per-frame descriptor set with the visbuffer (binding 0) and shading target
 /// (binding 1) as storage images. Caller updates nothing; both views are set here.
-pub fn shadingSet(self: *const Self, alloc: std.mem.Allocator, dev: *base.vk.DeviceProxy, dp: *base.DescriptorPool, current_frame: u32, target_view: base.vk.ImageView) !u64 {
-    const set_id = try dp.newSet(dev, self.set_layout);
-    dp.beginUpdate(set_id);
-    try dp.updateStorageImage(alloc, 0, .general, self.views[current_frame].handle);
-    try dp.updateStorageImage(alloc, 1, .general, target_view);
-    dp.endUpdate(dev);
+pub fn shadingSet(self: *const Self, alloc: std.mem.Allocator, ctx: base.Ctx.Query(&.{ .device, .descriptor_pool, .current_frame }), target_view: base.vk.ImageView) !u64 {
+    const set_id = try ctx.view.descriptor_pool.newSet(.from(ctx), self.set_layout);
+    ctx.view.descriptor_pool.beginUpdate(set_id);
+    try ctx.view.descriptor_pool.updateStorageImage(alloc, 0, .general, self.views[ctx.view.current_frame].handle);
+    try ctx.view.descriptor_pool.updateStorageImage(alloc, 1, .general, target_view);
+    ctx.view.descriptor_pool.endUpdate(.from(ctx));
     return set_id;
 }
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const DestroyQueue = @import("DestroyQueue.zig");
-const GraphicsCtx = @import("GraphicsCtx.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 const Self = @This();
 
@@ -29,8 +29,8 @@ pub const Description = struct {
     unnormalized_coordinates: vk.Bool32 = .false,
 };
 
-pub fn init(gc: *const GraphicsCtx, desc: Description) !Self {
-    const handle = try gc.dev.createSampler(&.{
+pub fn init(ctx: Ctx.Query(&.{ .device }), desc: Description) !Self {
+    const handle = try ctx.view.device.createSampler(&.{
         .mag_filter = desc.mag_filter,
         .min_filter = desc.min_filter,
         .mipmap_mode = desc.mipmap_mode,
@@ -51,16 +51,16 @@ pub fn init(gc: *const GraphicsCtx, desc: Description) !Self {
     return .{ .handle = handle };
 }
 
-pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .destroy_queue })) void {
     if (self.handle != .null_handle) {
-        destroy_queue.enqueueSampler(self.handle) catch @panic("OOM");
+        ctx.view.destroy_queue.enqueueSampler(self.handle) catch @panic("OOM");
         self.handle = .null_handle;
     }
 }
 
-pub fn deinitNow(self: *Self, gc: *const GraphicsCtx) void {
+pub fn deinitNow(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     if (self.handle != .null_handle) {
-        gc.dev.destroySampler(self.handle, null);
+        ctx.view.device.destroySampler(self.handle, null);
         self.handle = .null_handle;
     }
 }

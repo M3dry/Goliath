@@ -3,12 +3,12 @@ const zprobe = @import("zprobe");
 const vk = @import("vulkan");
 const util = @import("util.zig");
 
-const GraphicsCtx = @import("GraphicsCtx.zig");
 const DescriptorPool = @import("DescriptorPool.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
 const Buffer = @import("Buffer.zig");
 const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
+const Ctx = @import("root.zig").Ctx;
 
 const RenderGraph = @This();
 
@@ -542,19 +542,18 @@ fn emitPassBarriers(
 
 fn recordGraphicsCommands(
     gp: *const GraphicsPass,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .descriptor_pool }),
     cmd_buf: vk.CommandBuffer,
-    dp: *DescriptorPool,
     buf_contracts: []const BufferContract,
 ) void {
     for (gp.descriptor_sets, 0..) |set_id, i| {
-        dp.bindSet(cmd_buf, gc, set_id, .graphics, gp.pipeline.layout, @intCast(i));
+        ctx.view.descriptor_pool.bindSet(cmd_buf, .from(ctx), set_id, .graphics, gp.pipeline.layout, @intCast(i));
     }
 
-    gp.pipeline.bind(gc, cmd_buf);
+    gp.pipeline.bind(.from(ctx), cmd_buf);
 
     for (gp.draws.items) |d| {
-        gp.pipeline.draw(gc, cmd_buf, .{
+        gp.pipeline.draw(.from(ctx), cmd_buf, .{
             .push_constant = d.push_constant,
             .vertex_count = d.vertex_count,
             .instance_count = d.instance_count,
@@ -564,7 +563,7 @@ fn recordGraphicsCommands(
     }
 
     if (gp.indirect) |ind| {
-        gp.pipeline.drawIndirect(gc, cmd_buf, .{
+        gp.pipeline.drawIndirect(.from(ctx), cmd_buf, .{
             .push_constant = ind.push_constant,
             .buffer = buf_contracts[ind.buffer.index].buffer.handle,
             .offset = ind.offset,
@@ -573,7 +572,7 @@ fn recordGraphicsCommands(
         });
     }
     if (gp.indirect_count) |ic| {
-        gp.pipeline.drawIndirectCount(gc, cmd_buf, .{
+        gp.pipeline.drawIndirectCount(.from(ctx), cmd_buf, .{
             .push_constant = ic.push_constant,
             .buffer = buf_contracts[ic.buffer.index].buffer.handle,
             .offset = ic.offset,
@@ -587,16 +586,14 @@ fn recordGraphicsCommands(
 
 fn recordGraphicsPass(
     gp: *const GraphicsPass,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .descriptor_pool }),
     cmd_buf: vk.CommandBuffer,
-    dp: *DescriptorPool,
     buf_contracts: []const BufferContract,
     alloc: Allocator,
 ) Allocator.Error!void {
-    const dev = &gc.dev;
-    try beginRendering(gp, dev, cmd_buf, alloc);
-    recordGraphicsCommands(gp, gc, cmd_buf, dp, buf_contracts);
-    dev.cmdEndRendering(cmd_buf);
+    try beginRendering(gp, &ctx.view.device, cmd_buf, alloc);
+    recordGraphicsCommands(gp, ctx, cmd_buf, buf_contracts);
+    ctx.view.device.cmdEndRendering(cmd_buf);
 }
 
 fn renderTargetsEqual(a: *const GraphicsPass, b: *const GraphicsPass) bool {
@@ -686,25 +683,24 @@ fn beginRendering(
 
 fn recordComputePass(
     cp: *const ComputePass,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .descriptor_pool }),
     cmd_buf: vk.CommandBuffer,
-    dp: *DescriptorPool,
     buf_contracts: []const BufferContract,
 ) void {
     for (cp.descriptor_sets, 0..) |set_id, i| {
-        dp.bindSet(cmd_buf, gc, set_id, .compute, cp.pipeline.layout, @intCast(i));
+        ctx.view.descriptor_pool.bindSet(cmd_buf, .from(ctx), set_id, .compute, cp.pipeline.layout, @intCast(i));
     }
 
-    cp.pipeline.bind(gc, cmd_buf);
+    cp.pipeline.bind(.from(ctx), cmd_buf);
 
     if (cp.indirect) |ind| {
-        cp.pipeline.dispatchIndirect(gc, cmd_buf, .{
+        cp.pipeline.dispatchIndirect(.from(ctx), cmd_buf, .{
             .push_constant = ind.push_constant,
             .buffer = buf_contracts[ind.buffer.index].buffer.handle,
             .offset = ind.offset,
         });
     } else {
-        cp.pipeline.dispatch(gc, cmd_buf, .{
+        cp.pipeline.dispatch(.from(ctx), cmd_buf, .{
             .push_constant = cp.dispatch.push_constant,
             .group_count_x = cp.dispatch.group_count_x,
             .group_count_y = cp.dispatch.group_count_y,
@@ -715,13 +711,13 @@ fn recordComputePass(
 
 fn recordTransferPass(
     tp: *const TransferPass,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     cmd_buf: vk.CommandBuffer,
     buf_contracts: []const BufferContract,
     img_contracts: []const ImageContract,
 ) void {
     for (tp.fills.items) |fill| {
-        gc.dev.cmdFillBuffer(
+        ctx.view.device.cmdFillBuffer(
             cmd_buf,
             buf_contracts[fill.buffer.index].buffer.handle,
             fill.offset,
@@ -730,7 +726,7 @@ fn recordTransferPass(
         );
     }
     for (tp.clears.items) |clear| {
-        gc.dev.cmdClearColorImage(
+        ctx.view.device.cmdClearColorImage(
             cmd_buf,
             img_contracts[clear.image.index].image,
             .transfer_dst_optimal,
@@ -741,13 +737,13 @@ fn recordTransferPass(
 }
 
 fn flushBarriers(
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     cmd_buf: vk.CommandBuffer,
     img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
     buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
 ) void {
     if (img_bars.items.len == 0 and buf_bars.items.len == 0) return;
-    gc.dev.cmdPipelineBarrier2(cmd_buf, &.{
+    ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
         .buffer_memory_barrier_count = @intCast(buf_bars.items.len),
         .p_buffer_memory_barriers = buf_bars.items.ptr,
         .image_memory_barrier_count = @intCast(img_bars.items.len),
@@ -760,7 +756,7 @@ fn emitFinalBarriers(
     image_states: []ImageTrackedState,
     buffer_states: []BufferTrackedState,
     qf: u32,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     cmd_buf: vk.CommandBuffer,
     alloc: Allocator,
 ) Allocator.Error!void {
@@ -800,7 +796,7 @@ fn emitFinalBarriers(
         }
     }
 
-    flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+    flushBarriers(.from(ctx), cmd_buf, img_bars, buf_bars);
     img_bars.deinit(alloc);
     buf_bars.deinit(alloc);
 }
@@ -1103,12 +1099,11 @@ pub fn merge(self: *RenderGraph, other: *RenderGraph) (Allocator.Error || error{
 
 pub fn run(
     self: *const RenderGraph,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .graphics_family, .descriptor_pool }),
     cmd_buf: vk.CommandBuffer,
-    dp: *DescriptorPool,
 ) Allocator.Error!void {
-    const dev = &gc.dev;
-    const qf = gc.graphics_family;
+    const dev = &ctx.view.device;
+    const qf = ctx.view.graphics_family;
 
     var arena = std.heap.ArenaAllocator.init(self.alloc);
     defer arena.deinit();
@@ -1180,14 +1175,14 @@ pub fn run(
                 }
 
                 if (can_merge) {
-                    recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                    recordGraphicsCommands(gp, .from(ctx), cmd_buf, self.buffers.items);
                 } else {
                     if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
-                    flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+                    flushBarriers(.from(ctx), cmd_buf, img_bars, buf_bars);
                     img_bars.clearRetainingCapacity();
                     buf_bars.clearRetainingCapacity();
                     try beginRendering(gp, dev, cmd_buf, alloc);
-                    recordGraphicsCommands(gp, gc, cmd_buf, dp, self.buffers.items);
+                    recordGraphicsCommands(gp, .from(ctx), cmd_buf, self.buffers.items);
                 }
 
                 if (gp.query_pool) |pool| {
@@ -1214,7 +1209,7 @@ pub fn run(
                     &buf_bars,
                     alloc,
                 );
-                flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+                flushBarriers(.from(ctx), cmd_buf, img_bars, buf_bars);
                 img_bars.clearRetainingCapacity();
                 buf_bars.clearRetainingCapacity();
 
@@ -1222,7 +1217,7 @@ pub fn run(
                     dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, cp.query_slot);
                 }
 
-                recordComputePass(cp, gc, cmd_buf, dp, self.buffers.items);
+                recordComputePass(cp, .from(ctx), cmd_buf, self.buffers.items);
 
                 if (cp.query_pool) |pool| {
                     dev_proxy.cmdWriteTimestamp2(cmd_buf, .{ .all_commands_bit = true }, pool, cp.query_slot + 1);
@@ -1246,18 +1241,18 @@ pub fn run(
                     &buf_bars,
                     alloc,
                 );
-                flushBarriers(gc, cmd_buf, img_bars, buf_bars);
+                flushBarriers(.from(ctx), cmd_buf, img_bars, buf_bars);
                 img_bars.clearRetainingCapacity();
                 buf_bars.clearRetainingCapacity();
 
-                recordTransferPass(tp, gc, cmd_buf, self.buffers.items, self.images.items);
+                recordTransferPass(tp, .from(ctx), cmd_buf, self.buffers.items, self.images.items);
             },
         }
     }
 
     if (prev_gp != null) dev_proxy.cmdEndRendering(cmd_buf);
 
-    try emitFinalBarriers(self, image_states, buffer_states, qf, gc, cmd_buf, alloc);
+    try emitFinalBarriers(self, image_states, buffer_states, qf, .from(ctx), cmd_buf, alloc);
 }
 
 test "builder: add images, buffers, passes and deinit" {

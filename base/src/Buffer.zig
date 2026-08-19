@@ -2,8 +2,8 @@ const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
-const GraphicsCtx = @import("GraphicsCtx.zig");
-const DestroyQueue = @import("DestroyQueue.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 const Self = @This();
 
@@ -25,8 +25,8 @@ pub const MemoryType = enum {
 };
 
 pub fn init(
-    gc: *const GraphicsCtx,
-    queue_type: GraphicsCtx.QueueType,
+    ctx: Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family }),
+    queue_type: root.GraphicsCtx.QueueType,
     name: [:0]const u8,
     size_: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
@@ -37,12 +37,17 @@ pub fn init(
     var usage_with_address = usage;
     usage_with_address.shader_device_address_bit = true;
 
+    const family = switch (queue_type) {
+        .graphics => ctx.view.graphics_family,
+        .transport => ctx.view.transport_family,
+    };
+
     const buffer_info = vk.BufferCreateInfo{
         .size = size_,
         .usage = usage_with_address,
         .sharing_mode = .exclusive,
         .queue_family_index_count = 1,
-        .p_queue_family_indices = (&gc.queueFamilyFromType(queue_type))[0..1],
+        .p_queue_family_indices = (&family)[0..1],
     };
 
     var alloc_info = vma.VmaAllocationCreateInfo{
@@ -78,7 +83,7 @@ pub fn init(
 
     var alloc_info_out: vma.VmaAllocationInfo = undefined;
     const res = vma.vmaCreateBuffer(
-        gc.vma_alloc,
+        ctx.view.vma_allocator,
         @ptrCast(&buffer_info),
         &alloc_info,
         @ptrCast(&buf.handle),
@@ -90,7 +95,7 @@ pub fn init(
     const address_info = vk.BufferDeviceAddressInfo{
         .buffer = buf.handle,
     };
-    buf.address = gc.dev.getBufferDeviceAddress(&address_info);
+    buf.address = ctx.view.device.getBufferDeviceAddress(&address_info);
 
     buf.size = size_;
     if (mem_type != .gpu_only) {
@@ -98,11 +103,11 @@ pub fn init(
         buf.mapped_len = @intCast(size_);
 
         var props: u32 = undefined;
-        vma.vmaGetAllocationMemoryProperties(gc.vma_alloc, buf.allocation, &props);
+        vma.vmaGetAllocationMemoryProperties(ctx.view.vma_allocator, buf.allocation, &props);
         buf.coherent = (props & vma.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
     }
 
-    try gc.dev.setDebugUtilsObjectNameEXT(&.{
+    try ctx.view.device.setDebugUtilsObjectNameEXT(&.{
         .object_type = .buffer,
         .object_handle = @intFromEnum(buf.handle),
         .p_object_name = name,
@@ -111,24 +116,24 @@ pub fn init(
     return buf;
 }
 
-pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .destroy_queue })) void {
     if (self.handle != .null_handle) {
-        destroy_queue.enqueueBuffer(self.handle, self.allocation) catch @panic("OOM");
+        ctx.view.destroy_queue.enqueueBuffer(self.handle, self.allocation) catch @panic("OOM");
         self.handle = .null_handle;
         self.allocation = null;
     }
 }
 
-pub fn deinitNow(self: *Self, vma_alloc: vma.VmaAllocator) void {
+pub fn deinitNow(self: *Self, ctx: Ctx.Query(&.{ .vma_allocator })) void {
     if (self.handle != .null_handle) {
-        vma.vmaDestroyBuffer(vma_alloc, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
+        vma.vmaDestroyBuffer(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(self.handle)), self.allocation);
         self.handle = .null_handle;
         self.allocation = null;
     }
 }
 
-pub fn flush(self: *const Self, vma_alloc: vma.VmaAllocator, offset: u64, size_: u64) void {
+pub fn flush(self: *const Self, ctx: Ctx.Query(&.{ .vma_allocator }), offset: u64, size_: u64) void {
     if (!self.coherent) {
-        _ = vma.vmaFlushAllocation(vma_alloc, self.allocation, offset, size_);
+        _ = vma.vmaFlushAllocation(ctx.view.vma_allocator, self.allocation, offset, size_);
     }
 }

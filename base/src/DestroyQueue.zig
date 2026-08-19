@@ -2,6 +2,9 @@ const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
+const root = @import("root.zig");
+const Ctx = root.Ctx;
+
 const Self = @This();
 
 const Entry = union(enum) {
@@ -24,16 +27,16 @@ pub fn init(alloc: std.mem.Allocator, current_frame: u32) Self {
     };
 }
 
-pub fn deinit(self: *Self, vma_alloc: anytype, dev: *vk.DeviceProxy) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
     for (&self.frames) |*frame| {
         for (frame.items) |entry| {
             switch (entry) {
-                .buffer => |b| vma.vmaDestroyBuffer(vma_alloc, @ptrFromInt(@intFromEnum(b.handle)), b.allocation),
-                .image => |i| vma.vmaDestroyImage(vma_alloc, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
-                .image_view => |v| dev.destroyImageView(v, null),
-                .sampler => |s| dev.destroySampler(s, null),
-                .descriptor_set_layout => |s| dev.destroyDescriptorSetLayout(s, null),
-                .descriptor_pool => |p| dev.destroyDescriptorPool(p, null),
+                .buffer => |b| vma.vmaDestroyBuffer(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(b.handle)), b.allocation),
+                .image => |i| vma.vmaDestroyImage(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
+                .image_view => |v| ctx.view.device.destroyImageView(v, null),
+                .sampler => |s| ctx.view.device.destroySampler(s, null),
+                .descriptor_set_layout => |s| ctx.view.device.destroyDescriptorSetLayout(s, null),
+                .descriptor_pool => |p| ctx.view.device.destroyDescriptorPool(p, null),
             }
         }
         frame.deinit(self.alloc);
@@ -64,16 +67,16 @@ pub fn enqueueDescriptorPool(self: *Self, pool: vk.DescriptorPool) !void {
     try self.frames[self.current_frame].append(self.alloc, .{ .descriptor_pool = pool });
 }
 
-pub fn flush(self: *Self, vma_alloc: vma.VmaAllocator, dev: *vk.DeviceProxy) void {
+pub fn flush(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
     const frame = &self.frames[self.current_frame];
     for (frame.items) |entry| {
         switch (entry) {
-            .buffer => |b| vma.vmaDestroyBuffer(vma_alloc, @ptrFromInt(@intFromEnum(b.handle)), b.allocation),
-            .image => |i| vma.vmaDestroyImage(vma_alloc, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
-            .image_view => |v| dev.destroyImageView(v, null),
-            .sampler => |s| dev.destroySampler(s, null),
-            .descriptor_set_layout => |s| dev.destroyDescriptorSetLayout(s, null),
-            .descriptor_pool => |p| dev.destroyDescriptorPool(p, null),
+            .buffer => |b| vma.vmaDestroyBuffer(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(b.handle)), b.allocation),
+            .image => |i| vma.vmaDestroyImage(ctx.view.vma_allocator, @ptrFromInt(@intFromEnum(i.handle)), i.allocation),
+            .image_view => |v| ctx.view.device.destroyImageView(v, null),
+            .sampler => |s| ctx.view.device.destroySampler(s, null),
+            .descriptor_set_layout => |s| ctx.view.device.destroyDescriptorSetLayout(s, null),
+            .descriptor_pool => |p| ctx.view.device.destroyDescriptorPool(p, null),
         }
     }
     frame.clearRetainingCapacity();

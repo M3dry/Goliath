@@ -56,22 +56,22 @@ pub const AnimatedCullPC = struct {
 pipeline: base.ComputePipeline,
 animated_pipeline: base.ComputePipeline,
 
-pub fn init(ctx: *base.Ctx) !Self {
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .render_extent })) !Self {
     const cull_comp = shaders.get(.cull_renderables);
-    const cull_comp_mod = try base.ShaderModule.init(ctx, cull_comp);
-    defer cull_comp_mod.deinit(ctx);
+    const cull_comp_mod = try base.ShaderModule.init(.from(ctx), cull_comp);
+    defer cull_comp_mod.deinit(.from(ctx));
 
-    const pipeline = try base.ComputePipeline.init(ctx, .{
+    const pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = cull_comp_mod,
         .entry_point = "compute",
         .push_constant_size = @intCast(base.push_constant.size(CullPC, base.layout.scalar)),
     });
 
     const anim_comp = shaders.get(.cull_animated_renderables);
-    const anim_comp_mod = try base.ShaderModule.init(ctx, anim_comp);
-    defer anim_comp_mod.deinit(ctx);
+    const anim_comp_mod = try base.ShaderModule.init(.from(ctx), anim_comp);
+    defer anim_comp_mod.deinit(.from(ctx));
 
-    const animated_pipeline = try base.ComputePipeline.init(ctx, .{
+    const animated_pipeline = try base.ComputePipeline.init(.from(ctx), .{
         .shader = anim_comp_mod,
         .entry_point = "compute",
         .push_constant_size = @intCast(base.push_constant.size(AnimatedCullPC, base.layout.scalar)),
@@ -83,9 +83,9 @@ pub fn init(ctx: *base.Ctx) !Self {
     };
 }
 
-pub fn deinit(self: *Self, ctx: *base.Ctx) void {
-    self.animated_pipeline.deinit(&ctx.graphics);
-    self.pipeline.deinit(&ctx.graphics);
+pub fn deinit(self: *Self, ctx: base.Ctx.Query(&.{ .device })) void {
+    self.animated_pipeline.deinit(.from(ctx));
+    self.pipeline.deinit(.from(ctx));
 }
 
 pub const CullParams = struct {

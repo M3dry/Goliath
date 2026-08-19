@@ -15,13 +15,13 @@ pub fn append(self: *Self, alloc: std.mem.Allocator, schema: usize, instance: Pb
     try self.schema_items[schema].append(alloc, instance);
 }
 
-pub fn flush(self: *Self, gc: *const base.GraphicsCtx, transport: *base.Transport, destroy_queue: *base.DestroyQueue) !void {
+pub fn flush(self: *Self, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
     const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
     const dst_access: base.vk.AccessFlags2 = .{ .shader_storage_read_bit = true };
 
     for (0..Visbuffer.max_schemas) |schema| {
-        transport.unqueue(self.schema_tickets[schema], false);
-        self.schema_bufs[schema].deinit(destroy_queue);
+        ctx.view.transport.unqueue(self.schema_tickets[schema], false);
+        self.schema_bufs[schema].deinit(.from(ctx));
 
         if (self.schema_items[schema].items.len == 0) {
             self.schema_bufs[schema] = .empty;
@@ -29,15 +29,15 @@ pub fn flush(self: *Self, gc: *const base.GraphicsCtx, transport: *base.Transpor
             continue;
         }
 
-        self.schema_bufs[schema] = try base.Buffer.init(gc, .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.PBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-        self.schema_tickets[schema] = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access);
+        self.schema_bufs[schema] = try base.Buffer.init(.from(ctx), .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.PBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+        self.schema_tickets[schema] = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access);
     }
 }
 
-pub fn deinit(self: *Self, alloc: std.mem.Allocator, destroy_queue: *base.DestroyQueue, transport: *base.Transport) void {
+pub fn deinit(self: *Self, alloc: std.mem.Allocator, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
     for (0..Visbuffer.max_schemas) |schema| {
-        transport.unqueue(self.schema_tickets[schema], false);
-        self.schema_bufs[schema].deinit(destroy_queue);
+        ctx.view.transport.unqueue(self.schema_tickets[schema], false);
+        self.schema_bufs[schema].deinit(.from(ctx));
         self.schema_items[schema].deinit(alloc);
     }
 }

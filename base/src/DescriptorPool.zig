@@ -4,7 +4,8 @@ const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
 const Buffer = @import("Buffer.zig");
-const GraphicsCtx = @import("GraphicsCtx.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 const Allocator = std.mem.Allocator;
 
@@ -36,7 +37,7 @@ pub fn registerExternalSet(self: *Self, alloc: Allocator, set: vk.DescriptorSet)
 }
 
 pub fn init(
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family }),
     alloc: Allocator,
 ) !Self {
     var dp: Self = .{};
@@ -48,7 +49,7 @@ pub fn init(
         .{ .type = .storage_image, .descriptor_count = max_sets },
     };
 
-    dp.pool = try gc.dev.createDescriptorPool(&.{
+    dp.pool = try ctx.view.device.createDescriptorPool(&.{
         .flags = .{ .update_after_bind_bit = true },
         .max_sets = max_sets,
         .pool_size_count = @intCast(pool_sizes.len),
@@ -59,7 +60,7 @@ pub fn init(
     @memset(dp.sets, .null_handle);
 
     dp.ubo_buffer = try Buffer.init(
-        gc,
+        .from(ctx),
         .graphics,
         "DescriptorPool UBO",
         ubo_size,
@@ -78,12 +79,12 @@ pub fn init(
 
 pub fn deinit(
     self: *Self,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device, .vma_allocator }),
     alloc: Allocator,
 ) void {
-    gc.dev.destroyDescriptorPool(self.pool, null);
+    ctx.view.device.destroyDescriptorPool(self.pool, null);
 
-    self.ubo_buffer.deinitNow(gc.vma_alloc);
+    self.ubo_buffer.deinitNow(.from(ctx));
 
     alloc.free(self.sets);
     self.external_sets.deinit(alloc);
@@ -95,13 +96,13 @@ pub fn deinit(
     self.image_write_indices.deinit(alloc);
 }
 
-pub fn newSet(self: *Self, dev: *vk.DeviceProxy, layout: vk.DescriptorSetLayout) !u64 {
+pub fn newSet(self: *Self, ctx: Ctx.Query(&.{ .device }), layout: vk.DescriptorSetLayout) !u64 {
     const id = self.set_count;
     if (id >= max_sets) return error.DescriptorPoolFull;
     self.set_count = id + 1;
 
     var result: [1]vk.DescriptorSet = undefined;
-    try dev.allocateDescriptorSets(&.{
+    try ctx.view.device.allocateDescriptorSets(&.{
         .descriptor_pool = self.pool,
         .descriptor_set_count = 1,
         .p_set_layouts = @ptrCast(&layout),
@@ -113,7 +114,7 @@ pub fn newSet(self: *Self, dev: *vk.DeviceProxy, layout: vk.DescriptorSetLayout)
 pub fn bindSet(
     self: *const Self,
     cmd_buf: vk.CommandBuffer,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     id: u64,
     bind_point: vk.PipelineBindPoint,
     layout: vk.PipelineLayout,
@@ -122,9 +123,9 @@ pub fn bindSet(
     if (id >= max_sets) {
         const ext_ix: usize = @intCast(id - max_sets);
         if (ext_ix >= self.external_sets.items.len) return;
-        gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.external_sets.items[ext_ix]}, null);
+        ctx.view.device.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.external_sets.items[ext_ix]}, null);
     } else {
-        gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
+        ctx.view.device.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.sets[id]}, null);
     }
 }
 
@@ -152,7 +153,7 @@ pub fn beginUpdate(self: *Self, id: u64) void {
     self.image_write_indices.clearRetainingCapacity();
 }
 
-pub fn endUpdate(self: *Self, dev: *vk.DeviceProxy) void {
+pub fn endUpdate(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     for (self.write_queue.items, 0..) |*write, i| {
         write.dst_set = self.sets[@intCast(self.write_id)];
         switch (write.descriptor_type) {
@@ -167,7 +168,7 @@ pub fn endUpdate(self: *Self, dev: *vk.DeviceProxy) void {
             else => {},
         }
     }
-    dev.updateDescriptorSets(self.write_queue.items, null);
+    ctx.view.device.updateDescriptorSets(self.write_queue.items, null);
     self.write_id = std.math.maxInt(u64);
 }
 
@@ -260,8 +261,8 @@ pub fn updateStorageImage(
     });
 }
 
-pub fn clear(self: *Self, dev: *vk.DeviceProxy) !void {
-    try dev.resetDescriptorPool(self.pool, .{});
+pub fn clear(self: *Self, ctx: Ctx.Query(&.{ .device })) !void {
+    try ctx.view.device.resetDescriptorPool(self.pool, .{});
     self.set_count = 0;
     @memset(self.sets, .null_handle);
     self.ubo_offset = 0;

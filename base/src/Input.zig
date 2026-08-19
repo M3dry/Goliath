@@ -2,6 +2,8 @@ const std = @import("std");
 const zprobe = @import("zprobe");
 const zglfw = @import("zglfw");
 
+const Ctx = @import("root.zig").Ctx;
+
 const Self = @This();
 
 pub const Key = zglfw.Key;
@@ -74,7 +76,8 @@ char_count: usize = 0,
 key_just_pressed_mods: [key_count]Mods = undefined,
 last_just_pressed: ?Key = null,
 
-pub fn init(self: *Self, window: *zglfw.Window) void {
+pub fn init(self: *Self, ctx: Ctx.Query(&.{ .window })) void {
+    const window = ctx.view.window;
     self.* = .{};
     self.key_down = .initEmpty();
     self.key_just_pressed = .initEmpty();
@@ -96,7 +99,8 @@ pub fn init(self: *Self, window: *zglfw.Window) void {
     _ = window.setCharCallback(charCallback);
 }
 
-pub fn deinit(self: *Self, window: *zglfw.Window) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .window })) void {
+    const window = ctx.view.window;
     _ = window.setKeyCallback(null);
     _ = window.setMouseButtonCallback(null);
     _ = window.setCursorPosCallback(null);

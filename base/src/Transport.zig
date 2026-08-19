@@ -2,8 +2,9 @@ const std = @import("std");
 const vk = @import("vulkan");
 const vma = @import("vma.zig").vma;
 
-const GraphicsCtx = @import("GraphicsCtx.zig");
 const Buffer = @import("Buffer.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 const Allocator = std.mem.Allocator;
 const RingBuffer = @import("util/ring_buffer.zig").RingBuffer;
@@ -419,15 +420,15 @@ drain_cmd_buf: vk.CommandBuffer,
 drain_fence: vk.Fence,
 last_wait_semaphore: vk.Semaphore = .null_handle,
 
-pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !void {
+pub fn init(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator, .transport_family, .graphics_family, .transport_queue, .graphics_queue, .dedicated_transport }), alloc: Allocator, io: std.Io) !void {
     self.alloc = alloc;
-    self.has_dedicated_transport = gc.has_dedicated_transport;
-    self.dev = gc.dev;
-    self.transport_queue = gc.transport_queue;
-    self.graphics_queue = gc.graphics_queue;
-    self.vma_alloc = gc.vma_alloc;
-    self.transport_family = gc.transport_family;
-    self.graphics_family = gc.graphics_family;
+    self.has_dedicated_transport = ctx.view.dedicated_transport;
+    self.dev = ctx.view.device;
+    self.transport_queue = ctx.view.transport_queue;
+    self.graphics_queue = ctx.view.graphics_queue;
+    self.vma_alloc = ctx.view.vma_allocator;
+    self.transport_family = ctx.view.transport_family;
+    self.graphics_family = ctx.view.graphics_family;
     self.current_cmd_buf = 0;
     self.timeline_counter = 0;
     self.finished_timeline = 0;
@@ -449,21 +450,21 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
     for (&self.task_queues) |*q| q.* = .{};
 
     var staging_created: u32 = 0;
-    errdefer for (self.staging_buffers[0..staging_created]) |*buf| buf.deinitNow(gc.vma_alloc);
+    errdefer for (self.staging_buffers[0..staging_created]) |*buf| buf.deinitNow(.from(ctx));
     for (0..num_frames) |i| {
-        self.staging_buffers[i] = try Buffer.init(gc, .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, .cpu_to_gpu_staging);
+        self.staging_buffers[i] = try Buffer.init(.from(ctx), .transport, "Transport staging", staging_buffer_size, .{ .transfer_src_bit = true }, .cpu_to_gpu_staging);
         staging_created += 1;
         self.staging_ptrs[i] = self.staging_buffers[i].mapped orelse return error.StagingBufferNotMapped;
     }
     self.flush_staging = !self.staging_buffers[0].coherent;
 
-    self.cmd_pool = try gc.dev.createCommandPool(&.{
+    self.cmd_pool = try ctx.view.device.createCommandPool(&.{
         .flags = .{ .reset_command_buffer_bit = true },
-        .queue_family_index = gc.transport_family,
+        .queue_family_index = ctx.view.transport_family,
     }, null);
-    errdefer gc.dev.destroyCommandPool(self.cmd_pool, null);
+    errdefer ctx.view.device.destroyCommandPool(self.cmd_pool, null);
     var cmd_bufs: [num_frames]vk.CommandBuffer = undefined;
-    try gc.dev.allocateCommandBuffers(&.{
+    try ctx.view.device.allocateCommandBuffers(&.{
         .command_pool = self.cmd_pool,
         .level = .primary,
         .command_buffer_count = num_frames,
@@ -471,61 +472,61 @@ pub fn init(self: *Self, gc: *const GraphicsCtx, alloc: Allocator, io: std.Io) !
     self.cmd_bufs = cmd_bufs;
 
     var fences_created: u32 = 0;
-    errdefer for (self.cmd_buf_fences[0..fences_created]) |f| gc.dev.destroyFence(f, null);
+    errdefer for (self.cmd_buf_fences[0..fences_created]) |f| ctx.view.device.destroyFence(f, null);
     for (&self.cmd_buf_fences) |*fence| {
-        fence.* = try gc.dev.createFence(&.{
+        fence.* = try ctx.view.device.createFence(&.{
             .flags = .{ .signaled_bit = true },
         }, null);
         fences_created += 1;
     }
-    self.timeline_semaphore = try gc.dev.createSemaphore(&.{
+    self.timeline_semaphore = try ctx.view.device.createSemaphore(&.{
         .p_next = &vk.SemaphoreTypeCreateInfo{
             .initial_value = 0,
             .semaphore_type = .timeline,
         },
     }, null);
-    errdefer gc.dev.destroySemaphore(self.timeline_semaphore, null);
+    errdefer ctx.view.device.destroySemaphore(self.timeline_semaphore, null);
 
-    self.drain_cmd_pool = try gc.dev.createCommandPool(&.{
+    self.drain_cmd_pool = try ctx.view.device.createCommandPool(&.{
         .flags = .{ .reset_command_buffer_bit = true },
-        .queue_family_index = gc.graphics_family,
+        .queue_family_index = ctx.view.graphics_family,
     }, null);
-    errdefer gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
+    errdefer ctx.view.device.destroyCommandPool(self.drain_cmd_pool, null);
     var drain_cmd_buf: vk.CommandBuffer = undefined;
-    try gc.dev.allocateCommandBuffers(&.{
+    try ctx.view.device.allocateCommandBuffers(&.{
         .command_pool = self.drain_cmd_pool,
         .level = .primary,
         .command_buffer_count = 1,
     }, (&drain_cmd_buf)[0..1]);
     self.drain_cmd_buf = drain_cmd_buf;
 
-    self.drain_fence = try gc.dev.createFence(&.{
+    self.drain_fence = try ctx.view.device.createFence(&.{
         .flags = .{ .signaled_bit = true },
     }, null);
     self.last_wait_semaphore = .null_handle;
 
-    self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, gc });
+    self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, Ctx.Query(&.{ .device, .vma_allocator }).from(ctx) });
 }
 
-pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
     @atomicStore(bool, &self.stop_worker, true, .monotonic);
     if (self.worker) |w| w.join();
 
-    for (&self.staging_buffers) |*buf| buf.deinitNow(gc.vma_alloc);
+    for (&self.staging_buffers) |*buf| buf.deinitNow(.from(ctx));
 
-    gc.dev.destroyCommandPool(self.cmd_pool, null);
-    gc.dev.destroyCommandPool(self.drain_cmd_pool, null);
+    ctx.view.device.destroyCommandPool(self.cmd_pool, null);
+    ctx.view.device.destroyCommandPool(self.drain_cmd_pool, null);
 
     if (self.last_wait_semaphore != .null_handle) {
         // The last drain submission may still be in flight; wait before destroying its semaphore.
-        _ = gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64)) catch {};
-        gc.dev.destroySemaphore(self.last_wait_semaphore, null);
+        _ = ctx.view.device.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64)) catch {};
+        ctx.view.device.destroySemaphore(self.last_wait_semaphore, null);
     }
 
-    gc.dev.destroyFence(self.drain_fence, null);
-    for (self.cmd_buf_fences) |f| gc.dev.destroyFence(f, null);
+    ctx.view.device.destroyFence(self.drain_fence, null);
+    for (self.cmd_buf_fences) |f| ctx.view.device.destroyFence(f, null);
 
-    gc.dev.destroySemaphore(self.timeline_semaphore, null);
+    ctx.view.device.destroySemaphore(self.timeline_semaphore, null);
 
     for (&self.task_queues) |*q| {
         while (q.popFirst()) |task| {
@@ -544,7 +545,7 @@ pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
         if (ps.wait_semaphore != .null_handle) {
             if (ps.wait_semaphore == self.last_wait_semaphore)
                 self.last_wait_semaphore = .null_handle;
-            gc.dev.destroySemaphore(ps.wait_semaphore, null);
+            ctx.view.device.destroySemaphore(ps.wait_semaphore, null);
         }
         ps.buffer_barriers.deinit(self.alloc);
         ps.image_barriers.deinit(self.alloc);
@@ -818,26 +819,26 @@ pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
     }
 }
 
-pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
+pub fn drain(self: *Self, ctx: Ctx.Query(&.{ .device, .graphics_queue })) !void {
     self.pending_mutex.lockUncancelable(self.io);
     defer self.pending_mutex.unlock(self.io);
 
     for (self.pending_submissions.items) |*sub| {
         if (!sub.valid) continue;
 
-        _ = try gc.dev.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64));
+        _ = try ctx.view.device.waitForFences(&[_]vk.Fence{self.drain_fence}, .true, std.math.maxInt(u64));
         // The fence covers the previous drain submission, so its per-batch semaphore is idle.
         if (self.last_wait_semaphore != .null_handle) {
-            gc.dev.destroySemaphore(self.last_wait_semaphore, null);
+            ctx.view.device.destroySemaphore(self.last_wait_semaphore, null);
             self.last_wait_semaphore = .null_handle;
         }
-        try gc.dev.resetFences(&[_]vk.Fence{self.drain_fence});
+        try ctx.view.device.resetFences(&[_]vk.Fence{self.drain_fence});
 
-        try gc.dev.resetCommandBuffer(self.drain_cmd_buf, .{});
-        try gc.dev.beginCommandBuffer(self.drain_cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
+        try ctx.view.device.resetCommandBuffer(self.drain_cmd_buf, .{});
+        try ctx.view.device.beginCommandBuffer(self.drain_cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
 
         if (sub.buffer_barriers.items.len > 0 or sub.image_barriers.items.len > 0) {
-            gc.dev.cmdPipelineBarrier2(self.drain_cmd_buf, &.{
+            ctx.view.device.cmdPipelineBarrier2(self.drain_cmd_buf, &.{
                 .buffer_memory_barrier_count = @intCast(sub.buffer_barriers.items.len),
                 .p_buffer_memory_barriers = sub.buffer_barriers.items.ptr,
                 .image_memory_barrier_count = @intCast(sub.image_barriers.items.len),
@@ -845,10 +846,10 @@ pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
             });
         }
 
-        try gc.dev.endCommandBuffer(self.drain_cmd_buf);
+        try ctx.view.device.endCommandBuffer(self.drain_cmd_buf);
 
         if (self.has_dedicated_transport) {
-            try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
+            try ctx.view.device.queueSubmit2(ctx.view.graphics_queue, (&vk.SubmitInfo2{
                 .wait_semaphore_info_count = 1,
                 .p_wait_semaphore_infos = (&vk.SemaphoreSubmitInfo{
                     .semaphore = sub.wait_semaphore,
@@ -870,7 +871,7 @@ pub fn drain(self: *Self, gc: *const GraphicsCtx) !void {
                 })[0..1],
             })[0..1], self.drain_fence);
         } else {
-            try gc.dev.queueSubmit2(gc.graphics_queue, (&vk.SubmitInfo2{
+            try ctx.view.device.queueSubmit2(ctx.view.graphics_queue, (&vk.SubmitInfo2{
                 .command_buffer_info_count = 1,
                 .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
                     .command_buffer = sub.cmd_buf,
@@ -954,7 +955,7 @@ fn getFreeTicket(self: *Self) !Ticket {
     return Ticket.init(0, id);
 }
 
-fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
+fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !void {
     var cmd_buf_idx: u32 = 0;
 
     while (!@atomicLoad(bool, &self.stop_worker, .monotonic)) {
@@ -980,18 +981,18 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
         const staging_buf = self.staging_buffers[slot];
         const staging_ptr = self.staging_ptrs[slot];
 
-        _ = try gc.dev.waitForFences(&[_]vk.Fence{fence}, .true, std.math.maxInt(u64));
-        try gc.dev.resetFences(&[_]vk.Fence{fence});
+        _ = try ctx.view.device.waitForFences(&[_]vk.Fence{fence}, .true, std.math.maxInt(u64));
+        try ctx.view.device.resetFences(&[_]vk.Fence{fence});
 
-        try gc.dev.resetCommandBuffer(cmd_buf, .{});
-        try gc.dev.beginCommandBuffer(cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
+        try ctx.view.device.resetCommandBuffer(cmd_buf, .{});
+        try ctx.view.device.beginCommandBuffer(cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
 
         {
             self.barrier_lock.lockUncancelable(self.io);
             defer self.barrier_lock.unlock(self.io);
 
             if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                gc.dev.cmdPipelineBarrier2(cmd_buf, &.{
+                ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
                     .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
                     .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
                     .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
@@ -1035,11 +1036,11 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
             try batch.append(self.alloc, task);
         }
 
-        if (self.flush_staging) staging_buf.flush(self.vma_alloc, 0, Self.staging_buffer_size);
+        if (self.flush_staging) staging_buf.flush(.from(ctx), 0, Self.staging_buffer_size);
 
         var copy_offset: u32 = 0;
         for (batch.items) |*t| {
-            t.recordCopy(cmd_buf, gc.dev, staging_buf.handle, copy_offset);
+            t.recordCopy(cmd_buf, ctx.view.device, staging_buf.handle, copy_offset);
             copy_offset += try t.requiredSize();
         }
 
@@ -1097,7 +1098,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                 self.barrier_lock.lockUncancelable(self.io);
                 defer self.barrier_lock.unlock(self.io);
                 if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                    gc.dev.cmdPipelineBarrier2(cmd_buf, &.{
+                    ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
                         .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
                         .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
                         .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
@@ -1108,15 +1109,15 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                 }
             }
 
-            try gc.dev.endCommandBuffer(cmd_buf);
+            try ctx.view.device.endCommandBuffer(cmd_buf);
 
             // Fresh binary semaphore per batch: drain() waits on it exactly once and destroys it
             // after the submission completes, so a batch can never re-signal an unconsumed
             // semaphore (VUID-vkQueueSubmit2-semaphore-03868) and the worker never blocks on GPU.
             // Split batches (no isLast task) have no graphics-side handoff, so no signal at all.
-            const batch_sem = if (has_graphics_work) try gc.dev.createSemaphore(&.{}, null) else .null_handle;
+            const batch_sem = if (has_graphics_work) try ctx.view.device.createSemaphore(&.{}, null) else .null_handle;
 
-            try gc.dev.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
+            try ctx.view.device.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
                 .command_buffer_info_count = 1,
                 .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
                     .command_buffer = cmd_buf,
@@ -1160,7 +1161,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                 self.barrier_lock.lockUncancelable(self.io);
                 defer self.barrier_lock.unlock(self.io);
                 if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                    gc.dev.cmdPipelineBarrier2(cmd_buf, &.{
+                    ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
                         .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
                         .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
                         .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
@@ -1171,7 +1172,7 @@ fn workerThread(self: *Self, gc: *const GraphicsCtx) !void {
                 }
             }
 
-            try gc.dev.endCommandBuffer(cmd_buf);
+            try ctx.view.device.endCommandBuffer(cmd_buf);
 
             const tv = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
             {

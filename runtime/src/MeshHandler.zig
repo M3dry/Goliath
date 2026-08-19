@@ -14,10 +14,10 @@ lod_entries: std.ArrayListUnmanaged(Mesh.GPULODEntry) = .empty,
 
 pub const empty: MeshHandler = .{};
 
-pub fn deinit(self: *MeshHandler, alloc: Allocator, destroy_queue: *base.DestroyQueue, transport: *base.Transport) void {
-    transport.unqueue(self.ticket, false);
-    self.mesh_desc_buf.deinit(destroy_queue);
-    self.lod_entry_buf.deinit(destroy_queue);
+pub fn deinit(self: *MeshHandler, alloc: Allocator, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
+    ctx.view.transport.unqueue(self.ticket, false);
+    self.mesh_desc_buf.deinit(.from(ctx));
+    self.lod_entry_buf.deinit(.from(ctx));
 
     self.mesh_descs.deinit(alloc);
     self.lod_entries.deinit(alloc);
@@ -27,7 +27,7 @@ pub fn deinit(self: *MeshHandler, alloc: Allocator, destroy_queue: *base.Destroy
 /// Uploads all LOD geometry to GPU (via Lod.initGeometryBuffer) if not already on GPU.
 /// Appends MeshDesc + LODEntry to the CPU staging arrays. Caller can batch
 /// multiple registerMesh calls, then call flushDescriptorArrays() once.
-pub fn registerMesh(self: *MeshHandler, mesh: *Mesh, alloc: Allocator, gc: *const base.GraphicsCtx, transport: *base.Transport, destroy_queue: *base.DestroyQueue) !void {
+pub fn registerMesh(self: *MeshHandler, mesh: *Mesh, alloc: Allocator, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
     if (mesh.gpu_meta != null) return error.MeshOnGPU;
 
     var mesh_desc = Mesh.GPUMeshDesc.fromMesh(mesh);
@@ -42,11 +42,11 @@ pub fn registerMesh(self: *MeshHandler, mesh: *Mesh, alloc: Allocator, gc: *cons
     };
 
     var i: usize = 0;
-    errdefer for (0..i) |j| mesh.lods[j].deinitGeometryBuffer(destroy_queue, transport);
+    errdefer for (0..i) |j| mesh.lods[j].deinitGeometryBuffer(.from(ctx));
     for (mesh.lods) |*lod| {
         var gpu_lod = Mesh.GPULODEntry.fromLod(lod);
         if (gpu_lod.buffer_address == 0) {
-            const buf, _ = try lod.initGeometryBuffer(gc, transport);
+            const buf, _ = try lod.initGeometryBuffer(.from(ctx));
             gpu_lod.buffer_address = buf.address;
         }
         lod.on_gpu = true;
@@ -60,27 +60,27 @@ pub fn registerMesh(self: *MeshHandler, mesh: *Mesh, alloc: Allocator, gc: *cons
 /// Grows the GPU buffers if needed (old buffer queued for destruction).
 /// The transport already batches internally, so calling this once per frame
 /// (or once per loading batch) is fine.
-pub fn flushDescriptorArrays(self: *MeshHandler, gc: *const base.GraphicsCtx, destroy_queue: *base.DestroyQueue, transport: *base.Transport) !void {
-    transport.unqueue(self.ticket, false);
-    self.mesh_desc_buf.deinit(destroy_queue);
-    self.lod_entry_buf.deinit(destroy_queue);
+pub fn flushDescriptorArrays(self: *MeshHandler, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
+    ctx.view.transport.unqueue(self.ticket, false);
+    self.mesh_desc_buf.deinit(.from(ctx));
+    self.lod_entry_buf.deinit(.from(ctx));
 
-    self.mesh_desc_buf = try .init(gc, .graphics, "Mesh Descriptions", self.mesh_descs.items.len * @sizeOf(Mesh.GPUMeshDesc), .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
-    self.lod_entry_buf = try .init(gc, .graphics, "LOD Entries", self.lod_entries.items.len * @sizeOf(Mesh.GPULODEntry), .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+    self.mesh_desc_buf = try .init(.from(ctx), .graphics, "Mesh Descriptions", self.mesh_descs.items.len * @sizeOf(Mesh.GPUMeshDesc), .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+    self.lod_entry_buf = try .init(.from(ctx), .graphics, "LOD Entries", self.lod_entries.items.len * @sizeOf(Mesh.GPULODEntry), .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
 
     const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
     const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
-    const tick1 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.mesh_descs.items), null, null, self.mesh_desc_buf.handle, 0, dst_stage, dst_access);
-        errdefer transport.unqueue(tick1, false);
-    const tick2 = try transport.uploadBuffer(true, std.mem.sliceAsBytes(self.lod_entries.items), null, null, self.lod_entry_buf.handle, 0, dst_stage, dst_access);
-        errdefer transport.unqueue(tick2, false);
+    const tick1 = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.mesh_descs.items), null, null, self.mesh_desc_buf.handle, 0, dst_stage, dst_access);
+        errdefer ctx.view.transport.unqueue(tick1, false);
+    const tick2 = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.lod_entries.items), null, null, self.lod_entry_buf.handle, 0, dst_stage, dst_access);
+        errdefer ctx.view.transport.unqueue(tick2, false);
 
     self.ticket = tick2;
 }
 
 /// Frees GPU resources for a registered mesh. The caller must ensure the
 /// mesh is no longer referenced in any GPU descriptor or instance data.
-pub fn unregisterMesh(self: *MeshHandler, mesh: *Mesh, destory_queue: *base.DestroyQueue, transport: *base.Transport) void {
+pub fn unregisterMesh(self: *MeshHandler, mesh: *Mesh, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
     if (mesh.gpu_meta) |gpu_meta| {
         if (gpu_meta.lod_offset + mesh.lods.len == self.lod_entries.items.len) {
             self.lod_entries.shrinkRetainingCapacity(gpu_meta.lod_offset);
@@ -91,7 +91,7 @@ pub fn unregisterMesh(self: *MeshHandler, mesh: *Mesh, destory_queue: *base.Dest
     }
 
     for (mesh.lods) |*lod| {
-        lod.deinitGeometryBuffer(destory_queue, transport);
+        lod.deinitGeometryBuffer(.from(ctx));
         lod.on_gpu = false;
     }
 }

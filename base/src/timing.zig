@@ -3,7 +3,6 @@ const vk = @import("vulkan");
 const zglfw = @import("zglfw");
 
 const Ctx = @import("root.zig").Ctx;
-const GraphicsCtx = @import("GraphicsCtx.zig");
 
 pub const FrameTimer = struct {
     fixed_dt: f64,
@@ -55,12 +54,12 @@ pub const GpuTimer = struct {
     const slots_per_pass = 2;
 
     pub fn init(
-        gc: *const GraphicsCtx,
+        ctx: Ctx.Query(&.{ .device }),
         pass_count: u32,
         alloc: std.mem.Allocator,
     ) !GpuTimer {
         const total_slots = pass_count * slots_per_pass * Ctx.frames_in_flight;
-        const pool = try gc.dev.createQueryPool(&.{
+        const pool = try ctx.view.device.createQueryPool(&.{
             .query_type = .timestamp,
             .query_count = total_slots,
         }, null);
@@ -76,19 +75,19 @@ pub const GpuTimer = struct {
         };
     }
 
-    pub fn deinit(self: *GpuTimer, gc: *const GraphicsCtx, alloc: std.mem.Allocator) void {
-        gc.dev.destroyQueryPool(self.pool, null);
+    pub fn deinit(self: *GpuTimer, ctx: Ctx.Query(&.{ .device }), alloc: std.mem.Allocator) void {
+        ctx.view.device.destroyQueryPool(self.pool, null);
 
         alloc.free(self.deltas);
         alloc.free(self.raw);
     }
 
-    pub fn collect(self: *GpuTimer, gc: *const GraphicsCtx) ?[]const u64 {
+    pub fn collect(self: *GpuTimer, ctx: Ctx.Query(&.{ .device })) ?[]const u64 {
         if (self.current_frame < Ctx.frames_in_flight) return null;
 
         const base_slot = self.current_frame * self.pass_count * slots_per_pass;
         const count = self.pass_count * slots_per_pass;
-        gc.dev.getQueryPoolResults(
+        ctx.view.device.getQueryPoolResults(
             self.pool,
             base_slot,
             count,
@@ -105,10 +104,10 @@ pub const GpuTimer = struct {
         return self.deltas[0..self.pass_count];
     }
 
-    pub fn reset(self: *GpuTimer, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer) void {
+    pub fn reset(self: *GpuTimer, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer) void {
         const base_slot = self.current_frame * self.pass_count * slots_per_pass;
 
-        gc.dev.cmdResetQueryPool(cmd_buf, self.pool, base_slot, self.pass_count * slots_per_pass);
+        ctx.view.device.cmdResetQueryPool(cmd_buf, self.pool, base_slot, self.pass_count * slots_per_pass);
     }
 
     pub fn slot(self: *const GpuTimer, pass_index: u32) u32 {

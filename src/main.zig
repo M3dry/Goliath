@@ -13,9 +13,9 @@ const zmesh = runtime.zmesh;
 
 const Culling = runtime.Culling;
 
-fn waitForTick(ctx: *base.Ctx, tick: base.Transport.Ticket) !void {
-    while (!try ctx.transport.isReady(tick)) {
-        try ctx.transport.drain(&ctx.graphics);
+fn waitForTick(ctx: base.Ctx.Query(&.{ .transport, .device, .graphics_queue }), tick: base.Transport.Ticket) !void {
+    while (!try ctx.view.transport.isReady(tick)) {
+        try ctx.view.transport.drain(.from(ctx));
         std.Thread.yield() catch {};
     }
 }
@@ -64,7 +64,7 @@ pub fn main(init: std.process.Init) !void {
     defer ctx.deinit(gpa);
 
     var mh = runtime.MeshHandler.empty;
-    defer mh.deinit(gpa, &ctx.destroy_queue, &ctx.transport);
+    defer mh.deinit(gpa, .from(&ctx));
 
     zmesh.init(gpa);
     defer zmesh.deinit();
@@ -99,36 +99,36 @@ pub fn main(init: std.process.Init) !void {
     var helmet_mesh = try runtime.Mesh.init(gpa, gltf_result0.mesh_io.source);
     defer helmet_mesh.deinit(gpa);
 
-    try mh.registerMesh(&body_mesh, gpa, &ctx.graphics, &ctx.transport, &ctx.destroy_queue);
-    defer mh.unregisterMesh(&body_mesh, &ctx.destroy_queue, &ctx.transport);
+    try mh.registerMesh(&body_mesh, gpa, .from(&ctx));
+    defer mh.unregisterMesh(&body_mesh, .from(&ctx));
 
-    try mh.registerMesh(&helmet_mesh, gpa, &ctx.graphics, &ctx.transport, &ctx.destroy_queue);
-    defer mh.unregisterMesh(&helmet_mesh, &ctx.destroy_queue, &ctx.transport);
+    try mh.registerMesh(&helmet_mesh, gpa, .from(&ctx));
+    defer mh.unregisterMesh(&helmet_mesh, .from(&ctx));
 
     var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
     for (&joint_matrices_bufs, 0..) |*buf, i| {
-        buf.* = try base.Buffer.init(&ctx.graphics, .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
+        buf.* = try base.Buffer.init(.from(&ctx), .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
         _ = i;
     }
-    defer for (&joint_matrices_bufs) |*buf| buf.deinit(&ctx.destroy_queue);
+    defer for (&joint_matrices_bufs) |*buf| buf.deinit(.from(&ctx));
 
-    try mh.flushDescriptorArrays(&ctx.graphics, &ctx.destroy_queue, &ctx.transport);
+    try mh.flushDescriptorArrays(.from(&ctx));
 
     {
         const geo_buf = body_mesh.lods[0].geometry_buffer.?;
         while (!try ctx.transport.isReady(geo_buf.@"1")) {
-            try ctx.transport.drain(&ctx.graphics);
+            try ctx.transport.drain(.from(&ctx));
             std.Thread.yield() catch {};
         }
     }
     while (!try ctx.transport.isReady(mh.ticket)) {
-        try ctx.transport.drain(&ctx.graphics);
+        try ctx.transport.drain(.from(&ctx));
         std.Thread.yield() catch {};
     }
 
     var input = base.Input{};
-    input.init(ctx.window);
-    defer input.deinit(ctx.window);
+    input.init(.from(&ctx));
+    defer input.deinit(.from(&ctx));
 
     var imgui = try base.Imgui.init(gpa, .from(&ctx));
     defer imgui.deinit(.from(&ctx));
@@ -151,13 +151,13 @@ pub fn main(init: std.process.Init) !void {
 
     var asset_system: runtime.AssetSystem = undefined;
     if (rebuild_assets) {
-        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &ctx.transport, gpa, gpa, .{ .default = .{ .path_prefix = asset_dir } });
+        asset_system = try runtime.AssetSystem.init(.from(&ctx), gpa, gpa, .{ .default = .{ .path_prefix = asset_dir } });
     } else {
         var file_reader_buffer: [512]u8 = undefined;
         var file_reader = manifest_file.?.readerStreaming(init.io, &file_reader_buffer);
-        asset_system = try runtime.AssetSystem.init(&ctx.graphics, &ctx.transport, gpa, gpa, .{ .reader = &file_reader.interface });
+        asset_system = try runtime.AssetSystem.init(.from(&ctx), gpa, gpa, .{ .reader = &file_reader.interface });
     }
-    defer asset_system.deinit(&ctx.destroy_queue);
+    defer asset_system.deinit(.from(&ctx));
 
     if (rebuild_assets) {
         // fallback 1x1 textures: white + flat normal
@@ -231,17 +231,17 @@ pub fn main(init: std.process.Init) !void {
     var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
     defer asset_cmd_buf.deinit();
     for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
-    try asset_system.submit(&ctx.graphics, &ctx.destroy_queue, &ctx.transport, &asset_cmd_buf);
+    try asset_system.submit(.from(&ctx), &asset_cmd_buf);
 
     // // Let the sampled texture bindings land in the pool before the first frame.
     // while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
-    //     try ctx.transport.drain(&ctx.graphics);
-    //     try asset_system.texture_reg.tick(&ctx.transport, &ctx.graphics);
+    //     try ctx.transport.drain(.from(&ctx));
+    //     try asset_system.texture_reg.tick(.from(&ctx));
     //     std.Thread.yield() catch {};
     // }
 
     var mat_handler = runtime.MaterialHandler{};
-    defer mat_handler.deinit(gpa, &ctx.destroy_queue, &ctx.transport);
+    defer mat_handler.deinit(gpa, .from(&ctx));
 
     inst.albedo_map = asset_system.denseIndex(slot_gids[0]);
     inst.metallic_roughness_map = asset_system.denseIndex(slot_gids[1]);
@@ -249,8 +249,8 @@ pub fn main(init: std.process.Init) !void {
     inst.occlusion_map = asset_system.denseIndex(slot_gids[3]);
     inst.emissive_map = asset_system.denseIndex(slot_gids[4]);
     try mat_handler.append(gpa, 0, inst);
-    try mat_handler.flush(&ctx.graphics, &ctx.transport, &ctx.destroy_queue);
-    try waitForTick(&ctx, mat_handler.schema_tickets[0]);
+    try mat_handler.flush(.from(&ctx));
+    try waitForTick(.from(&ctx), mat_handler.schema_tickets[0]);
 
     // Give the graph a bindable id for the asset system's texture pool set, on every frame.
     var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
@@ -258,54 +258,54 @@ pub fn main(init: std.process.Init) !void {
         texture_pool_sets[i] = try ctx.descriptor_pools[i].registerExternalSet(gpa, asset_system.texture_reg.texture_pool.set);
     }
 
-    var vis = try runtime.Visbuffer.init(&ctx, render_extent);
-    defer vis.deinit(&ctx);
+    var vis = try runtime.Visbuffer.init(.from(&ctx), render_extent);
+    defer vis.deinit(.from(&ctx));
 
-    var pbr = try runtime.PbrShading.init(&ctx, vis.set_layout, asset_system.texture_reg.texture_pool.set_layout);
-    defer pbr.deinit(&ctx);
+    var pbr = try runtime.PbrShading.init(.from(&ctx), vis.set_layout, asset_system.texture_reg.texture_pool.set_layout);
+    defer pbr.deinit(.from(&ctx));
 
-    var world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
-    defer world_instances_buf.deinit(&ctx.destroy_queue);
+    var world_instances_buf = try base.Buffer.init(.from(&ctx), .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
+    defer world_instances_buf.deinit(.from(&ctx));
     {
         const mapped = world_instances_buf.mapped.?;
         @as(*u32, @ptrCast(@alignCast(mapped))).* = 0;
         @memcpy(mapped[4..][0..64], std.mem.asBytes(&mesh_world));
-        world_instances_buf.flush(ctx.graphics.vma_alloc, 0, Culling.world_instance_size);
+        world_instances_buf.flush(.from(&ctx), 0, Culling.world_instance_size);
     }
 
     const max_instances = 64;
-    var renderables_buf = try base.Buffer.init(&ctx.graphics, .graphics, "renderables_buf", @sizeOf(u32) + max_instances * @sizeOf(Culling.RenderableEntry), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    defer renderables_buf.deinit(&ctx.destroy_queue);
+    var renderables_buf = try base.Buffer.init(.from(&ctx), .graphics, "renderables_buf", @sizeOf(u32) + max_instances * @sizeOf(Culling.RenderableEntry), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer renderables_buf.deinit(.from(&ctx));
 
-    var draw_cmds_buf = try base.Buffer.init(&ctx.graphics, .graphics, "draw_cmds_buf", max_instances * 5 * @sizeOf(u32), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    defer draw_cmds_buf.deinit(&ctx.destroy_queue);
+    var draw_cmds_buf = try base.Buffer.init(.from(&ctx), .graphics, "draw_cmds_buf", max_instances * 5 * @sizeOf(u32), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer draw_cmds_buf.deinit(.from(&ctx));
 
     // Per-frame arena for skinned vertex cache
     const arena_elements: u32 = 64 * 1024 * 32;
     const arena_buf_size = @sizeOf(u32) * 2 + arena_elements * @sizeOf(u32);
-    var arena_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinning_arena", arena_buf_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    defer arena_buf.deinit(&ctx.destroy_queue);
+    var arena_buf = try base.Buffer.init(.from(&ctx), .graphics, "skinning_arena", arena_buf_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer arena_buf.deinit(.from(&ctx));
 
     // Skinned draw cmds (indirect with extra fields), includes u32 count header
-    var skinned_draw_cmds_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinned_draw_cmds_buf", @sizeOf(u32) + max_instances * 32, .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-    defer skinned_draw_cmds_buf.deinit(&ctx.destroy_queue);
+    var skinned_draw_cmds_buf = try base.Buffer.init(.from(&ctx), .graphics, "skinned_draw_cmds_buf", @sizeOf(u32) + max_instances * 32, .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+    defer skinned_draw_cmds_buf.deinit(.from(&ctx));
 
     // Skinned world instances (mesh_ix + joint_offset + transform)
     const skinned_instance_count: u32 = 4;
-    var skinned_world_instances_buf = try base.Buffer.init(&ctx.graphics, .graphics, "skinned_world_instances_buf", skinned_instance_count * Culling.skinned_world_instance_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
-    defer skinned_world_instances_buf.deinit(&ctx.destroy_queue);
+    var skinned_world_instances_buf = try base.Buffer.init(.from(&ctx), .graphics, "skinned_world_instances_buf", skinned_instance_count * Culling.skinned_world_instance_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
+    defer skinned_world_instances_buf.deinit(.from(&ctx));
 
-    var culling = try Culling.init(&ctx);
-    defer culling.deinit(&ctx);
+    var culling = try Culling.init(.from(&ctx));
+    defer culling.deinit(.from(&ctx));
 
     // GRID drawing pipeline
     const fullscreen_vert_spirv = shaders.get(.fullscreen_triangle);
-    const fullscreen_vert_mod = try base.ShaderModule.init(&ctx, fullscreen_vert_spirv);
-    defer fullscreen_vert_mod.deinit(&ctx);
+    const fullscreen_vert_mod = try base.ShaderModule.init(.from(&ctx), fullscreen_vert_spirv);
+    defer fullscreen_vert_mod.deinit(.from(&ctx));
 
     const grid_spirv = shaders.get(.grid);
-    const grid_mod = try base.ShaderModule.init(&ctx, grid_spirv);
-    defer grid_mod.deinit(&ctx);
+    const grid_mod = try base.ShaderModule.init(.from(&ctx), grid_spirv);
+    defer grid_mod.deinit(.from(&ctx));
 
     const GridPC = struct {
         inv_vp: zm.Mat,
@@ -314,7 +314,7 @@ pub fn main(init: std.process.Init) !void {
         screen: [2]f32,
     };
 
-    var grid_pipeline = try base.GraphicsPipeline.init(&ctx, .{
+    var grid_pipeline = try base.GraphicsPipeline.init(.from(&ctx), .{
         .fragment = grid_mod,
         .vertex = fullscreen_vert_mod,
         .push_constant_size = @sizeOf(GridPC),
@@ -340,7 +340,7 @@ pub fn main(init: std.process.Init) !void {
         },
         .depth_format = base.Ctx.depth_texture,
     });
-    defer grid_pipeline.deinit(&ctx.graphics);
+    defer grid_pipeline.deinit(.from(&ctx));
     grid_pipeline.depth_test_enable = .true;
     grid_pipeline.depth_compare_op = .less;
     grid_pipeline.depth_write_enable = .true;
@@ -424,20 +424,19 @@ pub fn main(init: std.process.Init) !void {
             }
             zgui.end();
 
-            try ctx.transport.drain(&ctx.graphics);
-            try asset_system.tick(&ctx.graphics, &ctx.transport);
+            try ctx.transport.drain(.from(&ctx));
+            try asset_system.tick(.from(&ctx));
 
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();
             const dt = ctx.depthTarget();
-            const dp = ctx.descriptorPool();
 
             const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
             {
                 const buf = &joint_matrices_bufs[ctx.current_frame];
                 const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
                 try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
-                if (!buf.coherent) buf.flush(ctx.graphics.vma_alloc, 0, buf.size);
+                if (!buf.coherent) buf.flush(.from(&ctx), 0, buf.size);
             }
 
             var rg = base.RenderGraph.init(gpa);
@@ -681,7 +680,7 @@ pub fn main(init: std.process.Init) !void {
                 inst2[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&mesh_world));
                 if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
 
                 const base_off2 = Culling.skinned_world_instance_size*2;
                 const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
@@ -690,7 +689,7 @@ pub fn main(init: std.process.Init) !void {
                 inst3[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst3[2..18]), std.mem.asBytes(&mesh_world2));
                 if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
 
                 const base_off3 = Culling.skinned_world_instance_size*3;
                 const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
@@ -699,7 +698,7 @@ pub fn main(init: std.process.Init) !void {
                 inst4[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst4[2..18]), std.mem.asBytes(&mesh_world2));
                 if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(ctx.graphics.vma_alloc, 0, skinned_world_instances_buf.size);
+                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
             }
 
             var anim_cull_pc_buf: [Culling.AnimatedCullPC.size]u8 = undefined;
@@ -756,7 +755,7 @@ pub fn main(init: std.process.Init) !void {
                 .pc_buf = &skinned_vb_pc_buf,
             });
 
-            const shading_set = try vis.shadingSet(gpa, &ctx.graphics.dev, dp, ctx.current_frame, rt.view);
+            const shading_set = try vis.shadingSet(gpa, .from(&ctx), rt.view);
 
             var count_pc_buf: [runtime.Visbuffer.count_pc_size]u8 = undefined;
             var offsets_pc_buf: [runtime.Visbuffer.offsets_pc_size]u8 = undefined;
@@ -775,7 +774,7 @@ pub fn main(init: std.process.Init) !void {
             });
 
             var pbr_pc_buf: [runtime.PbrShading.pbr_pc_size]u8 = undefined;
-            try pbr.shade(&rg, gpa, &ctx.graphics.dev, dp, texture_pool_sets[ctx.current_frame], .{
+            try pbr.shade(&rg, gpa, .from(&ctx), texture_pool_sets[ctx.current_frame], .{
                 .screen = .{ render_extent.width, render_extent.height },
                 .vis_ref = vis_ref,
                 .target_ref = rt_ref,
@@ -824,7 +823,7 @@ pub fn main(init: std.process.Init) !void {
                 .vertex_count = 3,
             });
 
-            try rg.run(&ctx.graphics, frame.cmd_buf, ctx.descriptorPool());
+            try rg.run(.from(&ctx), frame.cmd_buf);
 
             ctx.end_drawing();
 

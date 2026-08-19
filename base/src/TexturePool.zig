@@ -1,8 +1,8 @@
 const std = @import("std");
 const vk = @import("vulkan");
 
-const GraphicsCtx = @import("GraphicsCtx.zig");
-const DestroyQueue = @import("DestroyQueue.zig");
+const root = @import("root.zig");
+const Ctx = root.Ctx;
 
 const Self = @This();
 
@@ -11,11 +11,11 @@ set_layout: vk.DescriptorSetLayout = .null_handle,
 set: vk.DescriptorSet = .null_handle,
 capacity: u32 = 0,
 
-pub fn init(gc: *const GraphicsCtx, capacity_: u32) !Self {
+pub fn init(ctx: Ctx.Query(&.{ .device }), capacity_: u32) !Self {
     var tp: Self = .{};
     tp.capacity = capacity_;
 
-    tp.pool = try gc.dev.createDescriptorPool(&.{
+    tp.pool = try ctx.view.device.createDescriptorPool(&.{
         .flags = .{ .update_after_bind_bit = true },
         .max_sets = 1,
         .pool_size_count = 1,
@@ -43,7 +43,7 @@ pub fn init(gc: *const GraphicsCtx, capacity_: u32) !Self {
         .p_binding_flags = @ptrCast(&binding_flags),
     };
 
-    tp.set_layout = try gc.dev.createDescriptorSetLayout(&.{
+    tp.set_layout = try ctx.view.device.createDescriptorSetLayout(&.{
         .p_next = &binding_flags_info,
         .flags = .{ .update_after_bind_pool_bit = true },
         .binding_count = 1,
@@ -55,7 +55,7 @@ pub fn init(gc: *const GraphicsCtx, capacity_: u32) !Self {
         .p_descriptor_counts = @ptrCast(&tp.capacity),
     };
 
-    try gc.dev.allocateDescriptorSets(&.{
+    try ctx.view.device.allocateDescriptorSets(&.{
         .p_next = &count_info,
         .descriptor_pool = tp.pool,
         .descriptor_set_count = 1,
@@ -65,26 +65,26 @@ pub fn init(gc: *const GraphicsCtx, capacity_: u32) !Self {
     return tp;
 }
 
-pub fn deinit(self: *Self, destroy_queue: *DestroyQueue) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .destroy_queue })) void {
     if (self.set_layout != .null_handle) {
-        destroy_queue.enqueueDescriptorSetLayout(self.set_layout) catch @panic("OOM");
+        ctx.view.destroy_queue.enqueueDescriptorSetLayout(self.set_layout) catch @panic("OOM");
         self.set_layout = .null_handle;
     }
     if (self.pool != .null_handle) {
-        destroy_queue.enqueueDescriptorPool(self.pool) catch @panic("OOM");
+        ctx.view.destroy_queue.enqueueDescriptorPool(self.pool) catch @panic("OOM");
         self.pool = .null_handle;
     }
 
     self.capacity = 0;
 }
 
-pub fn deinitNow(self: *Self, gc: *const GraphicsCtx) void {
+pub fn deinitNow(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     if (self.set_layout != .null_handle) {
-        gc.dev.destroyDescriptorSetLayout(self.set_layout, null);
+        ctx.view.device.destroyDescriptorSetLayout(self.set_layout, null);
         self.set_layout = .null_handle;
     }
     if (self.pool != .null_handle) {
-        gc.dev.destroyDescriptorPool(self.pool, null);
+        ctx.view.device.destroyDescriptorPool(self.pool, null);
         self.pool = .null_handle;
     }
 
@@ -93,7 +93,7 @@ pub fn deinitNow(self: *Self, gc: *const GraphicsCtx) void {
 
 pub fn update(
     self: *Self,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     index: u32,
     view: vk.ImageView,
     layout: vk.ImageLayout,
@@ -108,7 +108,7 @@ pub fn update(
     var dummy_buf: [1]vk.DescriptorBufferInfo = .{.{ .buffer = .null_handle, .offset = 0, .range = 0 }};
     var dummy_buf_view: [1]vk.BufferView = std.mem.zeroes([1]vk.BufferView);
 
-    gc.dev.updateDescriptorSets(&.{
+    ctx.view.device.updateDescriptorSets(&.{
         .{
             .dst_set = self.set,
             .dst_binding = 0,
@@ -125,10 +125,10 @@ pub fn update(
 pub fn bind(
     self: *const Self,
     cmd_buf: vk.CommandBuffer,
-    gc: *const GraphicsCtx,
+    ctx: Ctx.Query(&.{ .device }),
     bind_point: vk.PipelineBindPoint,
     layout: vk.PipelineLayout,
     set: u32,
 ) void {
-    gc.dev.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.set}, null);
+    ctx.view.device.cmdBindDescriptorSets(cmd_buf, bind_point, layout, set, &.{self.set}, null);
 }

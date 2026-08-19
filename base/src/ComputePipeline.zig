@@ -3,7 +3,6 @@ const vk = @import("vulkan");
 const ShaderModule = @import("Shader.zig");
 
 const Ctx = @import("root.zig").Ctx;
-const GraphicsCtx = @import("GraphicsCtx.zig");
 
 const Self = @This();
 
@@ -31,8 +30,8 @@ pub const Description = struct {
     push_constant_size: u32 = 0,
 };
 
-pub fn init(ctx: *const Ctx, desc: Description) !Self {
-    const dev = ctx.graphics.dev;
+pub fn init(ctx: Ctx.Query(&.{ .device }), desc: Description) !Self {
+    const dev = ctx.view.device;
 
     const stage = desc.shader.stageInfo(.{ .compute_bit = true }, desc.entry_point);
 
@@ -68,33 +67,33 @@ pub fn init(ctx: *const Ctx, desc: Description) !Self {
     };
 }
 
-pub fn deinit(self: *Self, gc: *const GraphicsCtx) void {
+pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device })) void {
     if (self.handle != .null_handle) {
-        gc.dev.destroyPipeline(self.handle, null);
+        ctx.view.device.destroyPipeline(self.handle, null);
         self.handle = .null_handle;
     }
     if (self.layout != .null_handle) {
-        gc.dev.destroyPipelineLayout(self.layout, null);
+        ctx.view.device.destroyPipelineLayout(self.layout, null);
         self.layout = .null_handle;
     }
 }
 
-pub fn bind(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer) void {
-    gc.dev.cmdBindPipeline(cmd_buf, .compute, self.handle);
+pub fn bind(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer) void {
+    ctx.view.device.cmdBindPipeline(cmd_buf, .compute, self.handle);
 }
 
-pub fn dispatch(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DispatchParams) void {
+pub fn dispatch(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer, params: DispatchParams) void {
     if (params.push_constant) |pc| {
-        gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
+        ctx.view.device.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
     }
 
-    gc.dev.cmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
+    ctx.view.device.cmdDispatch(cmd_buf, params.group_count_x, params.group_count_y, params.group_count_z);
 }
 
-pub fn dispatchIndirect(self: *const Self, gc: *const GraphicsCtx, cmd_buf: vk.CommandBuffer, params: DispatchIndirectParams) void {
+pub fn dispatchIndirect(self: *const Self, ctx: Ctx.Query(&.{ .device }), cmd_buf: vk.CommandBuffer, params: DispatchIndirectParams) void {
     if (params.push_constant) |pc| {
-        gc.dev.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
+        ctx.view.device.cmdPushConstants(cmd_buf, self.layout, .{ .compute_bit = true }, 0, @intCast(pc.len), pc.ptr);
     }
 
-    gc.dev.cmdDispatchIndirect(cmd_buf, params.buffer, params.offset);
+    ctx.view.device.cmdDispatchIndirect(cmd_buf, params.buffer, params.offset);
 }

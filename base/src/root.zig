@@ -112,8 +112,8 @@ pub const Ctx = struct {
 
        ctx.graphics = try GraphicsCtx.init(alloc, ctx.window, window_opts.name);
 
-        try ctx.transport.init(&ctx.graphics, alloc, io);
-        errdefer ctx.transport.deinit(&ctx.graphics);
+        try ctx.transport.init(.from(ctx), alloc, io);
+        errdefer ctx.transport.deinit(.from(ctx));
 
         ctx.frames = try alloc.alloc(Frame, frames_in_flight);
         errdefer alloc.free(ctx.frames);
@@ -122,23 +122,23 @@ pub const Ctx = struct {
             var i: usize = 0;
             var rt_idx: usize = 0;
             var depth_idx: usize = 0;
-            errdefer for (ctx.frames[0..i]) |*frame| frame.deinit(&ctx.graphics);
-            errdefer for (ctx.frames[0..rt_idx]) |*f| f.deinitRenderTexture(&ctx.graphics);
-            errdefer for (ctx.frames[0..depth_idx]) |*f| f.deinitDepthTexture(&ctx.graphics);
+            errdefer for (ctx.frames[0..i]) |*frame| frame.deinit(.from(ctx));
+            errdefer for (ctx.frames[0..rt_idx]) |*f| f.deinitRenderTexture(.from(ctx));
+            errdefer for (ctx.frames[0..depth_idx]) |*f| f.deinitDepthTexture(.from(ctx));
 
             for (ctx.frames) |_| {
-                ctx.frames[i] = try Frame.init(&ctx.graphics);
+                ctx.frames[i] = try Frame.init(.from(ctx));
                 i += 1;
 
-                try ctx.frames[rt_idx].initRenderTexture(&ctx.graphics, window_opts.render_extent, window_opts.render_format);
+                try ctx.frames[rt_idx].initRenderTexture(.from(ctx), window_opts.render_extent, window_opts.render_format);
                 rt_idx += 1;
 
-                try ctx.frames[depth_idx].initDepthTexture(&ctx.graphics, window_opts.render_extent);
+                try ctx.frames[depth_idx].initDepthTexture(.from(ctx), window_opts.render_extent);
                 depth_idx += 1;
             }
         }
 
-        ctx.swapchain = try Swapchain.init(alloc, &ctx.graphics, extent);
+        ctx.swapchain = try Swapchain.init(alloc, .from(ctx), extent);
 
         ctx.timeline_value = 0;
         ctx.timeline_semaphore = try ctx.graphics.dev.createSemaphore(&vk.SemaphoreCreateInfo{
@@ -150,10 +150,10 @@ pub const Ctx = struct {
 
         {
             var i: usize = 0;
-            errdefer for (ctx.descriptor_pools[0..i]) |*pool| pool.deinit(&ctx.graphics, alloc);
+            errdefer for (ctx.descriptor_pools[0..i]) |*pool| pool.deinit(.from(ctx), alloc);
 
             for (ctx.descriptor_pools) |_| {
-                ctx.descriptor_pools[i] = try DescriptorPool.init(&ctx.graphics, alloc);
+                ctx.descriptor_pools[i] = try DescriptorPool.init(.from(ctx), alloc);
                 i += 1;
             }
         }
@@ -165,22 +165,22 @@ pub const Ctx = struct {
     }
 
     pub fn deinit(self: *Ctx, alloc: Allocator) void {
-        self.transport.deinit(&self.graphics);
+        self.transport.deinit(.from(self));
 
         for (&self.descriptor_pools) |*pool| {
-            pool.deinit(&self.graphics, alloc);
+            pool.deinit(.from(self), alloc);
         }
 
         for (self.frames) |*frame| {
-            frame.deinit(&self.graphics);
+            frame.deinit(.from(self));
         }
         alloc.free(self.frames);
 
-        self.destroy_queue.deinit(self.graphics.vma_alloc, &self.graphics.dev);
+        self.destroy_queue.deinit(.from(self));
 
         self.graphics.dev.destroySemaphore(self.timeline_semaphore, null);
 
-        self.swapchain.deinit(&self.graphics, alloc);
+        self.swapchain.deinit(.from(self), alloc);
         self.graphics.deinit(alloc);
 
         self.window.destroy();
@@ -213,7 +213,7 @@ pub const Ctx = struct {
     pub fn prepare_frame(self: *Ctx) !PrepareResult {
         const frame = &self.frames[self.current_frame];
         _ = try self.graphics.dev.waitForFences(&[_]vk.Fence{frame.fence}, .true, std.math.maxInt(u64));
-        self.destroy_queue.flush(self.graphics.vma_alloc, &self.graphics.dev);
+        self.destroy_queue.flush(.from(self));
         try self.graphics.dev.resetFences(&[_]vk.Fence{frame.fence});
 
         const acquired = self.graphics.dev.acquireNextImageKHR(self.swapchain.handle, std.math.maxInt(u64), frame.semaphore, .null_handle) catch |err| if (err == error.OutOfDateKHR) vk.DeviceWrapper.AcquireNextImageKHRResult{
@@ -239,7 +239,7 @@ pub const Ctx = struct {
         }
 
         frame.acquired_swapchain = acquired.image_index;
-        try self.descriptor_pools[self.current_frame].clear(&self.graphics.dev);
+        try self.descriptor_pools[self.current_frame].clear(.from(self));
         return .success;
     }
 
@@ -441,7 +441,7 @@ pub const Ctx = struct {
         }
 
         const width, const height = self.window.getFramebufferSize();
-        try self.swapchain.recreate(alloc, &self.graphics, .{
+        try self.swapchain.recreate(alloc, .from(self), .{
             .width = @intCast(width),
             .height = @intCast(height),
         });
@@ -462,22 +462,22 @@ pub const Frame = struct {
     depth_target: Image2D = .{},
     depth_target_view: ImageView = .{},
 
-    pub fn init(gc: *const GraphicsCtx) !Frame {
-        const cmd_pool = try gc.dev.createCommandPool(&.{
+    pub fn init(ctx: Ctx.Query(&.{ .device, .graphics_family })) !Frame {
+        const cmd_pool = try ctx.view.device.createCommandPool(&.{
             .flags = .{ .reset_command_buffer_bit = true },
-            .queue_family_index = gc.graphics_family,
+            .queue_family_index = ctx.view.graphics_family,
         }, null);
 
         var cmd_buf: vk.CommandBuffer = undefined;
-        try gc.dev.allocateCommandBuffers(&.{
+        try ctx.view.device.allocateCommandBuffers(&.{
             .command_pool = cmd_pool,
             .command_buffer_count = 1,
             .level = .primary,
         }, (&cmd_buf)[0..1]);
 
-        const semaphore = try gc.dev.createSemaphore(&.{}, null);
+        const semaphore = try ctx.view.device.createSemaphore(&.{}, null);
 
-        const fence = try gc.dev.createFence(&.{
+        const fence = try ctx.view.device.createFence(&.{
             .flags = .{ .signaled_bit = true },
         }, null);
 
@@ -490,15 +490,15 @@ pub const Frame = struct {
         };
     }
 
-    pub fn initRenderTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D, format: vk.Format) !void {
-        self.render_target = try Image2D.init(gc, gc.vma_alloc, "render_target", .{
+    pub fn initRenderTexture(self: *Frame, ctx: Ctx.Query(&.{ .device, .vma_allocator }), extent: vk.Extent2D, format: vk.Format) !void {
+        self.render_target = try Image2D.init(ctx, "render_target", .{
             .format = format,
             .extent = extent,
             .usage = .{ .color_attachment_bit = true, .storage_bit = true, .transfer_src_bit = true, .transfer_dst_bit = true },
         });
-        errdefer self.render_target.deinitNow(gc);
+        errdefer self.render_target.deinitNow(ctx);
 
-        self.render_target_view = try ImageView.init(gc, .{
+        self.render_target_view = try ImageView.init(.from(ctx), .{
             .image = self.render_target.handle,
             .format = format,
             .subresource_range = .{
@@ -509,23 +509,23 @@ pub const Frame = struct {
                 .layer_count = 1,
             },
         });
-        errdefer self.render_target_view.deinitNow(gc.dev);
+        errdefer self.render_target_view.deinitNow(.from(ctx));
     }
 
-    pub fn deinitRenderTexture(self: *Frame, gc: *const GraphicsCtx) void {
-        self.render_target_view.deinitNow(gc);
-        self.render_target.deinitNow(gc);
+    pub fn deinitRenderTexture(self: *Frame, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
+        self.render_target_view.deinitNow(.from(ctx));
+        self.render_target.deinitNow(ctx);
     }
 
-    pub fn initDepthTexture(self: *Frame, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
-        self.depth_target = try Image2D.init(gc, gc.vma_alloc, "depth_target", .{
+    pub fn initDepthTexture(self: *Frame, ctx: Ctx.Query(&.{ .device, .vma_allocator }), extent: vk.Extent2D) !void {
+        self.depth_target = try Image2D.init(ctx, "depth_target", .{
             .format = Ctx.depth_texture,
             .extent = extent,
             .usage = .{ .depth_stencil_attachment_bit = true },
         });
-        errdefer self.depth_target.deinitNow(gc);
+        errdefer self.depth_target.deinitNow(ctx);
 
-        self.depth_target_view = try ImageView.init(gc, .{
+        self.depth_target_view = try ImageView.init(.from(ctx), .{
             .image = self.depth_target.handle,
             .format = .d32_sfloat,
             .subresource_range = .{
@@ -536,26 +536,26 @@ pub const Frame = struct {
                 .layer_count = 1,
             },
         });
-        errdefer self.depth_target_view.deinitNow(gc.dev);
+        errdefer self.depth_target_view.deinitNow(.from(ctx));
     }
 
-    pub fn deinitDepthTexture(self: *Frame, gc: *const GraphicsCtx) void {
-        self.depth_target_view.deinitNow(gc);
-        self.depth_target.deinitNow(gc);
+    pub fn deinitDepthTexture(self: *Frame, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
+        self.depth_target_view.deinitNow(.from(ctx));
+        self.depth_target.deinitNow(ctx);
     }
 
-    pub fn deinit(self: *Frame, gc: *const GraphicsCtx) void {
+    pub fn deinit(self: *Frame, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
         if (self.render_target.handle != .null_handle) {
-            self.render_target_view.deinitNow(gc);
-            self.render_target.deinitNow(gc);
+            self.render_target_view.deinitNow(.from(ctx));
+            self.render_target.deinitNow(ctx);
         }
         if (self.depth_target.handle != .null_handle) {
-            self.depth_target_view.deinitNow(gc);
-            self.depth_target.deinitNow(gc);
+            self.depth_target_view.deinitNow(.from(ctx));
+            self.depth_target.deinitNow(ctx);
         }
-        gc.dev.destroyCommandPool(self.cmd_pool, null);
-        gc.dev.destroySemaphore(self.semaphore, null);
-        gc.dev.destroyFence(self.fence, null);
+        ctx.view.device.destroyCommandPool(self.cmd_pool, null);
+        ctx.view.device.destroySemaphore(self.semaphore, null);
+        ctx.view.device.destroyFence(self.fence, null);
     }
 };
 
@@ -565,8 +565,8 @@ pub const Swapchain = struct {
         view: vk.ImageView,
         semaphore: vk.Semaphore,
 
-        pub fn init(gc: *const GraphicsCtx, img: vk.Image, format: vk.Format) !SwapImage {
-            const view = try gc.dev.createImageView(&.{
+        pub fn init(ctx: Ctx.Query(&.{ .device }), img: vk.Image, format: vk.Format) !SwapImage {
+            const view = try ctx.view.device.createImageView(&.{
                 .image = img,
                 .view_type = .@"2d",
                 .format = format,
@@ -579,9 +579,9 @@ pub const Swapchain = struct {
                     .layer_count = 1,
                 },
             }, null);
-            errdefer gc.dev.destroyImageView(view, null);
+            errdefer ctx.view.device.destroyImageView(view, null);
 
-            const semaphore = try gc.dev.createSemaphore(&vk.SemaphoreCreateInfo{}, null);
+            const semaphore = try ctx.view.device.createSemaphore(&vk.SemaphoreCreateInfo{}, null);
 
             return .{
                 .image = img,
@@ -590,9 +590,9 @@ pub const Swapchain = struct {
             };
         }
 
-        pub fn deinit(self: SwapImage, gc: *const GraphicsCtx) void {
-            gc.dev.destroyImageView(self.view, null);
-            gc.dev.destroySemaphore(self.semaphore, null);
+        pub fn deinit(self: SwapImage, ctx: Ctx.Query(&.{ .device })) void {
+            ctx.view.device.destroyImageView(self.view, null);
+            ctx.view.device.destroySemaphore(self.semaphore, null);
         }
     };
 
@@ -602,12 +602,12 @@ pub const Swapchain = struct {
     extent: vk.Extent2D,
     images: []SwapImage,
 
-    pub fn init(alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D) !Swapchain {
-        return try initRecycle(alloc, gc, extent, .null_handle);
+    pub fn init(alloc: Allocator, ctx: Ctx.Query(&.{ .instance, .pdevice, .surface, .device }), extent: vk.Extent2D) !Swapchain {
+        return try initRecycle(alloc, ctx, extent, .null_handle);
     }
 
-    fn initRecycle(alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
-        const caps = try gc.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(gc.pdev, gc.surface);
+    fn initRecycle(alloc: Allocator, ctx: Ctx.Query(&.{ .instance, .pdevice, .surface, .device }), extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
+        const caps = try ctx.view.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(ctx.view.pdevice, ctx.view.surface);
         const actual_extent = if (caps.current_extent.width != 0xFFFF_FFFF) caps.current_extent else vk.Extent2D{
             .width = std.math.clamp(extent.width, caps.min_image_extent.width, caps.max_image_extent.width),
             .height = std.math.clamp(extent.height, caps.min_image_extent.height, caps.max_image_extent.height),
@@ -621,7 +621,7 @@ pub const Swapchain = struct {
             .format = .b8g8r8_srgb,
             .color_space = .srgb_nonlinear_khr,
         };
-        const surface_formats = try gc.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(gc.pdev, gc.surface, alloc);
+        const surface_formats = try ctx.view.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(ctx.view.pdevice, ctx.view.surface, alloc);
         defer alloc.free(surface_formats);
 
         const surface_format = for (surface_formats) |sf| {
@@ -630,7 +630,7 @@ pub const Swapchain = struct {
             }
         } else surface_formats[0];
 
-        const present_modes = try gc.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(gc.pdev, gc.surface, alloc);
+        const present_modes = try ctx.view.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(ctx.view.pdevice, ctx.view.surface, alloc);
         defer alloc.free(present_modes);
 
         const preferred_modes = [_]vk.PresentModeKHR{
@@ -649,8 +649,8 @@ pub const Swapchain = struct {
             image_count = @min(image_count, caps.max_image_count);
         }
 
-        const handle = gc.dev.createSwapchainKHR(&.{
-            .surface = gc.surface,
+        const handle = ctx.view.device.createSwapchainKHR(&.{
+            .surface = ctx.view.surface,
             .min_image_count = image_count,
             .image_format = surface_format.format,
             .image_color_space = surface_format.color_space,
@@ -664,23 +664,23 @@ pub const Swapchain = struct {
             .clipped = .true,
             .old_swapchain = old_handle,
         }, null) catch return error.SwapchainCreationFailed;
-        errdefer gc.dev.destroySwapchainKHR(handle, null);
+        errdefer ctx.view.device.destroySwapchainKHR(handle, null);
 
         if (old_handle != .null_handle) {
-            gc.dev.destroySwapchainKHR(old_handle, null);
+            ctx.view.device.destroySwapchainKHR(old_handle, null);
         }
 
-        const images = try gc.dev.getSwapchainImagesAllocKHR(handle, alloc);
+        const images = try ctx.view.device.getSwapchainImagesAllocKHR(handle, alloc);
         defer alloc.free(images);
 
         const swap_images = try alloc.alloc(SwapImage, images.len);
         errdefer alloc.free(swap_images);
 
         var i: usize = 0;
-        errdefer for (swap_images[0..i]) |si| si.deinit(gc);
+        errdefer for (swap_images[0..i]) |si| si.deinit(.from(ctx));
 
         for (images) |image| {
-            swap_images[i] = try SwapImage.init(gc, image, surface_format.format);
+            swap_images[i] = try SwapImage.init(.from(ctx), image, surface_format.format);
             i += 1;
         }
 
@@ -693,24 +693,24 @@ pub const Swapchain = struct {
         };
     }
 
-    pub fn deinitExceptSwapchain(self: Swapchain, gc: *const GraphicsCtx, alloc: Allocator) void {
+    pub fn deinitExceptSwapchain(self: Swapchain, ctx: Ctx.Query(&.{ .instance, .pdevice, .surface, .device }), alloc: Allocator) void {
         for (self.images) |image| {
-            image.deinit(gc);
+            image.deinit(.from(ctx));
         }
         alloc.free(self.images);
     }
 
-    pub fn deinit(self: Swapchain, gc: *const GraphicsCtx, alloc: Allocator) void {
-        self.deinitExceptSwapchain(gc, alloc);
-        gc.dev.destroySwapchainKHR(self.handle, null);
+    pub fn deinit(self: Swapchain, ctx: Ctx.Query(&.{ .instance, .pdevice, .surface, .device }), alloc: Allocator) void {
+        self.deinitExceptSwapchain(ctx, alloc);
+        ctx.view.device.destroySwapchainKHR(self.handle, null);
     }
 
-    pub fn recreate(self: *Swapchain, alloc: Allocator, gc: *const GraphicsCtx, extent: vk.Extent2D) !void {
-        try gc.dev.queueWaitIdle(gc.graphics_queue);
+    pub fn recreate(self: *Swapchain, alloc: Allocator, ctx: Ctx.Query(&.{ .instance, .pdevice, .surface, .device, .graphics_queue }), extent: vk.Extent2D) !void {
+        try ctx.view.device.queueWaitIdle(ctx.view.graphics_queue);
 
-        self.deinitExceptSwapchain(gc, alloc);
+        self.deinitExceptSwapchain(.from(ctx), alloc);
 
-        self.* = try initRecycle(alloc, gc, extent, self.handle);
+        self.* = try initRecycle(alloc, .from(ctx), extent, self.handle);
     }
 };
 
