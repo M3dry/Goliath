@@ -326,6 +326,10 @@ pub fn denseIndex(self: *const AssetSystem, gid: Gid) u32 {
     return self.entries.items(.dense)[gid.slot];
 }
 
+pub fn tick(self: *AssetSystem, gc: *const base.GraphicsCtx, transport: *base.Transport) !void {
+    try self.texture_reg.tick(transport, gc);
+}
+
 pub const GidError = error{
     IdOutOfRange,
     GenerationMismatch,

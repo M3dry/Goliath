@@ -44,6 +44,7 @@ pub const Ctx = struct {
 
     window: *zglfw.Window,
     graphics: GraphicsCtx,
+    transport: Transport,
     frames: []Frame,
     swapchain: Swapchain,
     current_frame: u32 = 0,
@@ -58,6 +59,9 @@ pub const Ctx = struct {
     timeline_value: u64,
 
     descriptor_pools: [frames_in_flight]DescriptorPool,
+
+    pub const query = @import("Ctx/query.zig");
+    pub const Query = query.Query;
 
     pub const Opts = struct {
         pub const Size = union(enum) {
@@ -75,7 +79,11 @@ pub const Ctx = struct {
         render_format: vk.Format,
     };
 
-    pub fn init(alloc: Allocator, name: [:0]const u8, window_opts: Opts) !Ctx {
+    // TODO: investiage how to fix this, issue is that currently `Transport`'s mutexes can't change memory location
+    /// Ctx can't move in memory location
+    pub fn init(ctx: *Ctx, alloc: Allocator, io: std.Io, name: [:0]const u8, window_opts: Opts) !void {
+        ctx.current_frame = 0;
+
         try zglfw.init();
 
         if (!zglfw.isVulkanSupported()) return error.NoVulkan;
@@ -94,75 +102,71 @@ pub const Ctx = struct {
             .fullscreen => .{ mon_width, mon_height },
         };
 
-        const window = try zglfw.createWindow(width, height, name, null, null);
+        ctx.window = try zglfw.createWindow(width, height, name, null, null);
 
-        zglfw.getFramebufferSize(window, &width, &height);
+        zglfw.getFramebufferSize(ctx.window, &width, &height);
         const extent: vk.Extent2D = .{
             .width = @intCast(width),
             .height = @intCast(height),
         };
 
-        const graphics_ctx = try GraphicsCtx.init(alloc, window, window_opts.name);
+       ctx.graphics = try GraphicsCtx.init(alloc, ctx.window, window_opts.name);
 
-        const frames = try alloc.alloc(Frame, frames_in_flight);
-        errdefer alloc.free(frames);
+        try ctx.transport.init(&ctx.graphics, alloc, io);
+        errdefer ctx.transport.deinit(&ctx.graphics);
+
+        ctx.frames = try alloc.alloc(Frame, frames_in_flight);
+        errdefer alloc.free(ctx.frames);
 
         {
             var i: usize = 0;
             var rt_idx: usize = 0;
             var depth_idx: usize = 0;
-            errdefer for (frames[0..i]) |*frame| frame.deinit(&graphics_ctx);
-            errdefer for (frames[0..rt_idx]) |*f| f.deinitRenderTexture(&graphics_ctx);
-            errdefer for (frames[0..depth_idx]) |*f| f.deinitDepthTexture(&graphics_ctx);
+            errdefer for (ctx.frames[0..i]) |*frame| frame.deinit(&ctx.graphics);
+            errdefer for (ctx.frames[0..rt_idx]) |*f| f.deinitRenderTexture(&ctx.graphics);
+            errdefer for (ctx.frames[0..depth_idx]) |*f| f.deinitDepthTexture(&ctx.graphics);
 
-            for (frames) |_| {
-                frames[i] = try Frame.init(&graphics_ctx);
+            for (ctx.frames) |_| {
+                ctx.frames[i] = try Frame.init(&ctx.graphics);
                 i += 1;
 
-                try frames[rt_idx].initRenderTexture(&graphics_ctx, window_opts.render_extent, window_opts.render_format);
+                try ctx.frames[rt_idx].initRenderTexture(&ctx.graphics, window_opts.render_extent, window_opts.render_format);
                 rt_idx += 1;
 
-                try frames[depth_idx].initDepthTexture(&graphics_ctx, window_opts.render_extent);
+                try ctx.frames[depth_idx].initDepthTexture(&ctx.graphics, window_opts.render_extent);
                 depth_idx += 1;
             }
         }
 
-        const swapchain = try Swapchain.init(alloc, &graphics_ctx, extent);
+        ctx.swapchain = try Swapchain.init(alloc, &ctx.graphics, extent);
 
-        const timeline_semaphore = try graphics_ctx.dev.createSemaphore(&vk.SemaphoreCreateInfo{
+        ctx.timeline_value = 0;
+        ctx.timeline_semaphore = try ctx.graphics.dev.createSemaphore(&vk.SemaphoreCreateInfo{
             .p_next = &vk.SemaphoreTypeCreateInfo{
-                .initial_value = 0,
+                .initial_value = ctx.timeline_value,
                 .semaphore_type = .timeline,
             },
         }, null);
 
-        var descriptor_pools: [frames_in_flight]DescriptorPool = undefined;
         {
             var i: usize = 0;
-            errdefer for (descriptor_pools[0..i]) |*pool| pool.deinit(&graphics_ctx, alloc);
+            errdefer for (ctx.descriptor_pools[0..i]) |*pool| pool.deinit(&ctx.graphics, alloc);
 
-            for (descriptor_pools) |_| {
-                descriptor_pools[i] = try DescriptorPool.init(&graphics_ctx, alloc);
+            for (ctx.descriptor_pools) |_| {
+                ctx.descriptor_pools[i] = try DescriptorPool.init(&ctx.graphics, alloc);
                 i += 1;
             }
         }
 
-        return Ctx{
-            .window = window,
-            .graphics = graphics_ctx,
-            .frames = frames,
-            .swapchain = swapchain,
-            .blit_strategy = window_opts.blit_strategy,
-            .render_extent = window_opts.render_extent,
-            .render_format = window_opts.render_format,
-            .destroy_queue = .init(alloc, 0),
-            .timeline_semaphore = timeline_semaphore,
-            .timeline_value = 0,
-            .descriptor_pools = descriptor_pools,
-        };
+        ctx.blit_strategy = window_opts.blit_strategy;
+        ctx.render_extent = window_opts.render_extent;
+        ctx.render_format = window_opts.render_format;
+        ctx.destroy_queue = .init(alloc, 0);
     }
 
     pub fn deinit(self: *Ctx, alloc: Allocator) void {
+        self.transport.deinit(&self.graphics);
+
         for (&self.descriptor_pools) |*pool| {
             pool.deinit(&self.graphics, alloc);
         }
@@ -183,18 +187,22 @@ pub const Ctx = struct {
         zglfw.terminate();
     }
 
-    pub fn renderTarget(self: Ctx) struct { image: vk.Image, view: vk.ImageView } {
-        const frame = self.frames[self.current_frame];
+    pub fn renderTarget(self: *Ctx) struct { image: vk.Image, view: vk.ImageView } {
+        const frame = self.currentFrame();
         return .{ .image = frame.render_target.handle, .view = frame.render_target_view.handle };
     }
 
-    pub fn depthTarget(self: Ctx) struct { image: vk.Image, view: vk.ImageView } {
-        const frame = self.frames[self.current_frame];
+    pub fn depthTarget(self: *Ctx) struct { image: vk.Image, view: vk.ImageView } {
+        const frame = self.currentFrame();
         return .{ .image = frame.depth_target.handle, .view = frame.depth_target_view.handle };
     }
 
     pub fn descriptorPool(self: *Ctx) *DescriptorPool {
         return &self.descriptor_pools[self.current_frame];
+    }
+
+    pub fn currentFrame(self: *Ctx) *Frame {
+        return &self.frames[self.current_frame];
     }
 
     pub const PrepareResult = enum {
@@ -441,7 +449,7 @@ pub const Ctx = struct {
     }
 };
 
-const Frame = struct {
+pub const Frame = struct {
     cmd_pool: vk.CommandPool,
     cmd_buf: vk.CommandBuffer,
 
@@ -551,8 +559,8 @@ const Frame = struct {
     }
 };
 
-const Swapchain = struct {
-    const SwapImage = struct {
+pub const Swapchain = struct {
+    pub const SwapImage = struct {
         image: vk.Image,
         view: vk.ImageView,
         semaphore: vk.Semaphore,
