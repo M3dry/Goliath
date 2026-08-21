@@ -233,9 +233,8 @@ pub fn newSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device
     return id;
 }
 
-pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
-    _ = resolved;
 
     const slice = self.textures.slice();
     const ref_count = &slice.items(.ref_count)[id];
@@ -302,9 +301,8 @@ pub fn acquireSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .de
         const dense = &slice.items(.texture)[id];
 
         const data = try loader.load(io, cold);
+        defer loader.unload(io, cold);
 
-        // var reader = std.Io.Reader.fixed(data);
-        // const blob = try reader.takeStruct(Blob, .little); - Can't use because takeStruct requires packed or extern on Blob
         const parsed_blob = try std.json.parseFromSlice(SampledTextureBlob, self.alloc, data, .{ .duplicate_field_behavior = .@"error" });
         defer parsed_blob.deinit();
         const blob = parsed_blob.value;
@@ -346,11 +344,13 @@ pub fn releaseTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_q
 
     if (ref_count.* != 0) return .kept;
 
-    const ticket = slice.items(.ticket)[id];
-    ctx.view.transport.unqueue(ticket, true);
+    const ticket = &slice.items(.ticket)[id];
+    ctx.view.transport.unqueue(ticket.*, true);
+    ticket.* = .none;
 
-    var image = slice.items(.image)[id];
+    var image = &slice.items(.image)[id];
     image.deinit(.from(ctx));
+    image.* = .{};
 
     try self.textures_free_list.append(self.alloc, id);
     return .released;

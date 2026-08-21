@@ -104,6 +104,8 @@ const FreeFnCtx = struct {
     free_fn: base.Transport.FreeFn = transport_free_fn,
     ctx: *Ctx,
 
+    /// only cleans up the `ctx` memory
+    /// use only for errdefer cleanup, still call loader.unload in a errdefer
     pub fn deinit(self: *FreeFnCtx) void {
         const alloc = self.ctx.alloc;
         alloc.destroy(self);

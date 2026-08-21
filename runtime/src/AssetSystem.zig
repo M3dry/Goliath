@@ -4,6 +4,8 @@ const base = @import("base");
 const Allocator = std.mem.Allocator;
 
 pub const TextureRegistry = @import("AssetSystem/TextureRegistry.zig");
+pub const MeshRegistry = @import("AssetSystem/MeshRegistry.zig");
+pub const GeometryRegistry = @import("AssetSystem/GeometryRegistry.zig");
 const Loader = @import("AssetSystem/Loader.zig");
 const resolver = @import("AssetSystem/resolver.zig");
 
@@ -22,6 +24,8 @@ entries: std.MultiArrayList(Entry) = .empty,
 free_entries: std.ArrayList(u32) = .empty,
 
 texture_reg: TextureRegistry,
+mesh_reg: MeshRegistry,
+geometry_reg: GeometryRegistry,
 // registires for the other asset kinds...
 
 pub fn io(self: *AssetSystem) std.Io {
@@ -64,9 +68,6 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
 
     var loader = try Loader.init(init_io, alloc, &manifest.loader);
     errdefer loader.deinit(alloc, init_io);
-
-    var texture_reg = try TextureRegistry.init(ctx, alloc);
-    errdefer texture_reg.deinitNow(.from(ctx));
 
     var entries: std.MultiArrayList(Entry) = .empty;
     errdefer entries.deinit(alloc);
@@ -147,6 +148,15 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
         }
     }
 
+    var texture_reg = try TextureRegistry.init(ctx, alloc);
+    errdefer texture_reg.deinitNow(.from(ctx));
+
+    var mesh_reg = MeshRegistry.init();
+    errdefer mesh_reg.deinitNow(.from(ctx), alloc);
+
+    var geometry_reg = GeometryRegistry.init();
+    errdefer geometry_reg.deinitNow(.from(ctx), alloc);
+
     return .{
         .alloc = alloc,
         .loader = loader,
@@ -154,6 +164,8 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
         .entries = entries,
         .free_entries = free_entries,
         .texture_reg = texture_reg,
+        .mesh_reg = mesh_reg,
+        .geometry_reg = geometry_reg,
     };
 
     // UPDATE NOTE: let's not upload MeshDesc and LODEntries at load,
@@ -177,7 +189,9 @@ pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue })) voi
     self.entries.deinit(self.alloc);
     self.free_entries.deinit(self.alloc);
 
-    self.texture_reg.deinit(ctx);
+    self.texture_reg.deinit(.from(ctx));
+    self.mesh_reg.deinit(.from(ctx), self.alloc);
+    self.geometry_reg.deinit(.from(ctx), self.alloc);
 }
 
 pub const KindData = union(Kind) {
@@ -186,7 +200,7 @@ pub const KindData = union(Kind) {
     material_schema: void,
     material_instance: void,
     geometry: void,
-    mesh: void,
+    mesh: MeshRegistry.MeshDescBlob,
     model: void,
     skeleton: void,
 };
@@ -286,8 +300,8 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
         .sampled_texture => |d| asset_io.concurrent(TextureRegistry.ingestSampledTexture, .{ self.alloc, asset_io, location, d }),
         .material_schema => unreachable,
         .material_instance => unreachable,
-        .geometry => unreachable,
-        .mesh => unreachable,
+        .geometry => |d| asset_io.concurrent(GeometryRegistry.ingest, .{ asset_io, location, d }),
+        .mesh => |d| asset_io.concurrent(MeshRegistry.ingest, .{ asset_io, location, d }),
         .model => unreachable,
         .skeleton => unreachable,
     };
@@ -326,8 +340,9 @@ pub fn denseIndex(self: *const AssetSystem, gid: Gid) u32 {
     return self.entries.items(.dense)[gid.slot];
 }
 
-pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport })) !void {
-    try self.texture_reg.tick(ctx);
+pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport, .vma_allocator, .graphics_family, .transport_family, .destroy_queue })) !void {
+    try self.texture_reg.tick(.from(ctx));
+    try self.mesh_reg.tick(.from(ctx));
 }
 
 pub const GidError = error{
@@ -403,7 +418,7 @@ pub const CommandBuffer = struct {
     }
 };
 
-pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .transport }), cmds: *CommandBuffer) !void {
+pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .transport, .graphics_family, .transport_family }), cmds: *CommandBuffer) !void {
     const slice = self.entries.slice();
     const cold_assets = slice.items(.cold_asset);
     const deps = slice.items(.deps);
@@ -417,13 +432,13 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
         if (op.delta == 0) continue;
         std.debug.assert(op.delta > 0); // implies a double release
 
-        op.dense = switch (op.kind) {
-            .texture => try self.texture_reg.newTexture(),
-            .sampled_texture => try self.texture_reg.newSampledTexture(.from(ctx)),
+        op.dense = try switch (op.kind) {
+            .texture => self.texture_reg.newTexture(),
+            .sampled_texture => self.texture_reg.newSampledTexture(.from(ctx)),
             .material_schema => unreachable,
             .material_instance => unreachable,
-            .geometry => unreachable,
-            .mesh => unreachable,
+            .geometry => self.geometry_reg.new(self.alloc),
+            .mesh => self.mesh_reg.new(self.alloc),
             .model => unreachable,
             .skeleton => unreachable,
         };
@@ -443,8 +458,8 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
                 .sampled_texture => self.texture_reg.releaseSampledTexture(.from(ctx), op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
-                .geometry => unreachable,
-                .mesh => unreachable,
+                .geometry => self.geometry_reg.release(.from(ctx), self.alloc, op.dense, delta),
+                .mesh => self.mesh_reg.release(self.alloc, op.dense, delta),
                 .model => unreachable,
 
                 .skeleton => unreachable,
@@ -464,19 +479,22 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
                 });
             }
 
-            try switch (op.kind) {
-                .texture => self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .sampled_texture => self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
+            switch (op.kind) {
+                .texture => try self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, cold, op.dense, delta),
+                .sampled_texture => try self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
                 .material_schema => unreachable,
                 .material_instance => unreachable,
-                .geometry => unreachable, // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense
-                                          // needs to be deffered after geometry upload ticket completion
-                                          //    - probably easiest is to store the geometry ticket in Self, and via a tick function check for completion, then call into mesh registry
-                .mesh => unreachable, // loads just the MeshDesc&LODEntries
+                .geometry => {
+                    try self.geometry_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, cold, op.dense, delta);
+                    // need to look up rdeps, and dispatch the corresponding patch calls for them - need to check dense
+                    // needs to be deffered after geometry upload ticket completion
+                    //    - probably easiest is to store the geometry ticket in Self, and via a tick function check for completion, then call into mesh registry
+                },
+                .mesh => try self.mesh_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, resolve_buf.items, cold, &self.geometry_reg, op.dense, delta),
                 .model => unreachable,
 
                 .skeleton => unreachable,
-            };
+            }
         } else continue;
     }
 
