@@ -84,15 +84,16 @@ pub fn deinitNow(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .vma_allocator
 pub fn new(self: *GeometryRegistry, alloc: Allocator) !u32 {
     if (self.free.pop()) |free| return free;
 
-    _ = try self.geometries.append(alloc, .{});
+    try self.geometries.append(alloc, .{});
     return @intCast(self.geometries.len - 1);
 }
 
-pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport }), alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
+pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport }), alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !types.AcquireReturn {
     std.debug.assert(delta > 0);
 
     const slice = self.geometries.slice();
     const ref_count = &slice.items(.ref_count)[id];
+    var ret: types.AcquireReturn = .incr;
     if (ref_count.* == 0) {
         const data = try loader.load(io, cold);
         errdefer loader.unload(io, cold);
@@ -107,13 +108,13 @@ pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_al
         const buffer: *base.Buffer = &slice.items(.buffer)[id];
         const tickets: *[2]base.Transport.Ticket = &slice.items(.tickets)[id];
 
-        buffer.* = try .init(.from(ctx), .graphics, "Geometry buffer", @sizeOf(Mesh.GPUGeometry) + geo_data.len, .{}, .gpu_only);
+        buffer.* = try .init(.from(ctx), .graphics, "Geometry buffer", Mesh.gpu_geometry_header_size + geo_data.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
         errdefer buffer.deinitNow(.from(ctx));
 
         const gpu_header = try alloc.create(struct { Mesh.GPUGeometry, Allocator });
         errdefer alloc.destroy(gpu_header);
         gpu_header.@"0" = .{
-            .indices_address = buffer.address,
+            .indices_address = buffer.address + Mesh.gpu_geometry_header_size,
             .stride = header.stride,
             .position_offset = header.position_offset,
             .normal_offset = header.normal_offset,
@@ -129,14 +130,16 @@ pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_al
         gpu_header.@"1" = alloc;
 
         const transport: *base.Transport = ctx.view.transport;
-        tickets[0] = try transport.uploadBuffer(false, std.mem.asBytes(&gpu_header.@"0"), destroy_gpu_header, gpu_header, buffer.handle, 0, .{}, .{});
+        tickets[0] = try transport.uploadBuffer(false, std.mem.asBytes(&gpu_header.@"0")[0..Mesh.gpu_geometry_header_size], destroy_gpu_header, gpu_header, buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
         errdefer transport.unqueue(tickets[0], true);
 
-        tickets[1] = try transport.uploadBuffer(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, @sizeOf(Mesh.GPUGeometry), .{}, .{});
+        tickets[1] = try transport.uploadBuffer(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, Mesh.gpu_geometry_header_size, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
         errdefer transport.unqueue(tickets[1], false);
+        ret = .load;
     }
 
     ref_count.* += delta;
+    return ret;
 }
 
 fn destroy_gpu_header(ctx: ?*anyopaque, ptr: *anyopaque) void {
@@ -167,7 +170,7 @@ pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .des
     buffer.* = .empty;
 
     try self.free.append(alloc, id);
-    return error.TODO;
+    return .released;
 }
 
 pub fn ingest(io: std.Io, location: types.IngestLocation, geo: IngestGeometry) types.IngestError!types.Entry {
@@ -205,12 +208,15 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, geo: IngestGeometry) t
     };
 }
 
-pub fn getAddress(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport }), id: u32) !?u64 {
+pub inline fn isReady(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport }), id: u32) !bool {
     const slice = self.geometries.slice();
     const tickets = slice.items(.tickets)[id];
-    if (!try ctx.view.transport.isReady(tickets[0]) or !try ctx.view.transport.isReady(tickets[1])) return null;
 
-    return slice.items(.buffer)[id].address;
+    return try ctx.view.transport.isReady(tickets[0]) and try ctx.view.transport.isReady(tickets[1]);
+}
+
+pub inline fn getAddress(self: *GeometryRegistry, id: u32) u64 {
+    return self.geometries.items(.buffer)[id].address;
 }
 
 test {

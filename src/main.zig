@@ -34,13 +34,53 @@ fn slotName(slot: Slot, texture_index: u32, buf: *[64]u8) []const u8 {
     return std.fmt.bufPrint(buf, "sampled_gltf_texture_{d}", .{texture_index}) catch unreachable;
 }
 
-/// ingest a texture into the asset system and finalize it as a named entry;
+/// ingest an asset into the asset system and finalize it as a named entry;
 /// the underlying file is kept on disk for the manifest
 fn ingestAndFinalize(asset_system: *runtime.AssetSystem, data: runtime.AssetSystem.KindData, name: []const u8) !runtime.AssetSystem.Gid {
     var future = try asset_system.ingestAsset(data, name);
     var entry = try future.await(asset_system.io());
     entry.name = name;
     return asset_system.finalizeAsset(entry, true);
+}
+
+/// build a geometry ingest payload from a parsed mesh lod
+fn geometryIngest(lod: runtime.Mesh.Lod) runtime.AssetSystem.GeometryRegistry.IngestGeometry {
+    const g = lod.geometry.geo;
+    return .{
+        .indexed_tangents = (g.stride & runtime.Mesh.Geometry.indexed_tangents_bit) != 0,
+        .stride = @intCast(g.stride & runtime.Mesh.Geometry.stride_mask),
+        .position_offset = g.position_offset,
+        .normal_offset = g.normal_offset,
+        .tangent_offset = g.tangent_offset,
+        .color0_offset = g.color0_offset,
+        .texcoord0_offset = g.texcoord0_offset,
+        .texcoord1_offset = g.texcoord1_offset,
+        .texcoord2_offset = g.texcoord2_offset,
+        .texcoord3_offset = g.texcoord3_offset,
+        .joints0_offset = g.joints0_offset,
+        .weights0_offset = g.weights0_offset,
+        .data = lod.geometry.data,
+    };
+}
+
+/// single-lod mesh blob pointing at an ingested geometry; material gids are
+/// placeholder 0,0 until material handling exists. `lods_storage` backs the
+/// returned slice; the caller awaits the ingestion before it goes out of scope.
+fn meshBlob(mesh: *const runtime.Mesh, geometry_gid: runtime.AssetSystem.Gid, lods_storage: *[1]runtime.AssetSystem.MeshRegistry.LodEntryBlob) runtime.AssetSystem.MeshRegistry.MeshDescBlob {
+    const lod = mesh.lods[0];
+    lods_storage.* = .{.{
+        .geometry = geometry_gid,
+        .vertex_count = lod.vertex_count,
+        .draw_count = lod.draw_count,
+        .material_schema = .{ .gen = 0, .slot = 0 },
+        .material_instance = .{ .gen = 0, .slot = 0 },
+        .error_metric = lod.error_metric,
+    }};
+    return .{
+        .lods = lods_storage,
+        .aabb_min = .{ mesh.aabb.min[0], mesh.aabb.min[1], mesh.aabb.min[2] },
+        .aabb_max = .{ mesh.aabb.max[0], mesh.aabb.max[1], mesh.aabb.max[2] },
+    };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -63,9 +103,6 @@ pub fn main(init: std.process.Init) !void {
     });
     defer ctx.deinit(gpa);
 
-    var mh = runtime.MeshHandler.empty;
-    defer mh.deinit(gpa, .from(&ctx));
-
     zmesh.init(gpa);
     defer zmesh.deinit();
 
@@ -85,46 +122,12 @@ pub fn main(init: std.process.Init) !void {
     const mesh_world = zm.scaling(0.05, 0.05, 0.05);
     const mesh_world2: zm.Mat = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05));
 
-    const gltf_result0 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
-    defer gpa.free(gltf_result0.name);
-    defer gltf_result0.mesh_io.deinit(gpa);
-
-    const gltf_result1 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 1, 0);
-    defer gpa.free(gltf_result1.name);
-    defer gltf_result1.mesh_io.deinit(gpa);
-
-    var body_mesh = try runtime.Mesh.init(gpa, gltf_result1.mesh_io.source);
-    defer body_mesh.deinit(gpa);
-
-    var helmet_mesh = try runtime.Mesh.init(gpa, gltf_result0.mesh_io.source);
-    defer helmet_mesh.deinit(gpa);
-
-    try mh.registerMesh(&body_mesh, gpa, .from(&ctx));
-    defer mh.unregisterMesh(&body_mesh, .from(&ctx));
-
-    try mh.registerMesh(&helmet_mesh, gpa, .from(&ctx));
-    defer mh.unregisterMesh(&helmet_mesh, .from(&ctx));
-
     var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
     for (&joint_matrices_bufs, 0..) |*buf, i| {
         buf.* = try base.Buffer.init(.from(&ctx), .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
         _ = i;
     }
     defer for (&joint_matrices_bufs) |*buf| buf.deinit(.from(&ctx));
-
-    try mh.flushDescriptorArrays(.from(&ctx));
-
-    {
-        const geo_buf = body_mesh.lods[0].geometry_buffer.?;
-        while (!try ctx.transport.isReady(geo_buf.@"1")) {
-            try ctx.transport.drain(.from(&ctx));
-            std.Thread.yield() catch {};
-        }
-    }
-    while (!try ctx.transport.isReady(mh.ticket)) {
-        try ctx.transport.drain(.from(&ctx));
-        std.Thread.yield() catch {};
-    }
 
     var input = base.Input{};
     input.init(.from(&ctx));
@@ -209,6 +212,30 @@ pub fn main(init: std.process.Init) !void {
             _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = gltf_gids[i], .sampler = gltf_textures[i].sampler } }, name);
         }
 
+        // geometry + mesh assets for the two rendered gltf primitives; meshes
+        // get soft deps on their geometries via MeshRegistry.ingest
+        const gltf_result0 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 0, 0);
+        defer gpa.free(gltf_result0.name);
+        defer gltf_result0.mesh_io.deinit(gpa);
+
+        const gltf_result1 = try runtime.MeshIO.fromGltfPrimitive(gpa, gltf_data, 1, 0);
+        defer gpa.free(gltf_result1.name);
+        defer gltf_result1.mesh_io.deinit(gpa);
+
+        const body_mesh = try runtime.Mesh.init(gpa, gltf_result1.mesh_io.source);
+        defer body_mesh.deinit(gpa);
+
+        const helmet_mesh = try runtime.Mesh.init(gpa, gltf_result0.mesh_io.source);
+        defer helmet_mesh.deinit(gpa);
+
+        const body_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(body_mesh.lods[0]) }, "body_geometry");
+        const helmet_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(helmet_mesh.lods[0]) }, "helmet_geometry");
+
+        var body_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
+        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&body_mesh, body_geo_gid, &body_lods) }, "body_mesh");
+        var helmet_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
+        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&helmet_mesh, helmet_geo_gid, &helmet_lods) }, "helmet_mesh");
+
         // write the manifest
         var manifest_writer_buf: [1024]u8 = undefined;
         var manifest_file_w = try std.Io.Dir.createFile(.cwd(), init.io, asset_dir ++ "/manifest.json", .{});
@@ -228,10 +255,29 @@ pub fn main(init: std.process.Init) !void {
         gid.* = (asset_system.findEntry(.sampled_texture, slotName(slot, field, buf))) orelse return error.SampledTextureNotFound;
     }
 
+    const body_mesh_gid = asset_system.findEntry(.mesh, "body_mesh") orelse return error.AssetEntryNotFound;
+    const helmet_mesh_gid = asset_system.findEntry(.mesh, "helmet_mesh") orelse return error.AssetEntryNotFound;
+    const body_geo_gid = asset_system.findEntry(.geometry, "body_geometry") orelse return error.AssetEntryNotFound;
+    const helmet_geo_gid = asset_system.findEntry(.geometry, "helmet_geometry") orelse return error.AssetEntryNotFound;
+
     var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
     defer asset_cmd_buf.deinit();
     for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
+    try asset_cmd_buf.request(&asset_system, body_mesh_gid);
+    try asset_cmd_buf.request(&asset_system, helmet_mesh_gid);
+    // geometry deps on meshes are soft; request them explicitly
+    try asset_cmd_buf.request(&asset_system, body_geo_gid);
+    try asset_cmd_buf.request(&asset_system, helmet_geo_gid);
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
+
+    // wait for the first mesh desc / lod upload so the render graph can bind
+    // non-empty registry buffers; geometry patches may land a few ticks later,
+    // lods with address 0 just don't draw until then
+    while (asset_system.mesh_reg.upload_generation == 0 or asset_system.pending_patches.items.len != 0) {
+        try ctx.transport.drain(.from(&ctx));
+        try asset_system.tick(.from(&ctx));
+        std.Thread.yield() catch {};
+    }
 
     // // Let the sampled texture bindings land in the pool before the first frame.
     // while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
@@ -472,9 +518,9 @@ pub fn main(init: std.process.Init) !void {
             });
 
             const mesh_descs_ref = try rg.addBuffer(.{
-                .buffer = mh.mesh_desc_buf,
+                .buffer = asset_system.mesh_reg.current_meshes,
                 .offset = 0,
-                .size = mh.mesh_desc_buf.size,
+                .size = asset_system.mesh_reg.current_meshes.size,
                 .start_usage = .{
                     .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
                     .access = .{ .shader_storage_read_bit = true },
@@ -486,9 +532,9 @@ pub fn main(init: std.process.Init) !void {
             });
 
             const lod_entries_ref = try rg.addBuffer(.{
-                .buffer = mh.lod_entry_buf,
+                .buffer = asset_system.mesh_reg.current_lods,
                 .offset = 0,
-                .size = mh.lod_entry_buf.size,
+                .size = asset_system.mesh_reg.current_lods.size,
                 .start_usage = .{
                     .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true },
                     .access = .{ .shader_storage_read_bit = true },
@@ -666,17 +712,20 @@ pub fn main(init: std.process.Init) !void {
 
             // Upload skinned world instances
             {
+                const body_dense = asset_system.denseIndex(body_mesh_gid);
+                const helmet_dense = asset_system.denseIndex(helmet_mesh_gid);
+
                 const mapped = skinned_world_instances_buf.mapped.?;
                 const instances = std.mem.bytesAsSlice(u32, mapped[0 .. skinned_instance_count * Culling.skinned_world_instance_size]);
-                // body_mesh at mesh_desc_ix 0, helmet at 1, both use joint_offset 0
-                instances[0] = 1; // mesh_desc_ix
+                // mesh_desc_ix = mesh registry slot; both use joint_offset 0
+                instances[0] = helmet_dense;
                 instances[1] = 0; // joint_offset
                 // transform at offset 2 (two u32s skipped)
                 @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&mesh_world));
                 const base_off = Culling.skinned_world_instance_size;
                 const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
 
-                inst2[0] = 0; // mesh_desc_ix
+                inst2[0] = body_dense;
                 inst2[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&mesh_world));
                 if (!skinned_world_instances_buf.coherent)
@@ -685,7 +734,7 @@ pub fn main(init: std.process.Init) !void {
                 const base_off2 = Culling.skinned_world_instance_size*2;
                 const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
 
-                inst3[0] = 1; // mesh_desc_ix
+                inst3[0] = helmet_dense;
                 inst3[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst3[2..18]), std.mem.asBytes(&mesh_world2));
                 if (!skinned_world_instances_buf.coherent)
@@ -694,7 +743,7 @@ pub fn main(init: std.process.Init) !void {
                 const base_off3 = Culling.skinned_world_instance_size*3;
                 const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
 
-                inst4[0] = 0; // mesh_desc_ix
+                inst4[0] = body_dense;
                 inst4[1] = 0; // joint_offset
                 @memcpy(std.mem.sliceAsBytes(inst4[2..18]), std.mem.asBytes(&mesh_world2));
                 if (!skinned_world_instances_buf.coherent)

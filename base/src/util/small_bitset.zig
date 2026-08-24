@@ -155,7 +155,7 @@ pub fn SmallBitset(comptime stack_count: usize) type {
         }
 
         pub fn isSet(self: *const Self, index: usize) bool {
-            std.debug.assert(index < self.len());
+            if (index >= self.len()) return false;
 
             const words = if (self.onHeap()) self.words.heap else &self.words.stack;
             return (words[index / 64] & (@as(u64, 1) << @intCast(index % 64))) != 0;

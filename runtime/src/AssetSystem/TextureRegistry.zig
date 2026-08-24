@@ -143,6 +143,7 @@ fn createDefaultImage(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .
         .shader_read_only_optimal,
         .{ .fragment_shader_bit = true, .compute_shader_bit = true },
         .{ .shader_read_bit = true },
+        true,
     );
     errdefer ctx.view.transport.unqueue(upload_tick, false);
 
@@ -283,7 +284,8 @@ pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .
             .undefined,
             .shader_read_only_optimal,
             .{ .fragment_shader_bit = true, .compute_shader_bit = true },
-            .{ .shader_read_bit = true }
+            .{ .shader_read_bit = true },
+            true,
         );
         errdefer ctx.view.transport.unqueue(ticket, false);
     }

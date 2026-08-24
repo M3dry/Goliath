@@ -30,7 +30,7 @@ pub fn flush(self: *Self, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .grap
         }
 
         self.schema_bufs[schema] = try base.Buffer.init(.from(ctx), .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.PBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
-        self.schema_tickets[schema] = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access);
+        self.schema_tickets[schema] = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access, true);
     }
 }
 

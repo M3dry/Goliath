@@ -9,6 +9,13 @@ const Gid = types.Gid;
 const Allocator = std.mem.Allocator;
 const GeometryRegistry = @import("GeometryRegistry.zig");
 const MeshRegistry = @This();
+const SmallBuffer = base.util.SmallBuffer;
+
+const PatchKind = enum {
+    geometry,
+    material_instance,
+    material_schema,
+};
 
 current_meshes: base.Buffer = .empty,
 current_lods: base.Buffer = .empty,
@@ -19,11 +26,16 @@ staging_lods: base.Buffer = .empty,
 
 upload_generation: u64 = 0,
 stale: bool = false,
+meshes_uploaded: bool = false,
+lods_uploaded: bool = false,
 meshes: std.MultiArrayList(struct {
     ref_count: u32 = 0,
-    desc: Mesh.GPUMeshDesc
+    desc: Mesh.GPUMeshDesc = undefined,
 }) = .empty,
-lods: std.ArrayList(Mesh.GPULODEntry) = .empty,
+lods: std.MultiArrayList(struct {
+    entries: Mesh.GPULODEntry,
+    patch_lookup: std.EnumArray(PatchKind, Gid),
+}) = .empty,
 
 free: std.ArrayList(u32) = .empty,
 
@@ -73,21 +85,22 @@ pub fn deinitNow(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .vma_allocator }),
 pub fn new(self: *MeshRegistry, alloc: Allocator) !u32 {
     if (self.free.pop()) |free| return free;
 
-    _ = try self.meshes.addOne(alloc);
+    try self.meshes.append(alloc, .{});
     return @intCast(self.meshes.len - 1);
 }
 
-pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .transport }), alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, geometry_registry: *GeometryRegistry, id: u32, delta: u32) !void {
+pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .transport }), alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, geometry_registry: *GeometryRegistry, patcher: types.Patcher(.mesh), id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
 
-    const slice = self.meshes.slice();
-    const ref_count = &slice.items(.ref_count)[id];
+    const mesh_slice = self.meshes.slice();
+    const ref_count = &mesh_slice.items(.ref_count)[id];
     if (ref_count.* == 0) {
         const data = try loader.load(io, cold);
         defer loader.unload(io, cold);
 
         var reader = std.Io.Reader.fixed(data);
         var json_reader = std.json.Reader.init(alloc, &reader);
+        defer json_reader.deinit();
 
         const mblob_parsed = try std.json.parseFromTokenSource(MeshDescBlob, alloc, &json_reader, .{});
         defer mblob_parsed.deinit();
@@ -96,7 +109,7 @@ pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .transport }), alloc
         const lod_offset = try self.allocLodSlots(alloc, @intCast(mblob.lods.len));
         errdefer self.freeLodSlots(lod_offset, @intCast(mblob.lods.len));
 
-        slice.items(.desc)[id] = Mesh.GPUMeshDesc{
+        mesh_slice.items(.desc)[id] = Mesh.GPUMeshDesc{
             .lod_offset = lod_offset,
             .lod_count = @intCast(mblob.lods.len),
             .aabb_min_x = mblob.aabb_min[0],
@@ -107,25 +120,35 @@ pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .transport }), alloc
             .aabb_max_z = mblob.aabb_max[2],
         };
 
-        const lods = self.lods.items[lod_offset..][0..mblob.lods.len];
-        for (lods, mblob.lods) |*lod, lblob| {
+        const lods_slice = self.lods.slice();
+        const entries = lods_slice.items(.entries)[lod_offset..][0..mblob.lods.len];
+        const patch_lookups = lods_slice.items(.patch_lookup)[lod_offset..][0..mblob.lods.len];
+        for (entries, patch_lookups, mblob.lods) |*entry, *patch_lookup, lblob| {
             const geo_kind, const geo_dense = resolver.lookup(resolved, lblob.geometry) orelse return error.InvalidGeometryGid;
             if (geo_kind != .geometry) return error.InvalidGeometryKind;
 
-            const schema_kind, const schema_dense = resolver.lookup(resolved, lblob.material_schema) orelse return error.InvalidMaterialSchemaGid;
-            if (schema_kind != .material_schema) return error.InvalidMaterialSchemaKind;
+            // const schema_kind, const schema_dense = resolver.lookup(resolved, lblob.material_schema) orelse return error.InvalidMaterialSchemaGid;
+            // if (schema_kind != .material_schema) return error.InvalidMaterialSchemaKind;
+            //
+            // const instance_kind, const instance_dense = resolver.lookup(resolved, lblob.material_instance) orelse return error.InvalidMaterialinstanceGid;
+            // if (instance_kind != .material_instance) return error.InvalidMaterialinstanceKind;
 
-            const instance_kind, const instance_dense = resolver.lookup(resolved, lblob.material_instance) orelse return error.InvalidMaterialinstanceGid;
-            if (instance_kind != .material_instance) return error.InvalidMaterialinstanceKind;
-
-            lod.* = .{
-                .buffer_address = if (geo_dense == std.math.maxInt(u32)) 0 else if (try geometry_registry.getAddress(.from(ctx), geo_dense)) |addr| addr else 0,
+            entry.* = .{
+                .buffer_address = if (geo_dense == std.math.maxInt(u32)) 0 else if (try geometry_registry.isReady(.from(ctx), geo_dense)) geometry_registry.getAddress(geo_dense) else blk: {
+                    try patcher.addGeometry(.{ lblob.geometry, geo_dense });
+                    break :blk 0;
+                },
                 .vertex_count = lblob.vertex_count,
                 .draw_count = lblob.draw_count,
-                .material_schema = schema_dense,
-                .material_instance = instance_dense,
+                .material_schema = 0, //schema_dense,
+                .material_instance = 0, //instance_dense,
                 .error_metric = lblob.error_metric,
             };
+            patch_lookup.* = .init(.{
+                .geometry = lblob.geometry,
+                .material_schema = lblob.material_schema,
+                .material_instance = lblob.material_instance,
+            });
         }
 
         self.stale = true;
@@ -156,7 +179,7 @@ pub fn release(self: *MeshRegistry, alloc: Allocator, id: u32, delta: u32) !type
     return .released;
 }
 
-pub fn ingest(io: std.Io, location: types.IngestLocation, mesh: MeshDescBlob) types.IngestError!types.Entry {
+pub fn ingest(alloc: Allocator, io: std.Io, location: types.IngestLocation, mesh: MeshDescBlob) types.IngestError!types.Entry {
     const file = try location.prefix_dir.createFile(io, location.path, .{});
     defer file.close(io);
 
@@ -172,7 +195,7 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, mesh: MeshDescBlob) ty
     try stringify.write(mesh);
     try file_writer.flush();
 
-    return .{
+    var entry: types.Entry = .{
         .generation = 0,
         .kind = .mesh,
         .cold_asset = .{
@@ -181,6 +204,39 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, mesh: MeshDescBlob) ty
             .size = file_writer.logicalPos(),
         },
     };
+
+    // TODO: add materials
+    for (mesh.lods, 0..) |lod, i| {
+        entry.deps.necessary.unset(i);
+        (try entry.deps.gids.addOne(alloc)).* = lod.geometry;
+    }
+
+    return entry;
+}
+
+pub fn patch(self: *MeshRegistry, target: u32, resolved: struct {Gid, u32}, geometry_reg: *GeometryRegistry) !void {
+    const desc = self.meshes.items(.desc)[target];
+
+    const lods_slice = self.lods.slice();
+    const patch_lookups = lods_slice.items(.patch_lookup)[desc.lod_offset..][0..desc.lod_count];
+    var found = false;
+    for (0.., patch_lookups) |lod_ix, *lookup| {
+        var it = lookup.iterator();
+        while (it.next()) |e| {
+            if (e.value.* != resolved.@"0") continue;
+
+            const lod_entry = &lods_slice.items(.entries)[desc.lod_offset + lod_ix];
+            switch (e.key) {
+                .geometry => lod_entry.buffer_address = if (resolved.@"1" == std.math.maxInt(u32)) 0 else geometry_reg.getAddress(resolved.@"1"),
+                .material_instance => @panic("TODO"),
+                .material_schema => @panic("TODO"),
+            }
+            found = true;
+        }
+    }
+    std.debug.assert(found);
+
+    self.stale = true;
 }
 
 pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
@@ -202,20 +258,24 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
         const descs = std.mem.sliceAsBytes(self.meshes.items(.desc));
         if (self.staging_meshes.size < descs.len) {
             self.staging_meshes.deinit(.from(ctx));
-            self.staging_meshes = try .init(.from(ctx), .graphics, "MeshRegistry: Meshes", descs.len, .{ }, .gpu_only);
+            self.staging_meshes = try .init(.from(ctx), .graphics, "MeshRegistry: Meshes", descs.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
+            self.meshes_uploaded = false;
         }
 
-        const lods = std.mem.sliceAsBytes(self.lods.items);
+        const lods = std.mem.sliceAsBytes(self.lods.items(.entries));
         if (self.staging_lods.size < lods.len) {
             self.staging_lods.deinit(.from(ctx));
-            self.staging_lods = try .init(.from(ctx), .graphics, "MeshRegistry: Lods", lods.len, .{ }, .gpu_only);
+            self.staging_lods = try .init(.from(ctx), .graphics, "MeshRegistry: Lods", lods.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
+            self.lods_uploaded = false;
         }
 
         errdefer self.staging_tickets = .{ .none, .none };
-        self.staging_tickets[0] = try transport.uploadBuffer(false, descs, null, null, self.staging_meshes.handle, 0, .{}, .{});
+        self.staging_tickets[0] = try transport.uploadBuffer(false, descs, null, null, self.staging_meshes.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true, }, !self.meshes_uploaded);
         errdefer transport.unqueue(self.staging_tickets[0], false);
 
-        self.staging_tickets[1] = try transport.uploadBuffer(false, lods, null, null, self.staging_lods.handle, 0, .{}, .{});
+        self.staging_tickets[1] = try transport.uploadBuffer(false, lods, null, null, self.staging_lods.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true, }, !self.lods_uploaded);
+        self.meshes_uploaded = true;
+        self.lods_uploaded = true;
         errdefer transport.unqueue(self.staging_tickets[1], false);
 
         self.stale = false;
@@ -224,13 +284,16 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
 
 // TODO: hole tracking + filling
 fn allocLodSlots(self: *MeshRegistry, alloc: Allocator, lod_count: u32) !u32 {
-    const ret = self.lods.items.len;
-    _ = try self.lods.addManyAsSlice(alloc, lod_count);
+    const ret = self.lods.len;
+
+    try self.lods.ensureUnusedCapacity(alloc, lod_count);
+    for (0..lod_count) |_| _ = self.lods.addOneAssumeCapacity();
+
     return @intCast(ret);
 }
 
 fn freeLodSlots(self: *MeshRegistry, lod_offset: u32, lod_count: u32) void {
-    if (lod_offset + lod_count != self.lods.items.len) return;
+    if (lod_offset + lod_count != self.lods.len) return;
 
     self.lods.shrinkRetainingCapacity(lod_offset);
 }

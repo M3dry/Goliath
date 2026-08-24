@@ -40,6 +40,11 @@ pub const Kind = enum {
     skeleton, // contains animations - no need to have animations be a separate asset since they're specific to a skeleton
 };
 
+pub const AcquireReturn = enum {
+    load,
+    incr,
+};
+
 pub const ReleaseReturn = enum {
     kept,
     released,
@@ -87,3 +92,56 @@ pub const IngestLocation = struct {
 };
 
 pub const IngestError = std.mem.Allocator.Error || std.Io.Cancelable || std.Io.File.OpenError || std.Io.Writer.Error || std.Io.File.Writer.Error;
+
+pub const PatchEnum = enum {
+    geometry_to_mesh,
+};
+
+pub const Patch = union(PatchEnum) {
+    geometry_to_mesh: struct {
+        patch_gid: Gid,
+        patch_dense: u32,
+        target_mesh: Gid,
+    },
+
+    pub fn patch(self: Patch) struct {Gid, u32} {
+        return switch (self) {
+            .geometry_to_mesh => |d| .{ d.patch_gid, d.patch_dense },
+        };
+    }
+
+    pub fn target(self: Patch) Gid {
+        return switch (self) {
+            .geometry_to_mesh => |d| d.target_mesh,
+        };
+    }
+};
+
+pub const PatcherVariant = enum {
+    mesh
+};
+
+pub fn Patcher(comptime variant: PatcherVariant) type {
+    const MeshVariant = struct {
+        const Self = @This();
+
+        target_mesh: Gid,
+
+        patches: *std.ArrayList(Patch),
+        alloc: std.mem.Allocator,
+
+        pub fn addGeometry(self: Self, patch: struct{Gid, u32}) !void {
+            try self.patches.append(self.alloc, .{
+                .geometry_to_mesh = .{
+                    .patch_gid = patch.@"0",
+                    .patch_dense = patch.@"1",
+                    .target_mesh = self.target_mesh,
+                }
+            });
+        }
+    };
+
+    return switch (variant) {
+        .mesh => MeshVariant,
+    };
+}
