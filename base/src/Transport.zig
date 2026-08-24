@@ -79,6 +79,9 @@ const TaskDst = union(enum) {
     image_dst: struct {
         image: vk.Image,
         subresource: vk.ImageSubresourceLayers,
+        /// whole upload's layer range; the pre-copy transition covers this once
+        full_layers: vk.ImageSubresourceLayers,
+        current_layout: vk.ImageLayout,
         initial_base_array_layer: u32,
         offset: vk.Offset3D,
         extent: vk.Extent3D,
@@ -98,6 +101,9 @@ const Task = struct {
     owning: ?Owned,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
+    /// true => the target resource was created after its last destruction and has
+    /// never been written by any queue; no ownership handoff is performed for it
+    first_use: bool,
 
     fn isLast(self: *const Task) bool {
         return self.ticket_id == self.parent_ticket_id;
@@ -159,6 +165,7 @@ const Task = struct {
                     .owning = self.owning,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
+                    .first_use = self.first_use,
                 };
                 try rest.append(transport.alloc, remainder);
 
@@ -199,6 +206,8 @@ const Task = struct {
                     .dst = .{ .image_dst = .{
                         .image = dst.image,
                         .subresource = dst.subresource,
+                        .full_layers = dst.full_layers,
+                        .current_layout = dst.current_layout,
                         .initial_base_array_layer = dst.initial_base_array_layer,
                         .offset = .{ .x = dst.offset.x + @as(i32, @intCast(w)), .y = dst.offset.y, .z = dst.offset.z },
                         .extent = .{ .width = w1, .height = h1, .depth = dst.extent.depth },
@@ -214,11 +223,14 @@ const Task = struct {
                     .owning = if (sub2_is_last) null else self.owning,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
+                    .first_use = self.first_use,
                 };
                 const sub2 = Task{
                     .dst = .{ .image_dst = .{
                         .image = dst.image,
                         .subresource = dst.subresource,
+                        .full_layers = dst.full_layers,
+                        .current_layout = dst.current_layout,
                         .initial_base_array_layer = dst.initial_base_array_layer,
                         .offset = .{ .x = dst.offset.x, .y = dst.offset.y + @as(i32, @intCast(h)), .z = dst.offset.z },
                         .extent = .{ .width = w2, .height = h2, .depth = dst.extent.depth },
@@ -234,6 +246,7 @@ const Task = struct {
                     .owning = if (sub2_is_last) self.owning else null,
                     .dst_stage = self.dst_stage,
                     .dst_access = self.dst_access,
+                    .first_use = self.first_use,
                 };
 
                 self.ticket_id = Ticket.none.id();
@@ -272,82 +285,6 @@ const Task = struct {
             },
         }
     }
-
-    fn recordReleaseBarrier(self: *const Task, state: *Self) !void {
-        switch (self.dst) {
-            .buffer_dst => |dst| {
-                try state.transport_buffer_barriers.append(state.alloc, .{
-                    .src_stage_mask = .{ .all_transfer_bit = true },
-                    .src_access_mask = .{ .transfer_write_bit = true },
-                    .dst_stage_mask = .{},
-                    .dst_access_mask = .{},
-                    .src_queue_family_index = state.transport_family,
-                    .dst_queue_family_index = state.graphics_family,
-                    .buffer = dst.buffer,
-                    .offset = dst.initial_offset,
-                    .size = self.full_src_size,
-                });
-            },
-            .image_dst => |dst| {
-                try state.transport_image_barriers.append(state.alloc, .{
-                    .src_stage_mask = .{ .all_transfer_bit = true },
-                    .src_access_mask = .{ .transfer_write_bit = true },
-                    .dst_stage_mask = .{},
-                    .dst_access_mask = .{},
-                    .old_layout = .transfer_dst_optimal,
-                    .new_layout = dst.new_layout,
-                    .src_queue_family_index = state.transport_family,
-                    .dst_queue_family_index = state.graphics_family,
-                    .image = dst.image,
-                    .subresource_range = .{
-                        .aspect_mask = dst.subresource.aspect_mask,
-                        .base_mip_level = dst.subresource.mip_level,
-                        .level_count = 1,
-                        .base_array_layer = dst.subresource.base_array_layer,
-                        .layer_count = 1,
-                    },
-                });
-            },
-        }
-    }
-
-    fn recordSameQueueBarrier(self: *const Task, state: *Self) !void {
-        switch (self.dst) {
-            .buffer_dst => |dst| {
-                try state.transport_buffer_barriers.append(state.alloc, .{
-                    .src_stage_mask = .{ .all_transfer_bit = true },
-                    .src_access_mask = .{ .transfer_write_bit = true },
-                    .dst_stage_mask = self.dst_stage,
-                    .dst_access_mask = self.dst_access,
-                    .src_queue_family_index = state.graphics_family,
-                    .dst_queue_family_index = state.graphics_family,
-                    .buffer = dst.buffer,
-                    .offset = dst.initial_offset,
-                    .size = self.full_src_size,
-                });
-            },
-            .image_dst => |dst| {
-                try state.transport_image_barriers.append(state.alloc, .{
-                    .src_stage_mask = .{ .all_transfer_bit = true },
-                    .src_access_mask = .{ .transfer_write_bit = true },
-                    .dst_stage_mask = self.dst_stage,
-                    .dst_access_mask = self.dst_access,
-                    .old_layout = .transfer_dst_optimal,
-                    .new_layout = dst.new_layout,
-                    .src_queue_family_index = state.graphics_family,
-                    .dst_queue_family_index = state.graphics_family,
-                    .image = dst.image,
-                    .subresource_range = .{
-                        .aspect_mask = dst.subresource.aspect_mask,
-                        .base_mip_level = dst.subresource.mip_level,
-                        .level_count = 1,
-                        .base_array_layer = dst.subresource.base_array_layer,
-                        .layer_count = 1,
-                    },
-                });
-            },
-        }
-    }
 };
 
 const TicketEntry = struct {
@@ -366,6 +303,8 @@ const PendingSubmission = struct {
     valid: bool = false,
 };
 
+const ResourceOwner = enum { graphics_owned, transport_owned };
+
 const Self = @This();
 
 const staging_buffer_size = 8_000_000;
@@ -380,6 +319,17 @@ graphics_queue: vk.Queue,
 vma_alloc: vma.VmaAllocator,
 transport_family: u32,
 graphics_family: u32,
+
+/// serializes every submit on the graphics queue (frame submit/present in
+/// root.zig, drain's non-dedicated submits, and worker-side ownership
+/// handoffs); queue handles are externally synchronized
+graphics_submit_lock: std.Io.Mutex,
+barriers_cmd_buf: vk.CommandBuffer,
+barriers_fence: vk.Fence,
+
+owner_mutex: std.Io.Mutex,
+buffer_owners: std.AutoHashMapUnmanaged(vk.Buffer, ResourceOwner),
+image_owners: std.AutoHashMapUnmanaged(vk.Image, ResourceOwner),
 
 staging_buffers: [num_frames]Buffer,
 staging_ptrs: [num_frames][*]u8,
@@ -398,9 +348,6 @@ current_task_queue: u32,
 task_queues: [num_frames]RingBuffer(Task),
 task_queue_lock: std.Io.Mutex,
 
-transport_buffer_barriers: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2),
-transport_image_barriers: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2),
-barrier_lock: std.Io.Mutex,
 full_upload_lock: std.Io.Mutex,
 
 io: std.Io,
@@ -438,15 +385,16 @@ pub fn init(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator, .transport_
     self.flush_staging = false;
     self.io = io;
     self.task_queue_lock = std.Io.Mutex.init;
-    self.barrier_lock = std.Io.Mutex.init;
     self.full_upload_lock = std.Io.Mutex.init;
     self.ticket_mutex = std.Io.Mutex.init;
     self.pending_mutex = std.Io.Mutex.init;
+    self.graphics_submit_lock = std.Io.Mutex.init;
+    self.owner_mutex = std.Io.Mutex.init;
+    self.buffer_owners = .empty;
+    self.image_owners = .empty;
     self.ticket_timelines = .empty;
     self.free_tickets = .empty;
     self.pending_submissions = .empty;
-    self.transport_buffer_barriers = .empty;
-    self.transport_image_barriers = .empty;
     for (&self.task_queues) |*q| q.* = .{};
 
     var staging_created: u32 = 0;
@@ -505,6 +453,18 @@ pub fn init(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator, .transport_
     }, null);
     self.last_wait_semaphore = .null_handle;
 
+    var barriers_cmd_bufs: [1]vk.CommandBuffer = undefined;
+    try ctx.view.device.allocateCommandBuffers(&.{
+        .command_pool = self.drain_cmd_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    }, &barriers_cmd_bufs);
+    self.barriers_cmd_buf = barriers_cmd_bufs[0];
+
+    self.barriers_fence = try ctx.view.device.createFence(&.{
+        .flags = .{ .signaled_bit = true },
+    }, null);
+
     self.worker = try std.Thread.spawn(.{}, workerThread, .{ self, Ctx.Query(&.{ .device, .vma_allocator }).from(ctx) });
 }
 
@@ -536,10 +496,13 @@ pub fn deinit(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) void {
         q.deinit(self.alloc);
     }
 
-    self.transport_buffer_barriers.deinit(self.alloc);
-    self.transport_image_barriers.deinit(self.alloc);
     self.ticket_timelines.deinit(self.alloc);
     self.free_tickets.deinit(self.alloc);
+
+    self.buffer_owners.deinit(self.alloc);
+    self.image_owners.deinit(self.alloc);
+
+    ctx.view.device.destroyFence(self.barriers_fence, null);
 
     for (self.pending_submissions.items) |*ps| {
         if (ps.wait_semaphore != .null_handle) {
@@ -565,6 +528,7 @@ pub fn uploadBuffer(
     dst_offset: u32,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
+    first_use: bool,
 ) !Ticket {
     const ticket = try self.getFreeTicket();
     const owned = if (owning) |f| Owned{ .free_fn = f, .ctx = owning_ctx } else null;
@@ -584,6 +548,7 @@ pub fn uploadBuffer(
         .owning = owned,
         .dst_stage = dst_stage,
         .dst_access = dst_access,
+        .first_use = first_use,
     };
     self.task_queue_lock.lockUncancelable(self.io);
     defer self.task_queue_lock.unlock(self.io);
@@ -607,29 +572,8 @@ pub fn uploadImage(
     new_layout: vk.ImageLayout,
     dst_stage: vk.PipelineStageFlags2,
     dst_access: vk.AccessFlags2,
+    first_use: bool,
 ) !Ticket {
-    self.full_upload_lock.lockUncancelable(self.io);
-    defer self.full_upload_lock.unlock(self.io);
-
-    try self.transport_image_barriers.append(self.alloc, .{
-        .src_stage_mask = .{},
-        .src_access_mask = .{},
-        .dst_stage_mask = .{ .all_transfer_bit = true },
-        .dst_access_mask = .{ .transfer_write_bit = true },
-        .old_layout = current_layout,
-        .new_layout = .transfer_dst_optimal,
-        .src_queue_family_index = self.transport_family,
-        .dst_queue_family_index = self.transport_family,
-        .image = dst,
-        .subresource_range = .{
-            .aspect_mask = dst_layers.aspect_mask,
-            .base_mip_level = dst_layers.mip_level,
-            .level_count = 1,
-            .base_array_layer = dst_layers.base_array_layer,
-            .layer_count = dst_layers.layer_count,
-        },
-    });
-
     const info = try getFormatInfo(format);
     const layer_size = dimension.width * dimension.height * dimension.depth * info.bytes_per_block;
     const num_layers = dst_layers.layer_count;
@@ -646,6 +590,12 @@ pub fn uploadImage(
     const owned = if (owning) |f| Owned{ .free_fn = f, .ctx = owning_ctx } else null;
 
     try q.ensureUnusedCapacity(self.alloc, count);
+    const full_layers: vk.ImageSubresourceLayers = .{
+        .aspect_mask = dst_layers.aspect_mask,
+        .mip_level = dst_layers.mip_level,
+        .base_array_layer = dst_layers.base_array_layer,
+        .layer_count = dst_layers.layer_count,
+    };
     if (priority) {
         var i: usize = count;
         while (i > 0) {
@@ -660,6 +610,8 @@ pub fn uploadImage(
                         .base_array_layer = dst_layers.base_array_layer + @as(u32, @intCast(i)),
                         .layer_count = 1,
                     },
+                    .full_layers = full_layers,
+                    .current_layout = current_layout,
                     .initial_base_array_layer = dst_layers.base_array_layer,
                     .offset = dst_offset,
                     .extent = dimension,
@@ -675,6 +627,7 @@ pub fn uploadImage(
                 .owning = if (is_last) owned else null,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
+                .first_use = first_use,
             };
         }
     } else {
@@ -689,6 +642,8 @@ pub fn uploadImage(
                         .base_array_layer = dst_layers.base_array_layer + @as(u32, @intCast(i)),
                         .layer_count = 1,
                     },
+                    .full_layers = full_layers,
+                    .current_layout = current_layout,
                     .initial_base_array_layer = dst_layers.base_array_layer,
                     .offset = dst_offset,
                     .extent = dimension,
@@ -704,6 +659,7 @@ pub fn uploadImage(
                 .owning = if (is_last) owned else null,
                 .dst_stage = dst_stage,
                 .dst_access = dst_access,
+                .first_use = first_use,
             });
         }
     }
@@ -783,7 +739,7 @@ pub fn unqueue(self: *Self, t: Ticket, free_src: bool) void {
     var removed_any = false;
     for (&self.task_queues) |*q| {
         var i: usize = 0;
-        while (i < q.items.len) {
+        while (i < q.len) {
             const task_ptr = q.get(i).?;
             if (task_ptr.parent_ticket_id == t.id()) {
                 const gen = blk: {
@@ -987,22 +943,6 @@ fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !voi
         try ctx.view.device.resetCommandBuffer(cmd_buf, .{});
         try ctx.view.device.beginCommandBuffer(cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
 
-        {
-            self.barrier_lock.lockUncancelable(self.io);
-            defer self.barrier_lock.unlock(self.io);
-
-            if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
-                    .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
-                    .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
-                    .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
-                    .p_image_memory_barriers = self.transport_image_barriers.items.ptr,
-                });
-                self.transport_buffer_barriers.clearRetainingCapacity();
-                self.transport_image_barriers.clearRetainingCapacity();
-            }
-        }
-
         var size: u32 = 0;
         var batch: std.ArrayListUnmanaged(Task) = .empty;
         defer batch.deinit(self.alloc);
@@ -1038,41 +978,171 @@ fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !voi
 
         if (self.flush_staging) staging_buf.flush(.from(ctx), 0, Self.staging_buffer_size);
 
-        var copy_offset: u32 = 0;
+        // --- per-batch barrier planning ---
+        // handoff: graphics -> transport (release submitted on graphics via
+        // submitBarriersLocked, acquire recorded into the transport cmdbuf)
+        var handoff_rel_bufs: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+        defer handoff_rel_bufs.deinit(self.alloc);
+        var handoff_rel_imgs: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+        defer handoff_rel_imgs.deinit(self.alloc);
+        var pre_acq_bufs: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+        defer pre_acq_bufs.deinit(self.alloc);
+        var pre_img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+        defer pre_img_bars.deinit(self.alloc);
+        // tail: transport -> graphics (release recorded after copies in the
+        // transport cmdbuf, acquire submitted on graphics after the batch)
+        var tail_rel_bufs: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+        defer tail_rel_bufs.deinit(self.alloc);
+        var tail_rel_imgs: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+        defer tail_rel_imgs.deinit(self.alloc);
+        var post_acq_bufs: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
+        defer post_acq_bufs.deinit(self.alloc);
+        var post_img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
+        defer post_img_bars.deinit(self.alloc);
+
+        var seen_bufs: std.ArrayListUnmanaged(vk.Buffer) = .empty;
+        defer seen_bufs.deinit(self.alloc);
+        var seen_imgs: std.ArrayListUnmanaged(vk.Image) = .empty;
+        defer seen_imgs.deinit(self.alloc);
+
         for (batch.items) |*t| {
-            t.recordCopy(cmd_buf, ctx.view.device, staging_buf.handle, copy_offset);
-            copy_offset += try t.requiredSize();
-        }
+            switch (t.dst) {
+                .buffer_dst => |dst| {
+                    const seen = blk: {
+                        for (seen_bufs.items) |h| if (h == dst.buffer) break :blk true;
+                        break :blk false;
+                    };
+                    if (seen) continue;
+                    try seen_bufs.append(self.alloc, dst.buffer);
 
-        var ticket_ids: std.ArrayListUnmanaged(u32) = .empty;
+                    // exclusive-sharing ownership handshake; same-queue setups
+                    // never transfer ownership
+                    if (!self.has_dedicated_transport or t.first_use) {
+                        if (self.has_dedicated_transport) {
+                            self.owner_mutex.lockUncancelable(self.io);
+                            try self.buffer_owners.put(self.alloc, dst.buffer, .graphics_owned);
+                            self.owner_mutex.unlock(self.io);
+                        }
+                        continue;
+                    }
 
-        if (self.has_dedicated_transport) {
-            var buf_bars: std.ArrayListUnmanaged(vk.BufferMemoryBarrier2) = .empty;
-            var img_bars: std.ArrayListUnmanaged(vk.ImageMemoryBarrier2) = .empty;
-            var has_graphics_work = false;
+                    self.owner_mutex.lockUncancelable(self.io);
+                    const gop = try self.buffer_owners.getOrPut(self.alloc, dst.buffer);
+                    const needs_handoff = !gop.found_existing or gop.value_ptr.* == .graphics_owned;
+                    gop.value_ptr.* = .transport_owned;
+                    self.owner_mutex.unlock(self.io);
 
-            for (batch.items) |*t| {
-                if (!t.isLast()) continue;
-                has_graphics_work = true;
-                try t.recordReleaseBarrier(self);
-                try ticket_ids.append(self.alloc, t.ticket_id);
+                    if (!needs_handoff) continue;
 
-                switch (t.dst) {
-                    .buffer_dst => |dst| {
-                        try buf_bars.append(self.alloc, .{
-                            .src_stage_mask = .{},
-                            .src_access_mask = .{},
-                            .dst_stage_mask = t.dst_stage,
-                            .dst_access_mask = t.dst_access,
+                    try handoff_rel_bufs.append(self.alloc, .{
+                        .src_stage_mask = .{ .all_commands_bit = true },
+                        .src_access_mask = .{ .memory_read_bit = true, .memory_write_bit = true },
+                        .dst_stage_mask = .{},
+                        .dst_access_mask = .{},
+                        .src_queue_family_index = self.graphics_family,
+                        .dst_queue_family_index = self.transport_family,
+                        .buffer = dst.buffer,
+                        .offset = dst.initial_offset,
+                        .size = t.full_src_size,
+                    });
+                    try pre_acq_bufs.append(self.alloc, .{
+                        .src_stage_mask = .{},
+                        .src_access_mask = .{},
+                        .dst_stage_mask = .{ .all_transfer_bit = true },
+                        .dst_access_mask = .{ .transfer_write_bit = true },
+                        .src_queue_family_index = self.graphics_family,
+                        .dst_queue_family_index = self.transport_family,
+                        .buffer = dst.buffer,
+                        .offset = dst.initial_offset,
+                        .size = t.full_src_size,
+                    });
+                },
+                .image_dst => |dst| {
+                    const seen = blk: {
+                        for (seen_imgs.items) |h| if (h == dst.image) break :blk true;
+                        break :blk false;
+                    };
+
+                    var handoff = false;
+                    if (!seen) {
+                        try seen_imgs.append(self.alloc, dst.image);
+
+                        if (self.has_dedicated_transport) {
+                            if (!t.first_use) {
+                                self.owner_mutex.lockUncancelable(self.io);
+                                const gop = try self.image_owners.getOrPut(self.alloc, dst.image);
+                                handoff = !gop.found_existing or gop.value_ptr.* == .graphics_owned;
+                                gop.value_ptr.* = .transport_owned;
+                                self.owner_mutex.unlock(self.io);
+                            } else {
+                                self.owner_mutex.lockUncancelable(self.io);
+                                try self.image_owners.put(self.alloc, dst.image, .graphics_owned);
+                                self.owner_mutex.unlock(self.io);
+                            }
+                        }
+                    }
+                    if (seen and !(self.has_dedicated_transport and handoff)) continue;
+
+                    const src_family = if (handoff) self.graphics_family else if (self.has_dedicated_transport) self.transport_family else self.graphics_family;
+                    try pre_img_bars.append(self.alloc, .{
+                        .src_stage_mask = if (handoff) .{ .all_commands_bit = true } else .{},
+                        .src_access_mask = if (handoff) .{ .memory_read_bit = true, .memory_write_bit = true } else .{},
+                        .dst_stage_mask = .{ .all_transfer_bit = true },
+                        .dst_access_mask = .{ .transfer_write_bit = true },
+                        .old_layout = dst.current_layout,
+                        .new_layout = .transfer_dst_optimal,
+                        .src_queue_family_index = src_family,
+                        .dst_queue_family_index = if (self.has_dedicated_transport) self.transport_family else self.graphics_family,
+                        .image = dst.image,
+                        .subresource_range = .{
+                            .aspect_mask = dst.full_layers.aspect_mask,
+                            .base_mip_level = dst.full_layers.mip_level,
+                            .level_count = 1,
+                            .base_array_layer = dst.full_layers.base_array_layer,
+                            .layer_count = dst.full_layers.layer_count,
+                        },
+                    });
+                    if (handoff) {
+                        try handoff_rel_imgs.append(self.alloc, .{
+                            .src_stage_mask = .{ .all_commands_bit = true },
+                            .src_access_mask = .{ .memory_read_bit = true, .memory_write_bit = true },
+                            .dst_stage_mask = .{},
+                            .dst_access_mask = .{},
+                            .old_layout = .undefined,
+                            .new_layout = .undefined,
+                            .src_queue_family_index = self.graphics_family,
+                            .dst_queue_family_index = self.transport_family,
+                            .image = dst.image,
+                            .subresource_range = .{
+                                .aspect_mask = dst.full_layers.aspect_mask,
+                                .base_mip_level = dst.full_layers.mip_level,
+                                .level_count = 1,
+                                .base_array_layer = dst.full_layers.base_array_layer,
+                                .layer_count = dst.full_layers.layer_count,
+                            },
+                        });
+                    }
+
+                    if (t.isLast()) {
+                        try tail_rel_imgs.append(self.alloc, .{
+                            .src_stage_mask = .{ .all_transfer_bit = true },
+                            .src_access_mask = .{ .transfer_write_bit = true },
+                            .dst_stage_mask = .{},
+                            .dst_access_mask = .{},
+                            .old_layout = .transfer_dst_optimal,
+                            .new_layout = dst.new_layout,
                             .src_queue_family_index = self.transport_family,
                             .dst_queue_family_index = self.graphics_family,
-                            .buffer = dst.buffer,
-                            .offset = dst.initial_offset,
-                            .size = t.full_src_size,
+                            .image = dst.image,
+                            .subresource_range = .{
+                                .aspect_mask = dst.subresource.aspect_mask,
+                                .base_mip_level = dst.subresource.mip_level,
+                                .level_count = 1,
+                                .base_array_layer = dst.subresource.base_array_layer,
+                                .layer_count = 1,
+                            },
                         });
-                    },
-                    .image_dst => |dst| {
-                        try img_bars.append(self.alloc, .{
+                        try post_img_bars.append(self.alloc, .{
                             .src_stage_mask = .{},
                             .src_access_mask = .{},
                             .dst_stage_mask = t.dst_stage,
@@ -1090,86 +1160,157 @@ fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !voi
                                 .layer_count = 1,
                             },
                         });
+                    }
+                },
+            }
+        }
+
+        // --- record transport cmdbuf: pre barriers -> copies -> tail releases ---
+        if (pre_acq_bufs.items.len > 0 or pre_img_bars.items.len > 0) {
+            ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
+                .buffer_memory_barrier_count = @intCast(pre_acq_bufs.items.len),
+                .p_buffer_memory_barriers = pre_acq_bufs.items.ptr,
+                .image_memory_barrier_count = @intCast(pre_img_bars.items.len),
+                .p_image_memory_barriers = pre_img_bars.items.ptr,
+            });
+        }
+
+        var copy_offset: u32 = 0;
+        for (batch.items) |*t| {
+            t.recordCopy(cmd_buf, ctx.view.device, staging_buf.handle, copy_offset);
+            copy_offset += try t.requiredSize();
+        }
+
+        var ticket_ids: std.ArrayListUnmanaged(u32) = .empty;
+
+        var has_graphics_work = false;
+
+        if (self.has_dedicated_transport) {
+            // submitBarriersLocked only borrows .items; the list itself is
+            // released here (the non-dedicated branch transfers it to
+            // pending_submissions instead)
+            defer ticket_ids.deinit(self.alloc);
+            for (batch.items) |*t| {
+                if (!t.isLast()) continue;
+                has_graphics_work = true;
+                try ticket_ids.append(self.alloc, t.ticket_id);
+
+                switch (t.dst) {
+                    .buffer_dst => |dst| {
+                        try tail_rel_bufs.append(self.alloc, .{
+                            .src_stage_mask = .{ .all_transfer_bit = true },
+                            .src_access_mask = .{ .transfer_write_bit = true },
+                            .dst_stage_mask = .{},
+                            .dst_access_mask = .{},
+                            .src_queue_family_index = self.transport_family,
+                            .dst_queue_family_index = self.graphics_family,
+                            .buffer = dst.buffer,
+                            .offset = dst.initial_offset,
+                            .size = t.full_src_size,
+                        });
+                        try post_acq_bufs.append(self.alloc, .{
+                            .src_stage_mask = .{},
+                            .src_access_mask = .{},
+                            .dst_stage_mask = t.dst_stage,
+                            .dst_access_mask = t.dst_access,
+                            .src_queue_family_index = self.transport_family,
+                            .dst_queue_family_index = self.graphics_family,
+                            .buffer = dst.buffer,
+                            .offset = dst.initial_offset,
+                            .size = t.full_src_size,
+                        });
                     },
+                    .image_dst => {},
                 }
             }
 
-            {
-                self.barrier_lock.lockUncancelable(self.io);
-                defer self.barrier_lock.unlock(self.io);
-                if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                    ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
-                        .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
-                        .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
-                        .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
-                        .p_image_memory_barriers = self.transport_image_barriers.items.ptr,
-                    });
-                    self.transport_buffer_barriers.clearRetainingCapacity();
-                    self.transport_image_barriers.clearRetainingCapacity();
-                }
+            if (tail_rel_bufs.items.len > 0 or tail_rel_imgs.items.len > 0) {
+                ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
+                    .buffer_memory_barrier_count = @intCast(tail_rel_bufs.items.len),
+                    .p_buffer_memory_barriers = tail_rel_bufs.items.ptr,
+                    .image_memory_barrier_count = @intCast(tail_rel_imgs.items.len),
+                    .p_image_memory_barriers = tail_rel_imgs.items.ptr,
+                });
             }
 
             try ctx.view.device.endCommandBuffer(cmd_buf);
 
-            // Fresh binary semaphore per batch: drain() waits on it exactly once and destroys it
-            // after the submission completes, so a batch can never re-signal an unconsumed
-            // semaphore (VUID-vkQueueSubmit2-semaphore-03868) and the worker never blocks on GPU.
-            // Split batches (no isLast task) have no graphics-side handoff, so no signal at all.
-            const batch_sem = if (has_graphics_work) try ctx.view.device.createSemaphore(&.{}, null) else .null_handle;
+            // ownership handoff: release on graphics before the transport batch is queued
+            var handoff_wait: ?u64 = null;
+            if (handoff_rel_bufs.items.len > 0 or handoff_rel_imgs.items.len > 0) {
+                self.graphics_submit_lock.lockUncancelable(self.io);
+                defer self.graphics_submit_lock.unlock(self.io);
+                const vh = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
+                try self.submitBarriersLocked(ctx.view.device, handoff_rel_bufs.items, handoff_rel_imgs.items, null, vh, &.{});
+                handoff_wait = vh;
+            }
 
-            try ctx.view.device.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
-                .command_buffer_info_count = 1,
-                .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
-                    .command_buffer = cmd_buf,
-                    .device_mask = 0,
-                })[0..1],
-                .signal_semaphore_info_count = if (has_graphics_work) 1 else 0,
-                .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
-                    .semaphore = batch_sem,
-                    .value = 0,
-                    .stage_mask = .{ .all_transfer_bit = true },
+            const vt_trans = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
+            {
+                var wait_infos: [1]vk.SemaphoreSubmitInfo = .{.{
+                    .semaphore = self.timeline_semaphore,
+                    .value = handoff_wait orelse vt_trans -% 1,
+                    .stage_mask = .{ .all_commands_bit = true },
                     .device_index = 0,
-                })[0..1],
-            })[0..1], fence);
+                }};
+                const wait_count: u32 = if (handoff_wait != null) 1 else 0;
+                _ = &wait_infos;
+
+                try ctx.view.device.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
+                    .wait_semaphore_info_count = wait_count,
+                    .p_wait_semaphore_infos = &wait_infos,
+                    .command_buffer_info_count = 1,
+                    .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
+                        .command_buffer = cmd_buf,
+                        .device_mask = 0,
+                    })[0..1],
+                    .signal_semaphore_info_count = 1,
+                    .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+                        .semaphore = self.timeline_semaphore,
+                        .value = vt_trans,
+                        .stage_mask = .{ .all_transfer_bit = true },
+                        .device_index = 0,
+                    })[0..1],
+                })[0..1], fence);
+            }
 
             if (has_graphics_work) {
-                const tv = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
-                self.pending_mutex.lockUncancelable(self.io);
-                defer self.pending_mutex.unlock(self.io);
-
-                try self.pending_submissions.append(self.alloc, .{
-                    .wait_semaphore = batch_sem,
-                    .buffer_barriers = buf_bars,
-                    .image_barriers = img_bars,
-                    .ticket_ids = ticket_ids,
-                    .timeline_value = tv,
-                    .valid = true,
-                });
-            } else {
-                buf_bars.deinit(self.alloc);
-                img_bars.deinit(self.alloc);
-                ticket_ids.deinit(self.alloc);
+                const vt_tail = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
+                self.graphics_submit_lock.lockUncancelable(self.io);
+                defer self.graphics_submit_lock.unlock(self.io);
+                try self.submitBarriersLocked(ctx.view.device, post_acq_bufs.items, post_img_bars.items, vt_trans, vt_tail, ticket_ids.items);
             }
         } else {
             for (batch.items) |*t| {
                 if (!t.isLast()) continue;
-                try t.recordSameQueueBarrier(self);
+                has_graphics_work = true;
                 try ticket_ids.append(self.alloc, t.ticket_id);
+
+                switch (t.dst) {
+                    .buffer_dst => |dst| {
+                        try tail_rel_bufs.append(self.alloc, .{
+                            .src_stage_mask = .{ .all_transfer_bit = true },
+                            .src_access_mask = .{ .transfer_write_bit = true },
+                            .dst_stage_mask = .{},
+                            .dst_access_mask = .{},
+                            .src_queue_family_index = self.graphics_family,
+                            .dst_queue_family_index = self.graphics_family,
+                            .buffer = dst.buffer,
+                            .offset = dst.initial_offset,
+                            .size = t.full_src_size,
+                        });
+                    },
+                    .image_dst => {},
+                }
             }
 
-            {
-                self.barrier_lock.lockUncancelable(self.io);
-                defer self.barrier_lock.unlock(self.io);
-                if (self.transport_buffer_barriers.items.len > 0 or self.transport_image_barriers.items.len > 0) {
-                    ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
-                        .buffer_memory_barrier_count = @intCast(self.transport_buffer_barriers.items.len),
-                        .p_buffer_memory_barriers = self.transport_buffer_barriers.items.ptr,
-                        .image_memory_barrier_count = @intCast(self.transport_image_barriers.items.len),
-                        .p_image_memory_barriers = self.transport_image_barriers.items.ptr,
-                    });
-                    self.transport_buffer_barriers.clearRetainingCapacity();
-                    self.transport_image_barriers.clearRetainingCapacity();
-                }
+            if (tail_rel_bufs.items.len > 0 or tail_rel_imgs.items.len > 0) {
+                ctx.view.device.cmdPipelineBarrier2(cmd_buf, &.{
+                    .buffer_memory_barrier_count = @intCast(tail_rel_bufs.items.len),
+                    .p_buffer_memory_barriers = tail_rel_bufs.items.ptr,
+                    .image_memory_barrier_count = @intCast(tail_rel_imgs.items.len),
+                    .p_image_memory_barriers = tail_rel_imgs.items.ptr,
+                });
             }
 
             try ctx.view.device.endCommandBuffer(cmd_buf);
@@ -1187,5 +1328,69 @@ fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !voi
                 });
             }
         }
+    }
+}
+
+/// records `barriers` into the reusable graphics-side command buffer and submits
+/// it; caller must hold graphics_submit_lock
+fn submitBarriersLocked(
+    self: *Self,
+    dev: vk.DeviceProxy,
+    buffer_barriers: []const vk.BufferMemoryBarrier2,
+    image_barriers: []const vk.ImageMemoryBarrier2,
+    wait_timeline_value: ?u64,
+    signal_timeline_value: u64,
+    ticket_ids: []const u32,
+) !void {
+    _ = try dev.waitForFences(&[_]vk.Fence{self.barriers_fence}, .true, std.math.maxInt(u64));
+    try dev.resetFences(&[_]vk.Fence{self.barriers_fence});
+    try dev.resetCommandBuffer(self.barriers_cmd_buf, .{});
+    try dev.beginCommandBuffer(self.barriers_cmd_buf, &.{ .flags = .{ .one_time_submit_bit = true } });
+
+    if (buffer_barriers.len > 0 or image_barriers.len > 0) {
+        dev.cmdPipelineBarrier2(self.barriers_cmd_buf, &.{
+            .buffer_memory_barrier_count = @intCast(buffer_barriers.len),
+            .p_buffer_memory_barriers = buffer_barriers.ptr,
+            .image_memory_barrier_count = @intCast(image_barriers.len),
+            .p_image_memory_barriers = image_barriers.ptr,
+        });
+    }
+
+    try dev.endCommandBuffer(self.barriers_cmd_buf);
+
+    var waits: [1]vk.SemaphoreSubmitInfo = .{.{
+        .semaphore = self.timeline_semaphore,
+        .value = wait_timeline_value orelse 0,
+        .stage_mask = .{ .all_commands_bit = true },
+        .device_index = 0,
+    }};
+    _ = &waits;
+
+    try dev.queueSubmit2(self.graphics_queue, (&vk.SubmitInfo2{
+        .wait_semaphore_info_count = if (wait_timeline_value != null) 1 else 0,
+        .p_wait_semaphore_infos = &waits,
+        .command_buffer_info_count = 1,
+        .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
+            .command_buffer = self.barriers_cmd_buf,
+            .device_mask = 0,
+        })[0..1],
+        .signal_semaphore_info_count = 1,
+        .p_signal_semaphore_infos = (&vk.SemaphoreSubmitInfo{
+            .semaphore = self.timeline_semaphore,
+            .value = signal_timeline_value,
+            .stage_mask = .{ .all_commands_bit = true },
+            .device_index = 0,
+        })[0..1],
+    })[0..1], self.barriers_fence);
+
+    {
+        self.ticket_mutex.lockUncancelable(self.io);
+        defer self.ticket_mutex.unlock(self.io);
+        for (ticket_ids) |tid| {
+            if (tid < self.ticket_timelines.items.len) {
+                self.ticket_timelines.items[tid].timeline = signal_timeline_value;
+            }
+        }
+        self.ticket_condition.broadcast(self.io);
     }
 }

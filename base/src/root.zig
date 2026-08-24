@@ -394,6 +394,11 @@ pub const Ctx = struct {
 
             self.timeline_value += 1;
 
+            // graphics queue is externally synchronized; worker-side ownership
+            // handoffs submit through the same lock
+            self.transport.graphics_submit_lock.lockUncancelable(self.transport.io);
+            defer self.transport.graphics_submit_lock.unlock(self.transport.io);
+
             try self.graphics.dev.queueSubmit2(self.graphics.graphics_queue, (&vk.SubmitInfo2{
                 .wait_semaphore_info_count = 1,
                 .p_wait_semaphore_infos = (&vk.SemaphoreSubmitInfo{
