@@ -158,12 +158,12 @@ fn createDefaultImage(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .
     errdefer self.default_images[index].view.deinitNow(.from(ctx));
 }
 
-pub fn deinit(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue })) void {
+pub fn deinit(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
     const textures_slice = self.textures.slice();
-    for (textures_slice.items(.ref_count), textures_slice.items(.image)) |ref_count, *tex| {
-        if (ref_count == 0) continue;
+    for (textures_slice.items(.image), textures_slice.items(.ticket)) |*tex, ticket| {
+        ctx.view.transport.unqueue(ticket, false);
 
-        tex.deinit(ctx);
+        tex.deinit(.from(ctx));
     }
     self.textures.deinit(self.alloc);
     self.textures_free_list.deinit(self.alloc);
@@ -179,7 +179,7 @@ pub fn deinit(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue }))
     self.pending_sampled_textures.deinit(self.alloc);
 
     for (&self.default_images) |*img| {
-        img.deinit(ctx);
+        img.deinit(.from(ctx));
     }
     self.default_sampler.deinit(.from(ctx));
 
@@ -191,7 +191,7 @@ pub fn deinitNow(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_a
     for (textures_slice.items(.ref_count), textures_slice.items(.image)) |ref_count, *tex| {
         if (ref_count == 0) continue;
 
-        tex.deinitNow(ctx);
+        tex.deinitNow(.from(ctx));
     }
     self.textures.deinit(self.alloc);
     self.textures_free_list.deinit(self.alloc);
@@ -215,14 +215,22 @@ pub fn deinitNow(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_a
 }
 
 pub fn newTexture(self: *TextureRegistry) !u32 {
-    if (self.textures_free_list.pop()) |id| return id;
+    if (self.textures_free_list.pop()) |free| {
+        self.textures.set(free, .{});
+        return free;
+    }
 
     _ = try self.textures.append(self.alloc, .{});
     return @intCast(self.textures.len - 1);
 }
 
 pub fn newSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .destroy_queue })) !u32 {
-    if (self.sampled_texture_free_list.pop()) |id| return id;
+    if (self.sampled_texture_free_list.pop()) |free| {
+        self.sampled_textures.set(free, .{});
+
+        self.texture_pool.update(.from(ctx), free, self.default_images[0].view.handle, .shader_read_only_optimal, self.default_sampler.handle);
+        return free;
+    }
 
     _ = try self.sampled_textures.append(self.alloc, .{});
     const id: u32 = @intCast(self.sampled_textures.len - 1);
@@ -352,7 +360,6 @@ pub fn releaseTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_q
 
     var image = &slice.items(.image)[id];
     image.deinit(.from(ctx));
-    image.* = .{};
 
     try self.textures_free_list.append(self.alloc, id);
     return .released;

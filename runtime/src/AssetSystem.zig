@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 pub const TextureRegistry = @import("AssetSystem/TextureRegistry.zig");
 pub const MeshRegistry = @import("AssetSystem/MeshRegistry.zig");
 pub const GeometryRegistry = @import("AssetSystem/GeometryRegistry.zig");
+pub const MaterialRegistry = @import("AssetSystem/MaterialRegistry.zig");
 const Loader = @import("AssetSystem/Loader.zig");
 const resolver = @import("AssetSystem/resolver.zig");
 
@@ -26,6 +27,7 @@ free_entries: std.ArrayList(u32) = .empty,
 texture_reg: TextureRegistry,
 mesh_reg: MeshRegistry,
 geometry_reg: GeometryRegistry,
+material_reg: MaterialRegistry,
 // registires for the other asset kinds...
 
 pending_patches: std.ArrayList(types.Patch) = .empty,
@@ -159,6 +161,9 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
     var geometry_reg = GeometryRegistry.init();
     errdefer geometry_reg.deinitNow(.from(ctx), alloc);
 
+    var material_reg = MaterialRegistry.init();
+    errdefer material_reg.deinitNow(.from(ctx), alloc);
+
     return .{
         .alloc = alloc,
         .loader = loader,
@@ -168,6 +173,7 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
         .texture_reg = texture_reg,
         .mesh_reg = mesh_reg,
         .geometry_reg = geometry_reg,
+        .material_reg = material_reg,
     };
 
     // UPDATE NOTE: let's not upload MeshDesc and LODEntries at load,
@@ -181,7 +187,7 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
     //          thus stable GPU side material schema and instance indices aren't needed
 }
 
-pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue })) void {
+pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
     self.loader.deinit(self.alloc, self.io());
     self.threaded_io.deinit();
 
@@ -194,6 +200,7 @@ pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue })) voi
     self.texture_reg.deinit(.from(ctx));
     self.mesh_reg.deinit(.from(ctx), self.alloc);
     self.geometry_reg.deinit(.from(ctx), self.alloc);
+    self.material_reg.deinit(.from(ctx), self.alloc);
 
     self.pending_patches.deinit(self.alloc);
 }
@@ -201,8 +208,8 @@ pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue })) voi
 pub const KindData = union(Kind) {
     texture: TextureRegistry.IngestTexture,
     sampled_texture: TextureRegistry.IngestSampledTexture,
-    material_schema: void,
-    material_instance: void,
+    material_schema: MaterialRegistry.IngestSchema,
+    material_instance: MaterialRegistry.IngestInstance,
     geometry: GeometryRegistry.IngestGeometry,
     mesh: MeshRegistry.MeshDescBlob,
     model: void,
@@ -302,8 +309,8 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
     const ret = try switch (data) {
         .texture => |d| asset_io.concurrent(TextureRegistry.ingestTexture, .{ asset_io, location, d }),
         .sampled_texture => |d| asset_io.concurrent(TextureRegistry.ingestSampledTexture, .{ self.alloc, asset_io, location, d }),
-        .material_schema => unreachable,
-        .material_instance => unreachable,
+        .material_schema => |d| asset_io.concurrent(MaterialRegistry.ingestSchema, .{ asset_io, location, d }),
+        .material_instance => |d| asset_io.concurrent(MaterialRegistry.ingestInstance, .{ self.alloc, asset_io, location, d }),
         .geometry => |d| asset_io.concurrent(GeometryRegistry.ingest, .{ asset_io, location, d }),
         .mesh => |d| asset_io.concurrent(MeshRegistry.ingest, .{ self.alloc, asset_io, location, d }),
         .model => unreachable,
@@ -367,20 +374,31 @@ pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport, .vm
         const remove = switch (pending) {
             .geometry_to_mesh => |patch| blk: {
                 std.debug.assert(kinds[patch.patch_gid.slot] == .geometry);
-                if (try self.geometry_reg.isReady(.from(ctx), patch.patch_dense)) {
-                    std.debug.assert(kinds[patch.target_mesh.slot] == .mesh);
-                    try self.mesh_reg.patch(dense[patch.target_mesh.slot], .{ patch.patch_gid, patch.patch_dense }, &self.geometry_reg);
+                if (!try self.geometry_reg.isReady(.from(ctx), patch.patch_dense)) break :blk false;
 
-                    break :blk true;
-                }
+                std.debug.assert(kinds[patch.target_mesh.slot] == .mesh);
+                try self.mesh_reg.patch(dense[patch.target_mesh.slot], .{ patch.patch_gid, patch.patch_dense }, &self.geometry_reg, &self.material_reg);
 
-                break :blk false;
+                break :blk true;
+            },
+            .material_instance_to_mesh => |patch| blk: {
+                std.debug.assert(kinds[patch.patch_gid.slot] == .material_instance);
+
+                const schema_dense = self.material_reg.getInstanceSchema(patch.patch_dense);
+                const upload_generation = self.material_reg.getUploadGeneration(schema_dense);
+                if (upload_generation <= patch.upload_generation) break :blk false;
+
+                std.debug.assert(kinds[patch.target_mesh.slot] == .mesh);
+                try self.mesh_reg.patch(dense[patch.target_mesh.slot], .{ patch.patch_gid, patch.patch_dense }, &self.geometry_reg, &self.material_reg);
+
+                break :blk true;
             },
         };
 
         if (remove) _ = self.pending_patches.swapRemove(i) else i += 1;
     }
 
+    try self.material_reg.tick(.from(ctx));
     try self.texture_reg.tick(.from(ctx));
     try self.mesh_reg.tick(.from(ctx));
 }
@@ -390,6 +408,8 @@ pub const GidError = error{
     GenerationMismatch,
 };
 
+// BUG: deinit path doesn't correctly order assets (order for asset deinit path needs to be pre, but currently is post)
+//      potential fix: store the root gids in an array, then build the order from this array after collecting the deltas (decide if post or pre based on delta)
 pub const CommandBuffer = struct {
     const Op = struct {
         delta: i32,
@@ -476,8 +496,8 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
         op.dense = try switch (op.kind) {
             .texture => self.texture_reg.newTexture(),
             .sampled_texture => self.texture_reg.newSampledTexture(.from(ctx)),
-            .material_schema => unreachable,
-            .material_instance => unreachable,
+            .material_schema => self.material_reg.newSchema(self.alloc),
+            .material_instance => self.material_reg.newInstance(self.alloc),
             .geometry => self.geometry_reg.new(self.alloc),
             .mesh => self.mesh_reg.new(self.alloc),
             .model => unreachable,
@@ -499,8 +519,34 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
             if (try switch (op.kind) {
                 .texture => self.texture_reg.releaseTexture(.from(ctx), op.dense, delta),
                 .sampled_texture => self.texture_reg.releaseSampledTexture(.from(ctx), op.dense, delta),
-                .material_schema => unreachable,
-                .material_instance => unreachable,
+                .material_schema => blk: {
+                    const status = try self.material_reg.releaseSchema(.from(ctx), self.alloc, op.dense, delta);
+                    if (status != .released) break :blk status;
+
+                    for (rdeps[gid.slot].items()) |rdep_gid| {
+                        const rdep_dense = dense[rdep_gid.slot];
+                        if (rdep_dense == std.math.maxInt(u32)) continue;
+                        if (kind[rdep_gid.slot] != .mesh) continue;
+
+                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
+                    }
+
+                    break :blk .released;
+                },
+                .material_instance => blk: {
+                    const status = try self.material_reg.releaseInstance(self.alloc, op.dense, delta);
+                    if (status != .released) break :blk status;
+
+                    for (rdeps[gid.slot].items()) |rdep_gid| {
+                        const rdep_dense = dense[rdep_gid.slot];
+                        if (rdep_dense == std.math.maxInt(u32)) continue;
+                        if (kind[rdep_gid.slot] != .mesh) continue;
+
+                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
+                    }
+
+                    break :blk .released;
+                },
                 .geometry => blk: {
                     const status = try self.geometry_reg.release(.from(ctx), self.alloc, op.dense, delta);
                     if (status != .released) break :blk status;
@@ -510,7 +556,7 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
                         if (rdep_dense == std.math.maxInt(u32)) continue;
                         if (kind[rdep_gid.slot] != .mesh) continue;
 
-                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg);
+                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
                     }
 
                     break :blk .released;
@@ -545,8 +591,36 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
             switch (op.kind) {
                 .texture => try self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, cold, op.dense, delta),
                 .sampled_texture => try self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .material_schema => unreachable,
-                .material_instance => unreachable,
+                .material_schema => {
+                    if (try self.material_reg.acquireSchema(self.alloc, self.io(), &self.loader, cold, op.dense, delta) == .incr) break;
+
+                    for (rdeps[gid.slot].items()) |rdep_gid| {
+                        const rdep_dense = dense[rdep_gid.slot];
+                        if (rdep_dense == std.math.maxInt(u32)) continue;
+                        if (kind[rdep_gid.slot] != .mesh) continue;
+
+                        // schema is "immediately" uploaded, instance buffer wil == .null_handle which is still valid (no instances uploaded)
+                        try self.mesh_reg.patch(rdep_dense, .{ gid, op.dense }, &self.geometry_reg, &self.material_reg);
+                    }
+                },
+                .material_instance => {
+                    const upload_generation = try self.material_reg.acquireInstance(self.alloc, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta) orelse break;
+
+                    for (rdeps[gid.slot].items()) |rdep_gid| {
+                        const rdep_dense = dense[rdep_gid.slot];
+                        if (rdep_dense == std.math.maxInt(u32)) continue;
+                        if (kind[rdep_gid.slot] != .mesh) continue;
+
+                        try self.pending_patches.append(self.alloc, .{
+                            .material_instance_to_mesh = .{
+                                .upload_generation = upload_generation,
+                                .patch_gid = gid,
+                                .patch_dense = op.dense,
+                                .target_mesh = rdep_gid,
+                            },
+                        });
+                    }
+                },
                 .geometry => {
                     if (try self.geometry_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, cold, op.dense, delta) == .incr) break;
 
@@ -564,7 +638,7 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
                         });
                     }
                 },
-                .mesh => try self.mesh_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, resolve_buf.items, cold, &self.geometry_reg, .{
+                .mesh => try self.mesh_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, resolve_buf.items, cold, &self.geometry_reg, &self.material_reg, .{
                     .target_mesh = gid,
                     .patches = &self.pending_patches,
                     .alloc = self.alloc,

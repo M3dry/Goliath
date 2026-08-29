@@ -63,8 +63,12 @@ pub fn init() GeometryRegistry {
     return .{};
 }
 
-pub fn deinit(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue }), alloc: Allocator) void {
-    for (self.geometries.items(.buffer)) |*buf| {
+pub fn deinit(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport }), alloc: Allocator) void {
+    const slice = self.geometries.slice();
+    for (slice.items(.buffer), slice.items(.tickets)) |*buf, tickets| {
+        ctx.view.transport.unqueue(tickets[0], false);
+        ctx.view.transport.unqueue(tickets[1], false);
+
         buf.deinit(.from(ctx));
     }
     self.geometries.deinit(alloc);
@@ -82,7 +86,10 @@ pub fn deinitNow(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .vma_allocator
 }
 
 pub fn new(self: *GeometryRegistry, alloc: Allocator) !u32 {
-    if (self.free.pop()) |free| return free;
+    if (self.free.pop()) |free| {
+        self.geometries.set(free, .{});
+        return free;
+    }
 
     try self.geometries.append(alloc, .{});
     return @intCast(self.geometries.len - 1);

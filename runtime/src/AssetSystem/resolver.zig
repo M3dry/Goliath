@@ -8,7 +8,6 @@ pub const ResolvedEntry = struct {
     gid: Gid,
     kind: Kind,
     dense: u32,
-
 };
 
 pub const Resolved = []const ResolvedEntry;

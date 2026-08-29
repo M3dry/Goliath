@@ -27,14 +27,13 @@ pub const Gid = packed struct(u64) {
      }
 };
 
-// mesh get loaded at init into GPU buffers, omitting the geometry and material
 pub const Kind = enum {
     texture,
-    sampled_texture, // sampler description + texture
-    material_schema, // reflection data on how to read a material_instance
-    material_instance, // n x sampled_texture + material schema
-    geometry, // pure geometry buffer with offsets
-    mesh, // n x (geometry + material instance) - for each LOD (LODs aren't shared, thus no asset handle for them)
+    sampled_texture,
+    material_schema, // reflection data on how to read a material_instance + shader
+    material_instance, // binary blob + deps: (n x sampled_texture + material schema)
+    geometry,
+    mesh,
     model, // n x (mesh + transform + ?(skeleton + skin(s))) - skin not stored on mesh because skins are tied to a specific skeleton
 
     skeleton, // contains animations - no need to have animations be a separate asset since they're specific to a skeleton
@@ -95,6 +94,7 @@ pub const IngestError = std.mem.Allocator.Error || std.Io.Cancelable || std.Io.F
 
 pub const PatchEnum = enum {
     geometry_to_mesh,
+    material_instance_to_mesh,
 };
 
 pub const Patch = union(PatchEnum) {
@@ -103,16 +103,24 @@ pub const Patch = union(PatchEnum) {
         patch_dense: u32,
         target_mesh: Gid,
     },
+    material_instance_to_mesh: struct {
+        upload_generation: u64,
+        patch_gid: Gid,
+        patch_dense: u32,
+        target_mesh: Gid,
+    },
 
     pub fn patch(self: Patch) struct {Gid, u32} {
         return switch (self) {
             .geometry_to_mesh => |d| .{ d.patch_gid, d.patch_dense },
+            .material_instance_to_mesh => |d| .{ d.patch_gid, d.patch_dense },
         };
     }
 
     pub fn target(self: Patch) Gid {
         return switch (self) {
             .geometry_to_mesh => |d| d.target_mesh,
+            .material_instance_to_mesh => |d| d.target_mesh,
         };
     }
 };
