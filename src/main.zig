@@ -275,7 +275,7 @@ pub fn main(init: std.process.Init) !void {
             if (!duplicate) {
                 material_deps[dep_count] = .{
                     .gid = gid.*,
-                    .necessary = false,
+                    .necessary = true,
                 };
                 dep_count += 1;
             }
