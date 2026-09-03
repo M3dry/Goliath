@@ -224,7 +224,6 @@ pub fn SmallBitset(comptime stack_count: usize) type {
 
 test {
     std.testing.refAllDecls(@This());
-    std.debug.print("{}\n", .{@sizeOf(SmallBitset(8))});
 }
 
 test "small bitset" {

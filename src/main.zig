@@ -66,14 +66,14 @@ fn geometryIngest(lod: runtime.Mesh.Lod) runtime.AssetSystem.GeometryRegistry.In
 /// single-lod mesh blob pointing at an ingested geometry; material gids are
 /// placeholder 0,0 until material handling exists. `lods_storage` backs the
 /// returned slice; the caller awaits the ingestion before it goes out of scope.
-fn meshBlob(mesh: *const runtime.Mesh, geometry_gid: runtime.AssetSystem.Gid, lods_storage: *[1]runtime.AssetSystem.MeshRegistry.LodEntryBlob) runtime.AssetSystem.MeshRegistry.MeshDescBlob {
+fn meshBlob(mesh: *const runtime.Mesh, geometry_gid: runtime.AssetSystem.Gid, schema_gid: runtime.AssetSystem.Gid, instance_gid: runtime.AssetSystem.Gid, lods_storage: *[1]runtime.AssetSystem.MeshRegistry.LodEntryBlob) runtime.AssetSystem.MeshRegistry.MeshDescBlob {
     const lod = mesh.lods[0];
     lods_storage.* = .{.{
         .geometry = geometry_gid,
         .vertex_count = lod.vertex_count,
         .draw_count = lod.draw_count,
-        .material_schema = .{ .gen = 0, .slot = 0 },
-        .material_instance = .{ .gen = 0, .slot = 0 },
+        .material_schema = schema_gid,
+        .material_instance = instance_gid,
         .error_metric = lod.error_metric,
     }};
     return .{
@@ -135,10 +135,6 @@ pub fn main(init: std.process.Init) !void {
 
     var imgui = try base.Imgui.init(gpa, .from(&ctx));
     defer imgui.deinit(.from(&ctx));
-
-    // PBR material instance: gltf texture indices → texture pool indices, resolved
-    // against the asset system's sampled textures.
-    var inst = try runtime.PbrShading.PBRInstance.fromGltf(gltf_data, 0);
 
     const asset_dir = "testing_asset_system";
     if (rebuild_assets) {
@@ -231,10 +227,72 @@ pub fn main(init: std.process.Init) !void {
         const body_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(body_mesh.lods[0]) }, "body_geometry");
         const helmet_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(helmet_mesh.lods[0]) }, "helmet_geometry");
 
+        // TODO: material ingestion
+        const schema_gid = try ingestAndFinalize(&asset_system, .{
+            .material_schema = .{
+                .blob_size = @sizeOf(runtime.PbrShading.GPUPBRInstance),
+                .texture_offsets = runtime.PbrShading.PBRInstance.texture_offsets,
+            },
+        }, "pbr_schema");
+
+        // PBR material instance: gltf texture indices → texture pool indices, resolved
+        // against the asset system's sampled textures.
+        const inst = try runtime.PbrShading.GltfPBRInstance.fromGltf(gltf_data, 0);
+        var asset_inst: runtime.PbrShading.PBRInstance = undefined;
+
+        // Map the material's 5 texture slots to sampled textures in the manifest.
+        const slot_fields = [5]u32{ inst.albedo_map, inst.metallic_roughness_map, inst.normal_map, inst.occlusion_map, inst.emissive_map };
+        const slot_tags = [_]Slot{ .albedo, .metallic_roughness, .normal, .occlusion, .emissive };
+        var slot_bufs: [5][64]u8 = undefined;
+        var slot_gids = [_]*runtime.AssetSystem.Gid{ &asset_inst.albedo_map, &asset_inst.metallic_roughness_map, &asset_inst.normal_map, &asset_inst.occlusion_map, &asset_inst.emissive_map };
+        for (&slot_gids, slot_tags, slot_fields, &slot_bufs) |gid, slot, field, *buf| {
+            gid.* = (asset_system.findEntry(.sampled_texture, slotName(slot, field, buf))) orelse return error.SampledTextureNotFound;
+        }
+
+        asset_inst.albedo_texcoord = inst.albedo_texcoord;
+        asset_inst.metallic_roughness_texcoord = inst.metallic_roughness_texcoord;
+        asset_inst.normal_texcoord = inst.normal_texcoord;
+        asset_inst.occlusion_texcoord = inst.occlusion_texcoord;
+        asset_inst.emissive_texcoord = inst.emissive_texcoord;
+        asset_inst.albedo = inst.albedo;
+        asset_inst.metallic_factor = inst.metallic_factor;
+        asset_inst.roughness_factor = inst.roughness_factor;
+        asset_inst.normal_factor = inst.normal_factor;
+        asset_inst.occlusion_factor = inst.occlusion_factor;
+        asset_inst.emissive_factor = inst.emissive_factor;
+
+        var material_deps: [5]runtime.AssetSystem.MaterialRegistry.IngestInstance.Dep = undefined;
+        var dep_count: usize = 0;
+        for (slot_gids) |gid| {
+            var duplicate = false;
+            for (material_deps[0..dep_count]) |dep| {
+                if (dep.gid == gid.*) {
+                    duplicate = true;
+                    break;
+                }
+            }
+
+            if (!duplicate) {
+                material_deps[dep_count] = .{
+                    .gid = gid.*,
+                    .necessary = false,
+                };
+                dep_count += 1;
+            }
+        }
+
+        const material_gid = try ingestAndFinalize(&asset_system, .{
+            .material_instance = .{
+                .schema = schema_gid,
+                .blob = std.mem.asBytes(&asset_inst),
+                .deps = material_deps[0..dep_count],
+            }
+        }, "paladin_material");
+
         var body_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
-        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&body_mesh, body_geo_gid, &body_lods) }, "body_mesh");
+        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&body_mesh, body_geo_gid, schema_gid, material_gid, &body_lods) }, "body_mesh");
         var helmet_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
-        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&helmet_mesh, helmet_geo_gid, &helmet_lods) }, "helmet_mesh");
+        _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&helmet_mesh, helmet_geo_gid, schema_gid, material_gid, &helmet_lods) }, "helmet_mesh");
 
         // write the manifest
         var manifest_writer_buf: [1024]u8 = undefined;
@@ -246,29 +304,25 @@ pub fn main(init: std.process.Init) !void {
         try manifest_writer.flush();
     }
 
-    // Map the material's 5 texture slots to sampled textures in the manifest.
-    const slot_fields = [5]u32{ inst.albedo_map, inst.metallic_roughness_map, inst.normal_map, inst.occlusion_map, inst.emissive_map };
-    const slot_tags = [_]Slot{ .albedo, .metallic_roughness, .normal, .occlusion, .emissive };
-    var slot_bufs: [5][64]u8 = undefined;
-    var slot_gids: [5]runtime.AssetSystem.Gid = undefined;
-    for (&slot_gids, slot_tags, slot_fields, &slot_bufs) |*gid, slot, field, *buf| {
-        gid.* = (asset_system.findEntry(.sampled_texture, slotName(slot, field, buf))) orelse return error.SampledTextureNotFound;
-    }
-
     const body_mesh_gid = asset_system.findEntry(.mesh, "body_mesh") orelse return error.AssetEntryNotFound;
     const helmet_mesh_gid = asset_system.findEntry(.mesh, "helmet_mesh") orelse return error.AssetEntryNotFound;
     const body_geo_gid = asset_system.findEntry(.geometry, "body_geometry") orelse return error.AssetEntryNotFound;
     const helmet_geo_gid = asset_system.findEntry(.geometry, "helmet_geometry") orelse return error.AssetEntryNotFound;
+    const pbr_schema_gid = asset_system.findEntry(.material_schema, "pbr_schema") orelse return error.AssetEntryNotFound;
+    const material_gid = asset_system.findEntry(.material_instance, "paladin_material") orelse return error.AssetEntryNotFound;
 
     var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
     defer asset_cmd_buf.deinit();
-    for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
+    try asset_cmd_buf.request(&asset_system, material_gid);
+    // for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
     try asset_cmd_buf.request(&asset_system, body_mesh_gid);
     try asset_cmd_buf.request(&asset_system, helmet_mesh_gid);
-    // geometry deps on meshes are soft; request them explicitly
+    // geometry and instance deps on meshes are soft; request them explicitly
     try asset_cmd_buf.request(&asset_system, body_geo_gid);
     try asset_cmd_buf.request(&asset_system, helmet_geo_gid);
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
+
+    const pbr_schema_id = asset_system.denseIndex(pbr_schema_gid);
 
     // wait for the first mesh desc / lod upload so the render graph can bind
     // non-empty registry buffers; geometry patches may land a few ticks later,
@@ -285,18 +339,6 @@ pub fn main(init: std.process.Init) !void {
     //     try asset_system.texture_reg.tick(.from(&ctx));
     //     std.Thread.yield() catch {};
     // }
-
-    var mat_handler = runtime.MaterialHandler{};
-    defer mat_handler.deinit(gpa, .from(&ctx));
-
-    inst.albedo_map = asset_system.denseIndex(slot_gids[0]);
-    inst.metallic_roughness_map = asset_system.denseIndex(slot_gids[1]);
-    inst.normal_map = asset_system.denseIndex(slot_gids[2]);
-    inst.occlusion_map = asset_system.denseIndex(slot_gids[3]);
-    inst.emissive_map = asset_system.denseIndex(slot_gids[4]);
-    try mat_handler.append(gpa, 0, inst);
-    try mat_handler.flush(.from(&ctx));
-    try waitForTick(.from(&ctx), mat_handler.schema_tickets[0]);
 
     // Give the graph a bindable id for the asset system's texture pool set, on every frame.
     var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
@@ -657,10 +699,11 @@ pub fn main(init: std.process.Init) !void {
                 .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
                 .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
             });
+            const instances_buf = asset_system.material_reg.getInstancesBuffer(pbr_schema_id);
             const instances_ref = try rg.addBuffer(.{
-                .buffer = mat_handler.schema_bufs[0],
+                .buffer = instances_buf,
                 .offset = 0,
-                .size = mat_handler.schema_bufs[0].size,
+                .size = instances_buf.size,
                 .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
                 .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
             });

@@ -146,7 +146,11 @@ pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .transport }), alloc
                 .vertex_count = lblob.vertex_count,
                 .draw_count = lblob.draw_count,
                 .material_schema = schema_dense,
-                .material_instance = material_registry.getInstanceDense(instance_dense),
+                .material_instance = if (instance_dense == std.math.maxInt(u32)) instance_dense else material_registry.getInstanceDense(instance_dense) orelse blk: {
+                    // try patcher.addMaterialInstance(.{ lbob.material_instance, instance_dense })
+
+                    break :blk std.math.maxInt(u32);
+                },
                 .error_metric = lblob.error_metric,
             };
             patch_lookup.* = .init(.{
@@ -224,7 +228,10 @@ pub fn ingest(alloc: Allocator, io: std.Io, location: types.IngestLocation, mesh
 }
 
 pub fn patch(self: *MeshRegistry, target: u32, resolved: struct {Gid, u32}, geometry_reg: *GeometryRegistry, material_reg: *MaterialRegistry) !void {
-    const desc = self.meshes.items(.desc)[target];
+    const meshes_slice = self.meshes.slice();
+    const desc = meshes_slice.items(.desc)[target];
+    const ref_count = meshes_slice.items(.ref_count)[target];
+    if (ref_count == 0) return;
 
     const lods_slice = self.lods.slice();
     const patch_lookups = lods_slice.items(.patch_lookup)[desc.lod_offset..][0..desc.lod_count];
@@ -232,12 +239,14 @@ pub fn patch(self: *MeshRegistry, target: u32, resolved: struct {Gid, u32}, geom
     for (0.., patch_lookups) |lod_ix, *lookup| {
         var it = lookup.iterator();
         while (it.next()) |e| {
-            if (e.value.* != resolved.@"0") continue;
+            if (e.value.* != resolved.@"0") {
+                continue;
+            }
 
             const lod_entry = &lods_slice.items(.entries)[desc.lod_offset + lod_ix];
             switch (e.key) {
                 .geometry => lod_entry.buffer_address = if (resolved.@"1" == std.math.maxInt(u32)) 0 else geometry_reg.getAddress(resolved.@"1"),
-                .material_instance => lod_entry.material_instance = material_reg.getInstanceDense(resolved.@"1"),
+                .material_instance => lod_entry.material_instance = material_reg.getInstanceDense(resolved.@"1") orelse @panic("The patching tick logic is broken very likely"),
                 .material_schema => lod_entry.material_schema = resolved.@"1",
             }
             found = true;

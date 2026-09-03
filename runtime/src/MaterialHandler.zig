@@ -7,11 +7,11 @@ const Self = @This();
 
 /// Temporary stand-in for the asset loader: per-schema CPU arrays + GPU instance
 /// buffers, MeshHandler-style. `append`/`flush` uploads; the loader will replace this.
-schema_items: [Visbuffer.max_schemas]std.ArrayListUnmanaged(PbrShading.PBRInstance) = .{std.ArrayListUnmanaged(PbrShading.PBRInstance).empty} ** Visbuffer.max_schemas,
+schema_items: [Visbuffer.max_schemas]std.ArrayListUnmanaged(PbrShading.GPUPBRInstance) = .{std.ArrayListUnmanaged(PbrShading.GltfPBRInstance).empty} ** Visbuffer.max_schemas,
 schema_bufs: [Visbuffer.max_schemas]base.Buffer = .{base.Buffer.empty} ** Visbuffer.max_schemas,
 schema_tickets: [Visbuffer.max_schemas]base.Transport.Ticket = .{base.Transport.Ticket.none} ** Visbuffer.max_schemas,
 
-pub fn append(self: *Self, alloc: std.mem.Allocator, schema: usize, instance: PbrShading.PBRInstance) !void {
+pub fn append(self: *Self, alloc: std.mem.Allocator, schema: usize, instance: PbrShading.GPUPBRInstance) !void {
     try self.schema_items[schema].append(alloc, instance);
 }
 
@@ -29,7 +29,7 @@ pub fn flush(self: *Self, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .grap
             continue;
         }
 
-        self.schema_bufs[schema] = try base.Buffer.init(.from(ctx), .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.PBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
+        self.schema_bufs[schema] = try base.Buffer.init(.from(ctx), .graphics, "Material instances", @as(u64, self.schema_items[schema].items.len) * @sizeOf(PbrShading.GPUPBRInstance), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
         self.schema_tickets[schema] = try ctx.view.transport.uploadBuffer(true, std.mem.sliceAsBytes(self.schema_items[schema].items), null, null, self.schema_bufs[schema].handle, 0, dst_stage, dst_access, true);
     }
 }

@@ -9,6 +9,8 @@ const zcgltf = zmesh.io.zcgltf;
 
 const Self = @This();
 
+const AssetGid = @import("AssetSystem.zig").Gid;
+
 pipeline: base.ComputePipeline,
 ubo_set_layout: base.vk.DescriptorSetLayout,
 
@@ -19,6 +21,35 @@ pub const no_texture: u32 = std.math.maxInt(u32);
 pub const schema_id: u16 = 0;
 
 pub const PBRInstance = extern struct {
+    albedo_map: AssetGid,
+    metallic_roughness_map: AssetGid,
+    normal_map: AssetGid,
+    occlusion_map: AssetGid,
+    emissive_map: AssetGid,
+
+    albedo_texcoord: u32,
+    metallic_roughness_texcoord: u32,
+    normal_texcoord: u32,
+    occlusion_texcoord: u32,
+    emissive_texcoord: u32,
+
+    albedo: [4]f32,
+    metallic_factor: f32,
+    roughness_factor: f32,
+    normal_factor: f32,
+    occlusion_factor: f32,
+    emissive_factor: [3]f32,
+
+    pub const texture_offsets: []const usize = &.{
+        @offsetOf(PBRInstance, "albedo_map"),
+        @offsetOf(PBRInstance, "metallic_roughness_map"),
+        @offsetOf(PBRInstance, "normal_map"),
+        @offsetOf(PBRInstance, "occlusion_map"),
+        @offsetOf(PBRInstance, "emissive_map"),
+    };
+};
+
+pub const GltfPBRInstance = struct {
     albedo_map: u32,
     metallic_roughness_map: u32,
     normal_map: u32,
@@ -40,12 +71,12 @@ pub const PBRInstance = extern struct {
 
     /// Texture slots carry glTF texture indices (or `no_texture`); the loader
     /// remaps them to texture-pool indices before the instance buffer is uploaded.
-    pub fn fromGltf(data: *zcgltf.Data, material_index: u32) !PBRInstance {
+    pub fn fromGltf(data: *zcgltf.Data, material_index: u32) !GltfPBRInstance {
         const materials = data.materials orelse return error.NoMaterials;
         if (material_index >= data.materials_count) return error.InvalidMaterialIndex;
         const mat = &materials[material_index];
 
-        var inst = PBRInstance{
+        var inst = GltfPBRInstance{
             .albedo_map = no_texture,
             .metallic_roughness_map = no_texture,
             .normal_map = no_texture,
@@ -103,6 +134,27 @@ pub const PBRInstance = extern struct {
 
         return inst;
     }
+};
+
+pub const GPUPBRInstance = extern struct {
+    albedo_map: u32,
+    metallic_roughness_map: u32,
+    normal_map: u32,
+    occlusion_map: u32,
+    emissive_map: u32,
+
+    albedo_texcoord: u32,
+    metallic_roughness_texcoord: u32,
+    normal_texcoord: u32,
+    occlusion_texcoord: u32,
+    emissive_texcoord: u32,
+
+    albedo: [4]f32,
+    metallic_factor: f32,
+    roughness_factor: f32,
+    normal_factor: f32,
+    occlusion_factor: f32,
+    emissive_factor: [3]f32,
 };
 
 pub const PBRPC = struct {

@@ -222,7 +222,9 @@ pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !G
 
     var e = entry;
     for (e.deps.gids.items()) |gid| {
-        if (gid.slot >= self.entries.len) return error.NonExistentGidReferenced;
+        if (gid.slot >= self.entries.len) {
+            return error.NonExistentGidReferenced;
+        }
         if (gens[gid.slot] != gid.gen) return error.StaleGidReferenced;
     }
 
