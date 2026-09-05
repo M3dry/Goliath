@@ -68,6 +68,7 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     for (uint i = 0; i < md.lod_count; i++) {
         LODEntry le = pc.lod_entries[md.lod_offset + i];
         if (uint64_t(le.geometry) == 0) continue;
+        if (le.material_instance == 0xFFFFFFFF) continue;
 
         float pixel_size = le.error_metric / (dist * ppf + 0.001);
         if (pixel_size > 1.0) {

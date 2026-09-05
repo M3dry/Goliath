@@ -7,6 +7,7 @@ pub const TextureRegistry = @import("AssetSystem/TextureRegistry.zig");
 pub const MeshRegistry = @import("AssetSystem/MeshRegistry.zig");
 pub const GeometryRegistry = @import("AssetSystem/GeometryRegistry.zig");
 pub const MaterialRegistry = @import("AssetSystem/MaterialRegistry.zig");
+pub const SkeletonRegistry = @import("AssetSystem/SkeletonRegistry.zig");
 const Loader = @import("AssetSystem/Loader.zig");
 const resolver = @import("AssetSystem/resolver.zig");
 
@@ -28,7 +29,7 @@ texture_reg: TextureRegistry,
 mesh_reg: MeshRegistry,
 geometry_reg: GeometryRegistry,
 material_reg: MaterialRegistry,
-// registires for the other asset kinds...
+skeleton_reg: SkeletonRegistry,
 
 pending_patches: std.ArrayList(types.Patch) = .empty,
 
@@ -164,6 +165,9 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
     var material_reg = MaterialRegistry.init();
     errdefer material_reg.deinitNow(.from(ctx), alloc);
 
+    var skeleton_reg = SkeletonRegistry.init();
+    errdefer skeleton_reg.deinit(alloc);
+
     return .{
         .alloc = alloc,
         .loader = loader,
@@ -174,17 +178,8 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
         .mesh_reg = mesh_reg,
         .geometry_reg = geometry_reg,
         .material_reg = material_reg,
+        .skeleton_reg = skeleton_reg,
     };
-
-    // UPDATE NOTE: let's not upload MeshDesc and LODEntries at load,
-    //              instead acquire(gid of kind mesh & model) populates the MeshDesc and lod entries gpu buffers
-    //              this makes it possible to say upload only meshes for the current scenes, and the GPU requests from them - since we already do batching via the command buffer we can do the whole mesh desc upload in one pass
-    //              then calling acquire(gid of kind geometry) will upload the geometry and patch up all of it's rdeps that are on the GPU - if afterhand a meshdesc gets added, it points it's lods to the geometry if it's uploaded
-    // CONSEQUENCE: need to a "contract" param in the deps that says if that dependency is a hard one or not - i.e. do we need to immediately load the asset - mesh's geometry deps will be marked as soft eg
-    // TODO: upload metadata to the GPU (Mesh&LOD descs)
-    //       this opens the possibility of the GPU requesting assets based on visibility
-    //       uploaded LOD descs have -1 for material schema and instance, once geometry is loaded it gets patched to the right indices along with the geometry pointer
-    //          thus stable GPU side material schema and instance indices aren't needed
 }
 
 pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport })) void {
@@ -201,6 +196,7 @@ pub fn deinit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .destroy_queue, .trans
     self.mesh_reg.deinit(.from(ctx), self.alloc);
     self.geometry_reg.deinit(.from(ctx), self.alloc);
     self.material_reg.deinit(.from(ctx), self.alloc);
+    self.skeleton_reg.deinit(self.alloc);
 
     self.pending_patches.deinit(self.alloc);
 }
@@ -213,7 +209,7 @@ pub const KindData = union(Kind) {
     geometry: GeometryRegistry.IngestGeometry,
     mesh: MeshRegistry.MeshDescBlob,
     model: void,
-    skeleton: void,
+    skeleton: SkeletonRegistry.IngestData,
 };
 
 pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !Gid {
@@ -316,7 +312,7 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
         .geometry => |d| asset_io.concurrent(GeometryRegistry.ingest, .{ asset_io, location, d }),
         .mesh => |d| asset_io.concurrent(MeshRegistry.ingest, .{ self.alloc, asset_io, location, d }),
         .model => unreachable,
-        .skeleton => unreachable,
+        .skeleton => |d| asset_io.concurrent(SkeletonRegistry.ingest, .{ asset_io, location, d }),
     };
     return ret;
 }
@@ -392,6 +388,7 @@ pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport, .vm
 
                 std.debug.assert(kinds[patch.target_mesh.slot] == .mesh);
                 try self.mesh_reg.patch(dense[patch.target_mesh.slot], .{ patch.patch_gid, patch.patch_dense }, &self.geometry_reg, &self.material_reg);
+                try self.mesh_reg.patch(dense[patch.target_mesh.slot], .{ patch.schema_gid, schema_dense }, &self.geometry_reg, &self.material_reg);
 
                 break :blk true;
             },
@@ -410,8 +407,6 @@ pub const GidError = error{
     GenerationMismatch,
 };
 
-// BUG: deinit path doesn't correctly order assets (order for asset deinit path needs to be pre, but currently is post)
-//      potential fix: store the root gids in an array, then build the order from this array after collecting the deltas (decide if post or pre based on delta)
 pub const CommandBuffer = struct {
     const Op = struct {
         delta: i32,
@@ -422,7 +417,7 @@ pub const CommandBuffer = struct {
     alloc: Allocator,
     ops: std.AutoHashMapUnmanaged(Gid, Op) = .empty,
     visited: std.AutoHashMapUnmanaged(Gid, void) = .empty, // per-walk dedup scratch
-    order: std.ArrayList(Gid) = .empty, // post-order, deduped across walks
+    order: std.ArrayList(Gid) = .empty, // releases (pre-order) then acquires (post-order), built by buildOrder
 
     pub fn init(alloc: Allocator) CommandBuffer {
         return .{
@@ -434,6 +429,13 @@ pub const CommandBuffer = struct {
         self.ops.deinit(self.alloc);
         self.visited.deinit(self.alloc);
         self.order.deinit(self.alloc);
+    }
+
+    pub fn clear(self: *CommandBuffer) void {
+        self.deinit();
+        self.ops = .empty;
+        self.visited = .empty;
+        self.order = .empty;
     }
 
     pub fn request(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) (GidError || error{ OutOfMemory })!void {
@@ -457,13 +459,11 @@ pub const CommandBuffer = struct {
 
         try self.visited.put(self.alloc, gid, {});
 
-        const dense = slice.items(.dense)[gid.slot];
         const gop = try self.ops.getOrPut(self.alloc, gid);
-        const is_new = !gop.found_existing;
-        if (is_new) {
+        if (!gop.found_existing) {
             gop.value_ptr.* = .{
                 .delta = 0,
-                .dense = dense,
+                .dense = slice.items(.dense)[gid.slot],
                 .kind = slice.items(.kind)[gid.slot],
             };
         }
@@ -475,8 +475,53 @@ pub const CommandBuffer = struct {
 
             try self.walkRec(slice, dep, step);
         }
+    }
 
-        if (is_new) try self.order.append(self.alloc, gid);
+    fn buildOrder(self: *CommandBuffer, system: *const AssetSystem) !void {
+        self.order.clearRetainingCapacity();
+        defer self.visited.clearRetainingCapacity();
+
+        const slice = system.entries.slice();
+
+        {
+            var it = self.ops.iterator();
+            while (it.next()) |kv| {
+                if (kv.value_ptr.delta >= 0) continue;
+                try self.buildOrderDfsPre(slice, kv.key_ptr.*);
+            }
+        }
+
+        {
+            var it = self.ops.iterator();
+            while (it.next()) |kv| {
+                if (kv.value_ptr.delta <= 0) continue;
+                try self.buildOrderDfsPost(slice, kv.key_ptr.*);
+            }
+        }
+    }
+
+    fn buildOrderDfsPre(self: *CommandBuffer, slice: std.MultiArrayList(Entry).Slice, gid: Gid) !void {
+        if (self.visited.contains(gid) or !self.ops.contains(gid)) return;
+        try self.visited.put(self.alloc, gid, {});
+        try self.order.append(self.alloc, gid);
+
+        const deps = &slice.items(.deps)[gid.slot];
+        for (deps.gids.items(), 0..) |dep, ix| {
+            if (!deps.necessary.isSet(ix)) continue;
+            try self.buildOrderDfsPre(slice, dep);
+        }
+    }
+
+    fn buildOrderDfsPost(self: *CommandBuffer, slice: std.MultiArrayList(Entry).Slice, gid: Gid) !void {
+        if (self.visited.contains(gid) or !self.ops.contains(gid)) return;
+        try self.visited.put(self.alloc, gid, {});
+
+        const deps = &slice.items(.deps)[gid.slot];
+        for (deps.gids.items(), 0..) |dep, ix| {
+            if (!deps.necessary.isSet(ix)) continue;
+            try self.buildOrderDfsPost(slice, dep);
+        }
+        try self.order.append(self.alloc, gid);
     }
 };
 
@@ -503,153 +548,152 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
             .geometry => self.geometry_reg.new(self.alloc),
             .mesh => self.mesh_reg.new(self.alloc),
             .model => unreachable,
-            .skeleton => unreachable,
+            .skeleton => self.skeleton_reg.new(self.alloc),
         };
 
         dense[kv.key_ptr.slot] = op.dense;
     }
 
+    try cmds.buildOrder(self);
+
     var resolve_buf: std.ArrayList(resolver.ResolvedEntry) = .empty;
     defer resolve_buf.deinit(self.alloc);
 
-    for (cmds.order.items) |gid| {
+    var i: usize = 0;
+    const len = cmds.order.items.len;
+
+    while (i < len) : (i += 1) {
+        const gid = cmds.order.items[i];
         const op = cmds.ops.get(gid).?;
-        if (op.delta < 0) {
-            std.debug.assert(op.dense != std.math.maxInt(u32));
+        if (op.delta >= 0) break;
+        std.debug.assert(op.dense != std.math.maxInt(u32));
 
-            const delta: u32 = @intCast(-op.delta);
-            if (try switch (op.kind) {
-                .texture => self.texture_reg.releaseTexture(.from(ctx), op.dense, delta),
-                .sampled_texture => self.texture_reg.releaseSampledTexture(.from(ctx), op.dense, delta),
-                .material_schema => blk: {
-                    const status = try self.material_reg.releaseSchema(.from(ctx), self.alloc, op.dense, delta);
-                    if (status != .released) break :blk status;
+        const delta: u32 = @intCast(-op.delta);
+        if (try switch (op.kind) {
+            .texture => self.texture_reg.releaseTexture(.from(ctx), op.dense, delta),
+            .sampled_texture => self.texture_reg.releaseSampledTexture(.from(ctx), op.dense, delta),
+            .material_schema => blk: {
+                const status = try self.material_reg.releaseSchema(.from(ctx), self.alloc, op.dense, delta);
+                if (status != .released) break :blk status;
 
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
+                for (rdeps[gid.slot].items()) |rdep_gid| {
+                    const rdep_dense = dense[rdep_gid.slot];
+                    if (rdep_dense == std.math.maxInt(u32)) continue;
+                    if (kind[rdep_gid.slot] != .mesh) continue;
 
-                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
-                    }
-
-                    break :blk .released;
-                },
-                .material_instance => blk: {
-                    const status = try self.material_reg.releaseInstance(self.alloc, op.dense, delta);
-                    if (status != .released) break :blk status;
-
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
-
-                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
-                    }
-
-                    break :blk .released;
-                },
-                .geometry => blk: {
-                    const status = try self.geometry_reg.release(.from(ctx), self.alloc, op.dense, delta);
-                    if (status != .released) break :blk status;
-
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
-
-                        try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
-                    }
-
-                    break :blk .released;
-                },
-                .mesh => self.mesh_reg.release(self.alloc, op.dense, delta),
-                .model => unreachable,
-
-                .skeleton => unreachable,
-            } == .released) {
-                var i: usize = 0;
-                while (i < self.pending_patches.items.len) {
-                    if (self.pending_patches.items[i].target() == gid or self.pending_patches.items[i].patch().@"0" == gid) {
-                        _ = self.pending_patches.swapRemove(i);
-                    } else i += 1;
+                    try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
                 }
 
-                dense[gid.slot] = std.math.maxInt(u32);
+                break :blk .released;
+            },
+            .material_instance => blk: {
+                const status = try self.material_reg.releaseInstance(self.alloc, op.dense, delta);
+                if (status != .released) break :blk status;
+
+                for (rdeps[gid.slot].items()) |rdep_gid| {
+                    const rdep_dense = dense[rdep_gid.slot];
+                    if (rdep_dense == std.math.maxInt(u32)) continue;
+                    if (kind[rdep_gid.slot] != .mesh) continue;
+
+                    try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
+                }
+
+                break :blk .released;
+            },
+            .geometry => blk: {
+                const status = try self.geometry_reg.release(.from(ctx), self.alloc, op.dense, delta);
+                if (status != .released) break :blk status;
+
+                for (rdeps[gid.slot].items()) |rdep_gid| {
+                    const rdep_dense = dense[rdep_gid.slot];
+                    if (rdep_dense == std.math.maxInt(u32)) continue;
+                    if (kind[rdep_gid.slot] != .mesh) continue;
+
+                    try self.mesh_reg.patch(rdep_dense, .{ gid, std.math.maxInt(u32) }, &self.geometry_reg, &self.material_reg);
+                }
+
+                break :blk .released;
+            },
+            .mesh => self.mesh_reg.release(self.alloc, op.dense, delta),
+            .model => unreachable,
+            .skeleton => self.skeleton_reg.release(self.alloc, op.dense, delta),
+        } == .released) {
+            var j: usize = 0;
+            while (j < self.pending_patches.items.len) {
+                if (self.pending_patches.items[j].target() == gid or self.pending_patches.items[j].patch().@"0" == gid) {
+                    _ = self.pending_patches.swapRemove(j);
+                } else j += 1;
             }
-        } else if (op.delta > 0) {
-            const delta: u32 = @intCast(op.delta);
-            const cold = &cold_assets[gid.slot];
 
-            resolve_buf.clearRetainingCapacity();
-            for (deps[gid.slot].gids.items()) |dep_gid| {
-                try resolve_buf.append(self.alloc, .{
-                    .gid = dep_gid,
-                    .kind = kind[dep_gid.slot],
-                    .dense = dense[dep_gid.slot],
-                });
-            }
+            dense[gid.slot] = std.math.maxInt(u32);
+        }
+    }
 
-            switch (op.kind) {
-                .texture => try self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, cold, op.dense, delta),
-                .sampled_texture => try self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
-                .material_schema => {
-                    if (try self.material_reg.acquireSchema(self.alloc, self.io(), &self.loader, cold, op.dense, delta) == .incr) break;
+    while (i < len) : (i += 1) {
+        const gid = cmds.order.items[i];
+        const op = cmds.ops.get(gid).?;
+        std.debug.assert(op.delta > 0);
 
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
+        const delta: u32 = @intCast(op.delta);
+        const cold = &cold_assets[gid.slot];
 
-                        // schema is "immediately" uploaded, instance buffer wil == .null_handle which is still valid (no instances uploaded)
-                        try self.mesh_reg.patch(rdep_dense, .{ gid, op.dense }, &self.geometry_reg, &self.material_reg);
-                    }
-                },
-                .material_instance => {
-                    const upload_generation = try self.material_reg.acquireInstance(self.alloc, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta) orelse break;
+        resolve_buf.clearRetainingCapacity();
+        for (deps[gid.slot].gids.items()) |dep_gid| {
+            try resolve_buf.append(self.alloc, .{
+                .gid = dep_gid,
+                .kind = kind[dep_gid.slot],
+                .dense = dense[dep_gid.slot],
+            });
+        }
 
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
+        switch (op.kind) {
+            .texture => try self.texture_reg.acquireTexture(.from(ctx), self.io(), &self.loader, cold, op.dense, delta),
+            .sampled_texture => try self.texture_reg.acquireSampledTexture(.from(ctx), self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta),
+            .material_schema => try self.material_reg.acquireSchema(self.alloc, self.io(), &self.loader, cold, op.dense, delta),
+            .material_instance => {
+                const upload_generation, const schema_gid = try self.material_reg.acquireInstance(self.alloc, self.io(), &self.loader, resolve_buf.items, cold, op.dense, delta) orelse break;
 
-                        try self.pending_patches.append(self.alloc, .{
-                            .material_instance_to_mesh = .{
-                                .upload_generation = upload_generation,
-                                .patch_gid = gid,
-                                .patch_dense = op.dense,
-                                .target_mesh = rdep_gid,
-                            },
-                        });
-                    }
-                },
-                .geometry => {
-                    if (try self.geometry_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, cold, op.dense, delta) == .incr) break;
+                for (rdeps[gid.slot].items()) |rdep_gid| {
+                    const rdep_dense = dense[rdep_gid.slot];
+                    if (rdep_dense == std.math.maxInt(u32)) continue;
+                    if (kind[rdep_gid.slot] != .mesh) continue;
 
-                    for (rdeps[gid.slot].items()) |rdep_gid| {
-                        const rdep_dense = dense[rdep_gid.slot];
-                        if (rdep_dense == std.math.maxInt(u32)) continue;
-                        if (kind[rdep_gid.slot] != .mesh) continue;
+                    try self.pending_patches.append(self.alloc, .{
+                        .material_instance_to_mesh = .{
+                            .upload_generation = upload_generation,
+                            .schema_gid = schema_gid,
+                            .patch_gid = gid,
+                            .patch_dense = op.dense,
+                            .target_mesh = rdep_gid,
+                        },
+                    });
+                }
+            },
+            .geometry => {
+                if (try self.geometry_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, cold, op.dense, delta) == .incr) break;
 
-                        try self.pending_patches.append(self.alloc, .{
-                            .geometry_to_mesh = .{
-                                .patch_gid = gid,
-                                .patch_dense = op.dense,
-                                .target_mesh = rdep_gid,
-                            }
-                        });
-                    }
-                },
-                .mesh => try self.mesh_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, resolve_buf.items, cold, &self.geometry_reg, &self.material_reg, .{
-                    .target_mesh = gid,
-                    .patches = &self.pending_patches,
-                    .alloc = self.alloc,
-                }, op.dense, delta),
-                .model => unreachable,
+                for (rdeps[gid.slot].items()) |rdep_gid| {
+                    const rdep_dense = dense[rdep_gid.slot];
+                    if (rdep_dense == std.math.maxInt(u32)) continue;
+                    if (kind[rdep_gid.slot] != .mesh) continue;
 
-                .skeleton => unreachable,
-            }
-        } else continue;
+                    try self.pending_patches.append(self.alloc, .{
+                        .geometry_to_mesh = .{
+                            .patch_gid = gid,
+                            .patch_dense = op.dense,
+                            .target_mesh = rdep_gid,
+                        }
+                    });
+                }
+            },
+            .mesh => try self.mesh_reg.acquire(.from(ctx), self.alloc, self.io(), &self.loader, resolve_buf.items, cold, &self.geometry_reg, &self.material_reg, .{
+                .target_mesh = gid,
+                .patches = &self.pending_patches,
+                .alloc = self.alloc,
+            }, op.dense, delta),
+            .model => unreachable,
+            .skeleton => try self.skeleton_reg.acquire(self.alloc, self.io(), &self.loader, cold, op.dense, delta),
+        }
     }
 
     cmds.ops.clearRetainingCapacity();

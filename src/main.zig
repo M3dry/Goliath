@@ -109,25 +109,8 @@ pub fn main(init: std.process.Init) !void {
     const gltf_data = try zmesh.io.parseAndLoadFile("Paladin.glb");
     defer zmesh.io.freeData(gltf_data);
 
-    const skeleton = try runtime.Skeleton.fromGltf(gpa, gltf_data, 66);
-    defer skeleton.deinit(gpa);
-
-    const skin = try runtime.Skin.fromGltf(gpa, gltf_data, 0, &skeleton);
-    defer skin.deinit(gpa);
-
-    var anims: [3]runtime.Animation = undefined;
-    for (&anims, 0..) |*a, i| a.* = try runtime.Animation.fromGltf(gpa, gltf_data, @intCast(i), &skeleton);
-    defer for (&anims) |*a| a.deinit(gpa);
-
     const mesh_world = zm.scaling(0.05, 0.05, 0.05);
     const mesh_world2: zm.Mat = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05));
-
-    var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
-    for (&joint_matrices_bufs, 0..) |*buf, i| {
-        buf.* = try base.Buffer.init(.from(&ctx), .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
-        _ = i;
-    }
-    defer for (&joint_matrices_bufs) |*buf| buf.deinit(.from(&ctx));
 
     var input = base.Input{};
     input.init(.from(&ctx));
@@ -158,6 +141,7 @@ pub fn main(init: std.process.Init) !void {
     }
     defer asset_system.deinit(.from(&ctx));
 
+    var paladin_node_map: []u32 = undefined;
     if (rebuild_assets) {
         // fallback 1x1 textures: white + flat normal
         const white = [4]u8{ 255, 255, 255, 255 };
@@ -294,6 +278,23 @@ pub fn main(init: std.process.Init) !void {
         var helmet_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
         _ = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&helmet_mesh, helmet_geo_gid, schema_gid, material_gid, &helmet_lods) }, "helmet_mesh");
 
+        var paladin_skeleton, paladin_node_map = try runtime.Skeleton.fromGltf(gpa, gltf_data, 66);
+        errdefer gpa.free(paladin_node_map);
+        defer paladin_skeleton.deinit(gpa);
+
+        var paladin_anims: [3]runtime.Animation = undefined;
+        defer for (&paladin_anims) |*a| a.deinit(gpa);
+        for (&paladin_anims, 0..) |*a, i| a.* = try runtime.Animation.fromGltf(gpa, gltf_data, @intCast(i), paladin_node_map);
+
+        _ = try ingestAndFinalize(&asset_system, .{
+            .skeleton = .{
+                .animation_names = &.{},
+                .joint_names = &.{},
+                .skeleton = paladin_skeleton,
+                .animations = &paladin_anims,
+            }
+        }, "paladin_skeleton");
+
         // write the manifest
         var manifest_writer_buf: [1024]u8 = undefined;
         var manifest_file_w = try std.Io.Dir.createFile(.cwd(), init.io, asset_dir ++ "/manifest.json", .{});
@@ -302,7 +303,11 @@ pub fn main(init: std.process.Init) !void {
         var stringify: std.json.Stringify = .{ .writer = &manifest_writer.interface, .options = .{ .whitespace = .indent_2 } };
         try asset_system.save_manifest(&stringify);
         try manifest_writer.flush();
+    } else {
+        var skeleton, paladin_node_map = try runtime.Skeleton.fromGltf(gpa, gltf_data, 66);
+        defer skeleton.deinit(gpa);
     }
+    defer gpa.free(paladin_node_map);
 
     const body_mesh_gid = asset_system.findEntry(.mesh, "body_mesh") orelse return error.AssetEntryNotFound;
     const helmet_mesh_gid = asset_system.findEntry(.mesh, "helmet_mesh") orelse return error.AssetEntryNotFound;
@@ -310,19 +315,34 @@ pub fn main(init: std.process.Init) !void {
     const helmet_geo_gid = asset_system.findEntry(.geometry, "helmet_geometry") orelse return error.AssetEntryNotFound;
     const pbr_schema_gid = asset_system.findEntry(.material_schema, "pbr_schema") orelse return error.AssetEntryNotFound;
     const material_gid = asset_system.findEntry(.material_instance, "paladin_material") orelse return error.AssetEntryNotFound;
+    const skeleton_gid = asset_system.findEntry(.skeleton, "paladin_skeleton") orelse return error.AssetEntryNotFound;
 
     var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
     defer asset_cmd_buf.deinit();
     try asset_cmd_buf.request(&asset_system, material_gid);
-    // for (slot_gids) |gid| try asset_cmd_buf.request(&asset_system, gid);
     try asset_cmd_buf.request(&asset_system, body_mesh_gid);
     try asset_cmd_buf.request(&asset_system, helmet_mesh_gid);
     // geometry and instance deps on meshes are soft; request them explicitly
     try asset_cmd_buf.request(&asset_system, body_geo_gid);
     try asset_cmd_buf.request(&asset_system, helmet_geo_gid);
+    try asset_cmd_buf.request(&asset_system, skeleton_gid);
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
 
     const pbr_schema_id = asset_system.denseIndex(pbr_schema_gid);
+    const skeleton_id = asset_system.denseIndex(skeleton_gid);
+
+    const skeleton = asset_system.skeleton_reg.getSkeleton(skeleton_id);
+    const anims = asset_system.skeleton_reg.getAnimations(skeleton_id);
+
+    const skin = try runtime.Skin.fromGltf(gpa, gltf_data, 0, paladin_node_map);
+    defer skin.deinit(gpa);
+
+    var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
+    for (&joint_matrices_bufs, 0..) |*buf, i| {
+        buf.* = try base.Buffer.init(.from(&ctx), .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
+        _ = i;
+    }
+    defer for (&joint_matrices_bufs) |*buf| buf.deinit(.from(&ctx));
 
     // wait for the first mesh desc / lod upload so the render graph can bind
     // non-empty registry buffers; geometry patches may land a few ticks later,

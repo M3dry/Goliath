@@ -22,7 +22,7 @@ pub fn fromGltf(
     alloc: Allocator,
     data: *zcgltf.Data,
     skin_index: u32,
-    skeleton: *const Skeleton,
+    node_map: []const u32,
 ) !Skin {
     const gltf_skin = &data.skins.?[skin_index];
     const count = gltf_skin.joints_count;
@@ -38,7 +38,7 @@ pub fn fromGltf(
         ));
 
         var local_ix: u32 = std.math.maxInt(u32);
-        for (skeleton.node_map, 0..) |map_entry, mi| {
+        for (node_map, 0..) |map_entry, mi| {
             if (map_entry == gltf_ix) {
                 local_ix = @intCast(mi);
                 break;

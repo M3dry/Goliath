@@ -105,6 +105,7 @@ pub const Patch = union(PatchEnum) {
     },
     material_instance_to_mesh: struct {
         upload_generation: u64,
+        schema_gid: Gid,
         patch_gid: Gid,
         patch_dense: u32,
         target_mesh: Gid,

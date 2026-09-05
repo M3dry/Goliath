@@ -1236,28 +1236,25 @@ fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !voi
             try ctx.view.device.endCommandBuffer(cmd_buf);
 
             // ownership handoff: release on graphics before the transport batch is queued
-            var handoff_wait: ?u64 = null;
             if (handoff_rel_bufs.items.len > 0 or handoff_rel_imgs.items.len > 0) {
                 self.graphics_submit_lock.lockUncancelable(self.io);
                 defer self.graphics_submit_lock.unlock(self.io);
                 const vh = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
-                try self.submitBarriersLocked(ctx.view.device, handoff_rel_bufs.items, handoff_rel_imgs.items, null, vh, &.{});
-                handoff_wait = vh;
+                try self.submitBarriersLocked(ctx.view.device, handoff_rel_bufs.items, handoff_rel_imgs.items, vh - 1, vh, &.{});
             }
 
             const vt_trans = @atomicRmw(u64, &self.timeline_counter, .Add, 1, .monotonic) + 1;
             {
                 var wait_infos: [1]vk.SemaphoreSubmitInfo = .{.{
                     .semaphore = self.timeline_semaphore,
-                    .value = handoff_wait orelse vt_trans -% 1,
+                    .value = vt_trans - 1,
                     .stage_mask = .{ .all_commands_bit = true },
                     .device_index = 0,
                 }};
-                const wait_count: u32 = if (handoff_wait != null) 1 else 0;
                 _ = &wait_infos;
 
                 try ctx.view.device.queueSubmit2(self.transport_queue, (&vk.SubmitInfo2{
-                    .wait_semaphore_info_count = wait_count,
+                    .wait_semaphore_info_count = 1,
                     .p_wait_semaphore_infos = &wait_infos,
                     .command_buffer_info_count = 1,
                     .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{
@@ -1338,7 +1335,7 @@ fn submitBarriersLocked(
     dev: vk.DeviceProxy,
     buffer_barriers: []const vk.BufferMemoryBarrier2,
     image_barriers: []const vk.ImageMemoryBarrier2,
-    wait_timeline_value: ?u64,
+    wait_timeline_value: u64,
     signal_timeline_value: u64,
     ticket_ids: []const u32,
 ) !void {
@@ -1360,14 +1357,14 @@ fn submitBarriersLocked(
 
     var waits: [1]vk.SemaphoreSubmitInfo = .{.{
         .semaphore = self.timeline_semaphore,
-        .value = wait_timeline_value orelse 0,
+        .value = wait_timeline_value,
         .stage_mask = .{ .all_commands_bit = true },
         .device_index = 0,
     }};
     _ = &waits;
 
     try dev.queueSubmit2(self.graphics_queue, (&vk.SubmitInfo2{
-        .wait_semaphore_info_count = if (wait_timeline_value != null) 1 else 0,
+        .wait_semaphore_info_count = 1,
         .p_wait_semaphore_infos = &waits,
         .command_buffer_info_count = 1,
         .p_command_buffer_infos = (&vk.CommandBufferSubmitInfo{

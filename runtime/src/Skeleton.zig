@@ -14,20 +14,17 @@ pub const TRSNode = struct {
 
 bind_local_transforms: []TRSNode,
 parents: []u32,
-root_index: u32,
-node_map: []u32,
 
 pub fn deinit(self: *const Skeleton, alloc: Allocator) void {
     alloc.free(self.bind_local_transforms);
     alloc.free(self.parents);
-    alloc.free(self.node_map);
 }
 
 pub fn fromGltf(
     alloc: Allocator,
     data: *zcgltf.Data,
     root_node_index: u32,
-) !Skeleton {
+) !struct { Skeleton, []u32 } {
     const nodes_slice = data.nodes.?[0..data.nodes_count];
 
     var visited = try alloc.alloc(bool, data.nodes_count);
@@ -120,9 +117,10 @@ pub fn fromGltf(
     }
 
     return .{
-        .bind_local_transforms = bind_local_transforms,
-        .parents = parents,
-        .root_index = 0,
-        .node_map = node_map,
+        .{
+            .bind_local_transforms = bind_local_transforms,
+            .parents = parents,
+        },
+        node_map,
     };
 }

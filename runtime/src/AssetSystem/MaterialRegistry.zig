@@ -128,12 +128,11 @@ pub fn newInstance(self: *MaterialRegistry, alloc: Allocator) !u32 {
     return @intCast(self.instances.len - 1);
 }
 
-pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !types.AcquireReturn {
+pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
     std.debug.assert(delta > 0);
 
     const slice = self.schemas.slice();
     const ref_count = &slice.items(.ref_count)[id];
-    var ret: types.AcquireReturn = .incr;
     if (ref_count.* == 0) {
         const data = try loader.load(io, cold);
         defer loader.unload(io, cold);
@@ -147,19 +146,17 @@ pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, load
 
         slice.items(.blob_size)[id] = blob.blob_size;
         slice.items(.gid_texture_offsets)[id] = blob.gid_texture_offsets;
-        ret = .load;
     }
 
     ref_count.* += delta;
-    return ret;
 }
 
-pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !?u64 {
+pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !?struct {u64, Gid} {
     std.debug.assert(delta > 0);
 
     const slice = self.instances.slice();
     const ref_count = &slice.items(.ref_count)[id];
-    const upload_gen = if (ref_count.* == 0) outer: {
+    const ret = if (ref_count.* == 0) outer: {
         const data = try loader.load(io, cold);
         defer loader.unload(io, cold);
 
@@ -218,12 +215,12 @@ pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, lo
         slice.items(.schema)[id] = schema_dense;
         slice.items(.instance_dense)[id] = instance_dense;
 
-        break :outer schema_slice.items(.upload_generation)[schema_dense];
+        break :outer .{schema_slice.items(.upload_generation)[schema_dense], instance.schema};
     } else null;
 
     ref_count.* += delta;
 
-    return upload_gen;
+    return ret;
 }
 
 pub fn releaseSchema(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue }), alloc: Allocator, id: u32, delta: u32) !types.ReleaseReturn {
@@ -298,6 +295,7 @@ pub fn ingestSchema(io: std.Io, location: types.IngestLocation, schema: IngestSc
     };
 }
 
+// TODO: store the instance blob in a more space efficient manner
 pub fn ingestInstance(alloc: Allocator, io: std.Io, location: types.IngestLocation, instance: IngestInstance) types.IngestError!types.Entry {
     const file = try location.prefix_dir.createFile(io, location.path, .{});
     defer file.close(io);

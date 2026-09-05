@@ -230,8 +230,6 @@ pub fn ingest(alloc: Allocator, io: std.Io, location: types.IngestLocation, mesh
 pub fn patch(self: *MeshRegistry, target: u32, resolved: struct {Gid, u32}, geometry_reg: *GeometryRegistry, material_reg: *MaterialRegistry) !void {
     const meshes_slice = self.meshes.slice();
     const desc = meshes_slice.items(.desc)[target];
-    const ref_count = meshes_slice.items(.ref_count)[target];
-    if (ref_count == 0) return;
 
     const lods_slice = self.lods.slice();
     const patch_lookups = lods_slice.items(.patch_lookup)[desc.lod_offset..][0..desc.lod_count];

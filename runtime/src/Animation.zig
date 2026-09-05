@@ -43,7 +43,7 @@ pub fn fromGltf(
     alloc: Allocator,
     data: *zcgltf.Data,
     anim_index: u32,
-    skeleton: *const Skeleton,
+    node_map: []u32,
 ) !Animation {
     const gltf_anim = &data.animations.?[anim_index];
     const nodes_slice = data.nodes.?[0..data.nodes_count];
@@ -94,7 +94,7 @@ pub fn fromGltf(
             const gltf_ix = @as(u32, @intCast(
                 (@intFromPtr(node) - @intFromPtr(nodes_slice.ptr)) / @sizeOf(zcgltf.Node),
             ));
-            for (skeleton.node_map) |me| if (me == gltf_ix) {
+            for (node_map) |me| if (me == gltf_ix) {
                 valid_count += 1;
                 break;
             };
@@ -114,7 +114,7 @@ pub fn fromGltf(
         ));
 
         var local_ix: u32 = std.math.maxInt(u32);
-        for (skeleton.node_map, 0..) |me, mi| if (me == gltf_ix) {
+        for (node_map, 0..) |me, mi| if (me == gltf_ix) {
             local_ix = @intCast(mi);
             break;
         };
