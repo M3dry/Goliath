@@ -19,12 +19,12 @@ pub const Gid = packed struct(u64) {
         };
     }
 
-     pub fn jsonStringify(self: *const Gid, jws: anytype) std.json.Stringify.Error!void {
-         try jws.beginArray();
-         try jws.write(self.gen);
-         try jws.write(self.slot);
-         try jws.endArray();
-     }
+    pub fn jsonStringify(self: *const Gid, jws: anytype) std.json.Stringify.Error!void {
+        try jws.beginArray();
+        try jws.write(self.gen);
+        try jws.write(self.slot);
+        try jws.endArray();
+    }
 };
 
 pub const Kind = enum {
@@ -39,16 +39,6 @@ pub const Kind = enum {
     skeleton, // contains animations - no need to have animations be a separate asset since they're specific to a skeleton
 };
 
-pub const AcquireReturn = enum {
-    load,
-    incr,
-};
-
-pub const ReleaseReturn = enum {
-    kept,
-    released,
-};
-
 // fits into two cachelines
 pub const Deps = struct {
     necessary: SmallBitSet(13) = .empty,
@@ -60,6 +50,7 @@ pub const Entry = struct {
 
     generation: u32,
     dense: u32 = std.math.maxInt(u32), // == maxInt(u32) => not loaded into registry, == maxInt(u32) - 1 => entry deleted/none
+    ref_count: u32 = 0,
 
     kind: Kind,
 
@@ -111,7 +102,7 @@ pub const Patch = union(PatchEnum) {
         target_mesh: Gid,
     },
 
-    pub fn patch(self: Patch) struct {Gid, u32} {
+    pub fn patch(self: Patch) struct { Gid, u32 } {
         return switch (self) {
             .geometry_to_mesh => |d| .{ d.patch_gid, d.patch_dense },
             .material_instance_to_mesh => |d| .{ d.patch_gid, d.patch_dense },
@@ -126,9 +117,7 @@ pub const Patch = union(PatchEnum) {
     }
 };
 
-pub const PatcherVariant = enum {
-    mesh
-};
+pub const PatcherVariant = enum { mesh };
 
 pub fn Patcher(comptime variant: PatcherVariant) type {
     const MeshVariant = struct {
@@ -139,14 +128,12 @@ pub fn Patcher(comptime variant: PatcherVariant) type {
         patches: *std.ArrayList(Patch),
         alloc: std.mem.Allocator,
 
-        pub fn addGeometry(self: Self, patch: struct{Gid, u32}) !void {
-            try self.patches.append(self.alloc, .{
-                .geometry_to_mesh = .{
-                    .patch_gid = patch.@"0",
-                    .patch_dense = patch.@"1",
-                    .target_mesh = self.target_mesh,
-                }
-            });
+        pub fn addGeometry(self: Self, patch: struct { Gid, u32 }) !void {
+            try self.patches.append(self.alloc, .{ .geometry_to_mesh = .{
+                .patch_gid = patch.@"0",
+                .patch_dense = patch.@"1",
+                .target_mesh = self.target_mesh,
+            } });
         }
     };
 

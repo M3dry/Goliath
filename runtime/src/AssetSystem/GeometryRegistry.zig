@@ -10,7 +10,6 @@ const Allocator = std.mem.Allocator;
 const GeometryRegistry = @This();
 
 geometries: std.MultiArrayList(struct {
-    ref_count: u32 = 0,
     tickets: [2]base.Transport.Ticket = .{ .none, .none },
     buffer: base.Buffer = .empty,
 }) = .empty,
@@ -76,7 +75,7 @@ pub fn deinit(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .
     self.free.deinit(alloc);
 }
 
-pub fn deinitNow(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .vma_allocator }), alloc: Allocator) void {
+pub fn deinitNow(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{.vma_allocator}), alloc: Allocator) void {
     for (self.geometries.items(.buffer)) |*buf| {
         buf.deinitNow(.from(ctx));
     }
@@ -95,58 +94,48 @@ pub fn new(self: *GeometryRegistry, alloc: Allocator) !u32 {
     return @intCast(self.geometries.len - 1);
 }
 
-pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport }), alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !types.AcquireReturn {
-    std.debug.assert(delta > 0);
-
+pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport }), alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
     const slice = self.geometries.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-    var ret: types.AcquireReturn = .incr;
-    if (ref_count.* == 0) {
-        const data = try loader.load(io, cold);
-        errdefer loader.unload(io, cold);
+    const data = try loader.load(io, cold);
+    errdefer loader.unload(io, cold);
 
-        var free_fn = try loader.make_transport_unload(io, alloc, cold);
-        errdefer free_fn.deinit();
+    var free_fn = try loader.make_transport_unload(io, alloc, cold);
+    errdefer free_fn.deinit();
 
-        var reader = std.Io.Reader.fixed(data);
-        const header = try reader.takeStruct(GeometryHeaderBlob, .little);
-        const geo_data = data[@sizeOf(GeometryHeaderBlob)..];
+    var reader = std.Io.Reader.fixed(data);
+    const header = try reader.takeStruct(GeometryHeaderBlob, .little);
+    const geo_data = data[@sizeOf(GeometryHeaderBlob)..];
 
-        const buffer: *base.Buffer = &slice.items(.buffer)[id];
-        const tickets: *[2]base.Transport.Ticket = &slice.items(.tickets)[id];
+    const buffer: *base.Buffer = &slice.items(.buffer)[id];
+    const tickets: *[2]base.Transport.Ticket = &slice.items(.tickets)[id];
 
-        buffer.* = try .init(.from(ctx), .graphics, "Geometry buffer", Mesh.gpu_geometry_header_size + geo_data.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
-        errdefer buffer.deinitNow(.from(ctx));
+    buffer.* = try .init(.from(ctx), .graphics, "Geometry buffer", Mesh.gpu_geometry_header_size + geo_data.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
+    errdefer buffer.deinitNow(.from(ctx));
 
-        const gpu_header = try alloc.create(struct { Mesh.GPUGeometry, Allocator });
-        errdefer alloc.destroy(gpu_header);
-        gpu_header.@"0" = .{
-            .indices_address = buffer.address + Mesh.gpu_geometry_header_size,
-            .stride = header.stride,
-            .position_offset = header.position_offset,
-            .normal_offset = header.normal_offset,
-            .tangent_offset = header.tangent_offset,
-            .color0_offset = header.color0_offset,
-            .texcoord0_offset = header.texcoord0_offset,
-            .texcoord1_offset = header.texcoord1_offset,
-            .texcoord2_offset = header.texcoord2_offset,
-            .texcoord3_offset = header.texcoord3_offset,
-            .joints0_offset = header.joints0_offset,
-            .weights0_offset = header.weights0_offset,
-        };
-        gpu_header.@"1" = alloc;
+    const gpu_header = try alloc.create(struct { Mesh.GPUGeometry, Allocator });
+    errdefer alloc.destroy(gpu_header);
+    gpu_header.@"0" = .{
+        .indices_address = buffer.address + Mesh.gpu_geometry_header_size,
+        .stride = header.stride,
+        .position_offset = header.position_offset,
+        .normal_offset = header.normal_offset,
+        .tangent_offset = header.tangent_offset,
+        .color0_offset = header.color0_offset,
+        .texcoord0_offset = header.texcoord0_offset,
+        .texcoord1_offset = header.texcoord1_offset,
+        .texcoord2_offset = header.texcoord2_offset,
+        .texcoord3_offset = header.texcoord3_offset,
+        .joints0_offset = header.joints0_offset,
+        .weights0_offset = header.weights0_offset,
+    };
+    gpu_header.@"1" = alloc;
 
-        const transport: *base.Transport = ctx.view.transport;
-        tickets[0] = try transport.uploadBuffer(false, std.mem.asBytes(&gpu_header.@"0")[0..Mesh.gpu_geometry_header_size], destroy_gpu_header, gpu_header, buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
-        errdefer transport.unqueue(tickets[0], true);
+    const transport: *base.Transport = ctx.view.transport;
+    tickets[0] = try transport.uploadBuffer(false, std.mem.asBytes(&gpu_header.@"0")[0..Mesh.gpu_geometry_header_size], destroy_gpu_header, gpu_header, buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
+    errdefer transport.unqueue(tickets[0], true);
 
-        tickets[1] = try transport.uploadBuffer(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, Mesh.gpu_geometry_header_size, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
-        errdefer transport.unqueue(tickets[1], false);
-        ret = .load;
-    }
-
-    ref_count.* += delta;
-    return ret;
+    tickets[1] = try transport.uploadBuffer(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, Mesh.gpu_geometry_header_size, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
+    errdefer transport.unqueue(tickets[1], false);
 }
 
 fn destroy_gpu_header(ctx: ?*anyopaque, ptr: *anyopaque) void {
@@ -157,15 +146,8 @@ fn destroy_gpu_header(ctx: ?*anyopaque, ptr: *anyopaque) void {
     alloc.destroy(c);
 }
 
-pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue }), alloc: Allocator, id: u32, delta: u32) !types.ReleaseReturn {
-    std.debug.assert(delta > 0);
-    const slice =  self.geometries.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-
-    std.debug.assert(ref_count.* >= delta);
-    ref_count.* -= delta;
-
-    if (ref_count.* != 0) return .kept;
+pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue }), alloc: Allocator, id: u32) !void {
+    var slice = self.geometries.slice();
 
     const tickets = &slice.items(.tickets)[id];
     ctx.view.transport.unqueue(tickets[0], true);
@@ -174,10 +156,10 @@ pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .des
 
     var buffer = &slice.items(.buffer)[id];
     buffer.deinit(.from(ctx));
-    buffer.* = .empty;
+
+    slice.set(id, .{});
 
     try self.free.append(alloc, id);
-    return .released;
 }
 
 pub fn ingest(io: std.Io, location: types.IngestLocation, geo: IngestGeometry) types.IngestError!types.Entry {
@@ -215,7 +197,7 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, geo: IngestGeometry) t
     };
 }
 
-pub inline fn isReady(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport }), id: u32) !bool {
+pub inline fn isReady(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{.transport}), id: u32) !bool {
     const slice = self.geometries.slice();
     const tickets = slice.items(.tickets)[id];
 

@@ -13,7 +13,6 @@ const Allocator = std.mem.Allocator;
 const SkeletonRegistry = @This();
 
 data: std.MultiArrayList(struct {
-    ref_count: u32 = 0,
     skeleton_joint_names: [][]u8 = &.{},
     skeleton: Skeleton = .{
         .bind_local_transforms = &.{},
@@ -74,43 +73,24 @@ pub fn new(self: *SkeletonRegistry, alloc: Allocator) !u32 {
     return @intCast(self.data.len - 1);
 }
 
-pub fn acquire(self: *SkeletonRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
-    std.debug.assert(delta > 0);
-
+pub fn acquire(self: *SkeletonRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
     const slice = self.data.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-    if (ref_count.* == 0) {
-        const data = try loader.load(io, cold);
-        errdefer loader.unload(io, cold);
+    const data = try loader.load(io, cold);
+    defer loader.unload(io, cold);
 
-        var reader = std.Io.Reader.fixed(data);
-        var json_reader = std.json.Reader.init(alloc, &reader);
-        defer json_reader.deinit();
+    const parsed_blob = try std.json.parseFromSlice(DataBlob, alloc, data, .{});
+    errdefer parsed_blob.deinit();
+    const blob = parsed_blob.value;
 
-        const parsed_blob = try std.json.parseFromTokenSource(DataBlob, alloc, &json_reader, .{});
-        errdefer parsed_blob.deinit();
-        const blob = parsed_blob.value;
-
-        slice.items(.skeleton_joint_names)[id] = blob.joint_names;
-        slice.items(.skeleton)[id] = blob.skeleton;
-        slice.items(.animation_names)[id] = blob.animation_names;
-        slice.items(.animations)[id] = blob.animations;
-        slice.items(.value_alloc)[id] = parsed_blob.arena;
-    }
-
-    ref_count.* += delta;
+    slice.items(.skeleton_joint_names)[id] = blob.joint_names;
+    slice.items(.skeleton)[id] = blob.skeleton;
+    slice.items(.animation_names)[id] = blob.animation_names;
+    slice.items(.animations)[id] = blob.animations;
+    slice.items(.value_alloc)[id] = parsed_blob.arena;
 }
 
-pub fn release(self: *SkeletonRegistry, alloc: Allocator, id: u32, delta: u32) !types.ReleaseReturn {
-    std.debug.assert(delta > 0);
-
+pub fn release(self: *SkeletonRegistry, alloc: Allocator, id: u32) !void {
     var slice = self.data.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-
-    std.debug.assert(ref_count.* >= delta);
-    ref_count.* -= delta;
-
-    if (ref_count.* != 0) return .kept;
 
     const value_alloc = slice.items(.value_alloc)[id];
     if (value_alloc) |vall| {
@@ -121,7 +101,6 @@ pub fn release(self: *SkeletonRegistry, alloc: Allocator, id: u32, delta: u32) !
     slice.set(id, .{});
 
     try self.free.append(alloc, id);
-    return .released;
 }
 
 pub fn ingest(io: std.Io, location: types.IngestLocation, data: IngestData) types.IngestError!types.Entry {
@@ -134,7 +113,7 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, data: IngestData) type
         .writer = &file_writer.interface,
         .options = .{
             .whitespace = .indent_2,
-        }
+        },
     };
 
     try stringify.write(SaveDataBlob{
@@ -152,7 +131,7 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, data: IngestData) type
             .location = location.loc,
             .offset = 0,
             .size = file_writer.logicalPos(),
-        }
+        },
     };
 }
 

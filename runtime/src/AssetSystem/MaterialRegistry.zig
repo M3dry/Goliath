@@ -13,7 +13,6 @@ schemas: std.MultiArrayList(struct {
     blob_size: usize = 0,
     /// assume to be sorted
     gid_texture_offsets: []usize = &.{},
-    ref_count: u32 = 0,
 
     instance_blobs: std.ArrayList(u8) = .empty,
     free_instances: std.ArrayList(u32) = .empty,
@@ -27,7 +26,6 @@ schemas: std.MultiArrayList(struct {
 free_schemas: std.ArrayList(u32) = .empty,
 
 instances: std.MultiArrayList(struct {
-    ref_count: u32 = 0,
     blob: []u8 = &.{},
     schema: u32 = std.math.maxInt(u32),
     instance_dense: u32 = std.math.maxInt(u32),
@@ -56,10 +54,7 @@ pub const IngestInstance = struct {
     /// the `schema` can not be loaded in which case we couldn't retrieve the texture gids, thus this
     deps: []Dep,
 
-    pub const Dep = struct {
-        gid: Gid,
-        necessary: bool
-    };
+    pub const Dep = struct { gid: Gid, necessary: bool };
 };
 
 pub fn init() MaterialRegistry {
@@ -128,43 +123,27 @@ pub fn newInstance(self: *MaterialRegistry, alloc: Allocator) !u32 {
     return @intCast(self.instances.len - 1);
 }
 
-pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32, delta: u32) !void {
-    std.debug.assert(delta > 0);
-
+pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
     const slice = self.schemas.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-    if (ref_count.* == 0) {
-        const data = try loader.load(io, cold);
-        defer loader.unload(io, cold);
+    const data = try loader.load(io, cold);
+    defer loader.unload(io, cold);
 
-        var reader = std.Io.Reader.fixed(data);
-        var json_reader = std.json.Reader.init(alloc, &reader);
-        defer json_reader.deinit();
+    // FIX: likely fine but probably should just store the arena pointer and use non Leaky parse
+    const blob = try std.json.parseFromSliceLeaky(SchemaBlob, alloc, data, .{});
+    errdefer alloc.free(blob.gid_texture_offsets);
 
-        const blob = try std.json.parseFromTokenSourceLeaky(SchemaBlob, alloc, &json_reader, .{});
-        errdefer alloc.free(blob.gid_texture_offsets);
-
-        slice.items(.blob_size)[id] = blob.blob_size;
-        slice.items(.gid_texture_offsets)[id] = blob.gid_texture_offsets;
-    }
-
-    ref_count.* += delta;
+    slice.items(.blob_size)[id] = blob.blob_size;
+    slice.items(.gid_texture_offsets)[id] = blob.gid_texture_offsets;
 }
 
-pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32, delta: u32) !?struct {u64, Gid} {
-    std.debug.assert(delta > 0);
-
+pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32) !struct { u64, Gid } {
     const slice = self.instances.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-    const ret = if (ref_count.* == 0) outer: {
+    const ret = outer: {
         const data = try loader.load(io, cold);
         defer loader.unload(io, cold);
 
-        var reader = std.Io.Reader.fixed(data);
-        var json_reader = std.json.Reader.init(alloc, &reader);
-        defer json_reader.deinit();
-
-        const instance = try std.json.parseFromTokenSourceLeaky(InstanceBlob, alloc, &json_reader, .{});
+    // FIX: likely fine but probably should just store the arena pointer and use non Leaky parse
+        const instance = try std.json.parseFromSliceLeaky(InstanceBlob, alloc, data, .{});
         errdefer alloc.free(instance.blob);
 
         const schema_kind, const schema_dense = resolver.lookup(resolved, instance.schema) orelse return error.InvalidSchemaGid;
@@ -176,11 +155,11 @@ pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, lo
         const dense_blob_size: usize = schema_slice.items(.blob_size)[schema_dense];
         const instance_blobs: *std.ArrayList(u8) = &schema_slice.items(.instance_blobs)[schema_dense];
         const instance_dense: u32, const blob = if (schema_slice.items(.free_instances)[schema_dense].pop()) |free| blk: {
-            break :blk .{free, instance_blobs.items[dense_blob_size*free..][0..dense_blob_size]};
+            break :blk .{ free, instance_blobs.items[dense_blob_size * free ..][0..dense_blob_size] };
         } else blk: {
             const instance_dense = (instance_blobs.items.len / dense_blob_size);
             const b = try instance_blobs.addManyAsSlice(alloc, dense_blob_size);
-            break :blk .{@intCast(instance_dense), b};
+            break :blk .{ @intCast(instance_dense), b };
         };
 
         const gid_texture_offsets = schema_slice.items(.gid_texture_offsets)[schema_dense];
@@ -215,53 +194,39 @@ pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, lo
         slice.items(.schema)[id] = schema_dense;
         slice.items(.instance_dense)[id] = instance_dense;
 
-        break :outer .{schema_slice.items(.upload_generation)[schema_dense], instance.schema};
-    } else null;
-
-    ref_count.* += delta;
+        break :outer .{ schema_slice.items(.upload_generation)[schema_dense], instance.schema };
+    };
 
     return ret;
 }
 
-pub fn releaseSchema(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue }), alloc: Allocator, id: u32, delta: u32) !types.ReleaseReturn {
-    std.debug.assert(delta > 0);
-
-    const slice = self.schemas.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-
-    std.debug.assert(ref_count.* >= delta);
-    ref_count.* -= delta;
-
-    if (ref_count.* != 0) return .kept;
+pub fn releaseSchema(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{.destroy_queue}), alloc: Allocator, id: u32) !void {
+    var slice = self.schemas.slice();
 
     alloc.free(slice.items(.gid_texture_offsets)[id]);
     slice.items(.instance_blobs)[id].deinit(alloc);
     slice.items(.buffer)[id].deinit(.from(ctx));
     slice.items(.staging_buffer)[id].deinit(.from(ctx));
 
-    try self.free_schemas.append(alloc, id);
+    slice.set(id, .{});
 
-    return .released;
+    try self.free_schemas.append(alloc, id);
 }
 
-pub fn releaseInstance(self: *MaterialRegistry, alloc: Allocator, id: u32, delta: u32) !types.ReleaseReturn {
-    std.debug.assert(delta > 0);
-
-    const slice = self.instances.slice();
-    const ref_count = &slice.items(.ref_count)[id];
-
-    std.debug.assert(ref_count.* >= delta);
-    ref_count.* -= delta;
-
-    if (ref_count.* != 0) return .kept;
+pub fn releaseInstance(self: *MaterialRegistry, alloc: Allocator, id: u32) !void {
+    var slice = self.instances.slice();
 
     alloc.free(slice.items(.blob)[id]);
 
-    // TODO: free up the instance in its schema
+    const schema = slice.items(.schema)[id];
+    std.debug.assert(schema != std.math.maxInt(u32));
+
+    const schema_slice = self.schemas.slice();
+    try schema_slice.items(.free_instances)[schema].append(alloc, slice.items(.instance_dense)[id]);
+
+    slice.set(id, .{});
 
     try self.free_instances.append(alloc, id);
-
-    return .released;
 }
 
 pub fn ingestSchema(io: std.Io, location: types.IngestLocation, schema: IngestSchema) types.IngestError!types.Entry {
