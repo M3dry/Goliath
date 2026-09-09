@@ -65,6 +65,7 @@ pub fn deinit(self: *ModelRegistry, alloc: Allocator) void {
         model.meshes.deinit(alloc);
 
         if (model.skeleton) |*skeleton| {
+            for (skeleton.skins) |*skin| skin.deinit(alloc);
             alloc.free(skeleton.skins);
         }
     }
@@ -111,10 +112,29 @@ pub fn acquire(self: *ModelRegistry, alloc: Allocator, io: std.Io, loader: *Load
         const kind, const dense = resolver.lookup(resolved, skeleton.gid) orelse return error.InvalidSkeletonGid;
         if (kind != .skeleton) return error.InvalidSkeletonKind;
 
+        const skins = try alloc.alloc(Skin, skeleton.skins.len);
+        var skins_initialized: usize = 0;
+        errdefer for (skins[0..skins_initialized]) |*skin| skin.deinit(alloc);
+        errdefer alloc.free(skins);
+
+        for (skeleton.skins, skins) |source, *dest| {
+            const skeleton_node_indices = try alloc.dupe(u32, source.skeleton_node_indices);
+            errdefer alloc.free(skeleton_node_indices);
+
+            const inverse_bind_matrices = try alloc.dupe(base.zmath.Mat, source.inverse_bind_matrices);
+            errdefer alloc.free(inverse_bind_matrices);
+
+            dest.* = .{
+                .skeleton_node_indices = skeleton_node_indices,
+                .inverse_bind_matrices = inverse_bind_matrices,
+            };
+            skins_initialized += 1;
+        }
+
         model.skeleton = .{
             .gid = skeleton.gid,
             .dense = dense,
-            .skins = try alloc.dupe(Skin, skeleton.skins),
+            .skins = skins,
         };
     }
 }
@@ -123,7 +143,10 @@ pub fn release(self: *ModelRegistry, alloc: Allocator, id: u32) !void {
     const model = &self.models.items[id];
 
     model.meshes.deinit(alloc);
-    if (model.skeleton) |*s| alloc.free(s.skins);
+    if (model.skeleton) |*s| {
+        for (s.skins) |*skin| skin.deinit(alloc);
+        alloc.free(s.skins);
+    }
     model.* = .{};
 
     try self.free.append(alloc, id);

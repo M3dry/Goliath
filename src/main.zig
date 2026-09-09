@@ -275,7 +275,7 @@ pub fn main(init: std.process.Init) !void {
         const helmet_gid = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&helmet_mesh, helmet_geo_gid, schema_gid, material_gid, &helmet_lods) }, "helmet_mesh");
 
         var paladin_skeleton, const paladin_node_map = try runtime.Skeleton.fromGltf(gpa, gltf_data, 66);
-        errdefer gpa.free(paladin_node_map);
+        defer gpa.free(paladin_node_map);
         defer paladin_skeleton.deinit(gpa);
 
         var paladin_anims: [3]runtime.Animation = undefined;
