@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 const Mesh = @import("../Mesh.zig");
 const types = @import("Types.zig");
 const resolver = @import("resolver.zig");
@@ -74,6 +75,10 @@ pub fn new(self: *SkeletonRegistry, alloc: Allocator) !u32 {
 }
 
 pub fn acquire(self: *SkeletonRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("SkeletonRegistry/acquire", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.data.slice();
     const data = try loader.load(io, cold);
     defer loader.unload(io, cold);
@@ -90,6 +95,10 @@ pub fn acquire(self: *SkeletonRegistry, alloc: Allocator, io: std.Io, loader: *L
 }
 
 pub fn release(self: *SkeletonRegistry, alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("SkeletonRegistry/release", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.data.slice();
 
     const value_alloc = slice.items(.value_alloc)[id];

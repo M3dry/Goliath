@@ -31,8 +31,8 @@
             .hash = "zigimg-0.1.0-8_eo2oyaFwBZwJpmqPkCfVXWBrHcqbYwmrp1I6bTD3lI",
         },
         .zprobe = .{
-            .url = "git+https://github.com/m3dry/zprobe#e06a8158415383264fbc34e04292ac58764a8dc6",
-            .hash = "zprobe-0.0.1-LvXHVCpIAADLkXmIxUPSrheODDFIqeRP1oIhycOZCBQg",
+            .url = "git+https://github.com/m3dry/zprobe#ddcd011cbf77f4c23c4dff9f39234b4919f5d671",
+            .hash = "zprobe-0.0.1-LvXHVDh3AADysRJ4-5UW22aAjnHGylb_orRfUUpEJrkM",
         },
     },
     .minimum_zig_version = "0.16.0",

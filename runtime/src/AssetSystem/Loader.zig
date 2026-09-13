@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 
 const Loader = @This();
 const Allocator = std.mem.Allocator;
@@ -39,6 +40,8 @@ pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
     const prefix_dir = try std.Io.Dir.openDir(.cwd(), io, manifest.path_prefix, .{});
     errdefer prefix_dir.close(io);
 
+    zprobe.event(.info, "asset loader initialized", .{ .prefix_path = manifest.path_prefix });
+
     var self: Loader = .{
         .locations_path_prefix_str = prefix_str,
         .locations_path_prefix = prefix_dir,
@@ -50,13 +53,27 @@ pub fn init(io: std.Io, alloc: Allocator, manifest: *const Manifest) !Loader {
 
     try self.locations.ensureUnusedCapacity(alloc, manifest.locations.len);
     for (manifest.locations) |manifest_location| {
+        while (self.locations.items.len <= manifest_location.ix) {
+            try self.locations.append(alloc, .none);
+        }
+
+        if (!self.locations.items[manifest_location.ix].isNone()) {
+            return error.DuplicateLocationIndex;
+        }
+
         const path = try alloc.dupe(u8, manifest_location.path);
 
-        self.locations.appendAssumeCapacity(.{
+        self.locations.items[manifest_location.ix] = .{
             .path = path,
             .memory_map = null,
             .ref_count = 0,
-        });
+        };
+    }
+
+    for (self.locations.items, 0..) |location, i| {
+        if (location.isNone()) {
+            try self.free_locations.append(alloc, @intCast(i));
+        }
     }
 
     return self;
@@ -71,6 +88,7 @@ pub fn deinit(self: *Loader, alloc: Allocator, io: std.Io) void {
         alloc.free(location.path);
     }
     self.locations.deinit(alloc);
+    self.free_locations.deinit(alloc);
 }
 
 pub fn load(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) ![]const u8 {
@@ -78,7 +96,8 @@ pub fn load(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) ![]const u8
 
     if (location.memory_map) |memory_map| {
         location.ref_count += 1;
-        return memory_map.memory[cold_asset.offset..cold_asset.offset + cold_asset.size];
+        zprobe.event(.debug, "Loader/load", .{ .location = cold_asset.location, .offset = cold_asset.offset, .size = cold_asset.size, .ref_count = location.ref_count, .mapped = true });
+        return memory_map.memory[cold_asset.offset .. cold_asset.offset + cold_asset.size];
     }
 
     const file = try self.locations_path_prefix.openFile(io, location.path, .{});
@@ -90,7 +109,9 @@ pub fn load(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) ![]const u8
     location.ref_count += 1;
     location.memory_map = m;
 
-    return m.memory[cold_asset.offset..cold_asset.offset + cold_asset.size];
+    zprobe.event(.debug, "Loader/load", .{ .location = cold_asset.location, .offset = cold_asset.offset, .size = cold_asset.size, .ref_count = location.ref_count, .mapped = false });
+
+    return m.memory[cold_asset.offset .. cold_asset.offset + cold_asset.size];
 }
 
 const Ctx = struct {
@@ -148,26 +169,35 @@ pub fn unload(self: *Loader, io: std.Io, cold_asset: *const ColdAsset) void {
     } else std.debug.assert(false);
 
     location.memory_map = null;
+    zprobe.event(.debug, "Loader/unload", .{ .location = cold_asset.location, .ref_count = location.ref_count, .unmapped = true });
 }
 
 /// takes ownership of `path`
 pub fn newLocation(self: *Loader, alloc: Allocator, path: []const u8) error{OutOfMemory}!u32 {
-    const location = if (self.free_locations.pop()) |loc| &self.locations.items[loc] else try self.locations.addOne(alloc);
+    var reused = false;
+    const location, const loc_index = if (self.free_locations.pop()) |loc| blk: {
+        reused = true;
+        break :blk .{ &self.locations.items[loc], loc };
+    } else .{ try self.locations.addOne(alloc), @as(u32, @intCast(self.locations.items.len - 1)) };
     location.* = .{
         .path = path,
         .memory_map = null,
         .ref_count = 0,
     };
 
-    return @intCast(self.locations.items.len - 1);
+    zprobe.event(.debug, "Loader/newLocation", .{ .location = loc_index, .path = path, .reused = reused });
+
+    return loc_index;
 }
 
 pub fn removeLocation(self: *Loader, alloc: Allocator, io: std.Io, loc: u32) !void {
     var location = &self.locations.items[loc];
+    const path = location.path;
 
     if (location.memory_map) |*m| m.destroy(io);
     self.locations_path_prefix.deleteFile(io, location.path) catch {};
-    alloc.free(location.path);
+    zprobe.event(.debug, "Loader/removeLocation", .{ .location = loc, .path = path });
+    alloc.free(path);
 
     location.* = .none;
     try self.free_locations.append(alloc, loc);

@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 
 const Allocator = std.mem.Allocator;
 const Loader = @import("Loader.zig");
@@ -237,6 +238,10 @@ pub fn newSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device
 }
 
 pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("TextureRegistry/acquireTexture", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.textures.slice();
     const data = try loader.load(io, cold);
     errdefer loader.unload(io, cold);
@@ -289,6 +294,10 @@ pub fn acquireTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .
 }
 
 pub fn acquireSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport }), io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("TextureRegistry/acquireSampledTexture", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.sampled_textures.slice();
     const sampler = &slice.items(.sampler)[id];
     const dense = &slice.items(.texture)[id];
@@ -327,6 +336,10 @@ pub fn acquireSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .de
 }
 
 pub fn releaseTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport }), id: u32) !void {
+    const s = zprobe.span("TextureRegistry/releaseTexture", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.textures.slice();
 
     const ticket = &slice.items(.ticket)[id];
@@ -342,6 +355,10 @@ pub fn releaseTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .destroy_q
 }
 
 pub fn releaseSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .destroy_queue }), id: u32) !void {
+    const s = zprobe.span("TextureRegistry/releaseSampledTexture", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.sampled_textures.slice();
     var sampler = slice.items(.sampler)[id];
     sampler.deinit(.from(ctx));
@@ -364,6 +381,12 @@ pub fn releaseSampledTexture(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .de
 }
 
 pub fn tick(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .transport })) !void {
+    if (self.pending_sampled_textures.items.len == 0) return;
+
+    const s = zprobe.span("TextureRegistry/tick", .{ .pending_sampled_textures = self.pending_sampled_textures.items.len });
+    s.enter();
+    defer s.exit();
+
     const tex_slice = self.textures.slice();
     const sam_tex_slice = self.sampled_textures.slice();
 
@@ -381,6 +404,8 @@ pub fn tick(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .transport 
             self.texture_pool.update(.from(ctx), id, images[texture].view.handle, .shader_read_only_optimal, samplers[id].handle);
             sam_tex_slice.items(.in_texture_pool)[id] = true;
             _ = self.pending_sampled_textures.swapRemove(i);
+
+            zprobe.event(.debug, "update", .{ .id = id });
         } else i += 1;
     }
 }

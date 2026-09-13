@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 const Mesh = @import("../Mesh.zig");
 const types = @import("Types.zig");
 const resolver = @import("resolver.zig");
@@ -94,6 +95,10 @@ pub fn new(self: *MeshRegistry, alloc: Allocator) !u32 {
 }
 
 pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{.transport}), alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, geometry_registry: *GeometryRegistry, material_registry: *MaterialRegistry, patcher: types.Patcher(.mesh), id: u32) !void {
+    const s = zprobe.span("MeshRegistry/acquire", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const mesh_slice = self.meshes.slice();
     const data = try loader.load(io, cold);
     defer loader.unload(io, cold);
@@ -155,6 +160,10 @@ pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{.transport}), alloc: 
 }
 
 pub fn release(self: *MeshRegistry, alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("MeshRegistry/release", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.meshes.slice();
 
     const desc = &slice.items(.desc)[id];
@@ -231,6 +240,10 @@ pub fn patch(self: *MeshRegistry, target: u32, resolved: struct { Gid, u32 }, ge
 }
 
 pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
+    const s = zprobe.span("MeshRegistry/tick", .{ .stale = self.stale  });
+    s.enter();
+    defer s.exit();
+
     const transport: *base.Transport = ctx.view.transport;
 
     if (try transport.isReady(self.staging_tickets[0]) and try transport.isReady(self.staging_tickets[1])) {

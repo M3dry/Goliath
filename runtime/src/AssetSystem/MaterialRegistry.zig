@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 const Mesh = @import("../Mesh.zig");
 const types = @import("Types.zig");
 const resolver = @import("resolver.zig");
@@ -124,6 +125,10 @@ pub fn newInstance(self: *MaterialRegistry, alloc: Allocator) !u32 {
 }
 
 pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("MaterialRegistry/acquireSchema", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.schemas.slice();
     const data = try loader.load(io, cold);
     defer loader.unload(io, cold);
@@ -137,12 +142,16 @@ pub fn acquireSchema(self: *MaterialRegistry, alloc: Allocator, io: std.Io, load
 }
 
 pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32) !struct { u64, Gid } {
+    const s = zprobe.span("MaterialRegistry/acquireInstance", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.instances.slice();
     const ret = outer: {
         const data = try loader.load(io, cold);
         defer loader.unload(io, cold);
 
-    // FIX: likely fine but probably should just store the arena pointer and use non Leaky parse
+        // FIX: likely fine but probably should just store the arena pointer and use non Leaky parse
         const instance = try std.json.parseFromSliceLeaky(InstanceBlob, alloc, data, .{});
         errdefer alloc.free(instance.blob);
 
@@ -201,6 +210,10 @@ pub fn acquireInstance(self: *MaterialRegistry, alloc: Allocator, io: std.Io, lo
 }
 
 pub fn releaseSchema(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{.destroy_queue}), alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("MaterialRegistry/releaseSchema", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.schemas.slice();
 
     alloc.free(slice.items(.gid_texture_offsets)[id]);
@@ -214,6 +227,10 @@ pub fn releaseSchema(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{.destroy_qu
 }
 
 pub fn releaseInstance(self: *MaterialRegistry, alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("MaterialRegistry/releaseInstance", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.instances.slice();
 
     alloc.free(slice.items(.blob)[id]);
@@ -309,6 +326,10 @@ pub fn ingestInstance(alloc: Allocator, io: std.Io, location: types.IngestLocati
 }
 
 pub fn tick(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
+    const s = zprobe.span("MaterialRegistry/tick", .{ .schema_count = self.schemas.len, .instance_count = self.instances.len });
+    s.enter();
+    defer s.exit();
+
     const transport: *base.Transport = ctx.view.transport;
 
     const slice = self.schemas.slice();
@@ -321,7 +342,10 @@ pub fn tick(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_alloc
 
             std.mem.swap(base.Buffer, buffer, staging_buffer);
 
-            slice.items(.upload_generation)[schema_id] += 1;
+            const upload_gen = &slice.items(.upload_generation)[schema_id];
+            upload_gen.* += 1;
+
+            zprobe.event(.debug, "buffer swap", .{ .upload_generation = upload_gen.* });
         }
 
         if (!stale.*) continue;

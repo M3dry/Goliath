@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 const Mesh = @import("../Mesh.zig");
 const types = @import("Types.zig");
 const resolver = @import("resolver.zig");
@@ -95,6 +96,10 @@ pub fn new(self: *GeometryRegistry, alloc: Allocator) !u32 {
 }
 
 pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport }), alloc: Allocator, io: std.Io, loader: *Loader, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("GeometryRegistry/acquire", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const slice = self.geometries.slice();
     const data = try loader.load(io, cold);
     errdefer loader.unload(io, cold);
@@ -147,6 +152,10 @@ fn destroy_gpu_header(ctx: ?*anyopaque, ptr: *anyopaque) void {
 }
 
 pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue }), alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("GeometryRegistry/release", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     var slice = self.geometries.slice();
 
     const tickets = &slice.items(.tickets)[id];

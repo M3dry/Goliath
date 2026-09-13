@@ -74,6 +74,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .provider = "Goliath",
+        .level_trace = false,
     }).module("root");
 
     const mod = b.addModule("base", .{

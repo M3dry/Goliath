@@ -6,6 +6,8 @@ const Buffer = @import("Buffer.zig");
 const root = @import("root.zig");
 const Ctx = root.Ctx;
 
+const zprobe = @import("zprobe");
+
 const Allocator = std.mem.Allocator;
 const RingBuffer = @import("util/ring_buffer.zig").RingBuffer;
 
@@ -912,6 +914,9 @@ fn getFreeTicket(self: *Self) !Ticket {
 }
 
 fn workerThread(self: *Self, ctx: Ctx.Query(&.{ .device, .vma_allocator })) !void {
+    _ = try zprobe.threadInit("TRANSPORT");
+    defer zprobe.threadDeinit();
+
     var cmd_buf_idx: u32 = 0;
 
     while (!@atomicLoad(bool, &self.stop_worker, .monotonic)) {

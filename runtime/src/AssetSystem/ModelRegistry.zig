@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 const Mesh = @import("../Mesh.zig");
 const types = @import("Types.zig");
 const resolver = @import("resolver.zig");
@@ -85,6 +86,10 @@ pub fn new(self: *ModelRegistry, alloc: Allocator) !u32 {
 }
 
 pub fn acquire(self: *ModelRegistry, alloc: Allocator, io: std.Io, loader: *Loader, resolved: resolver.Resolved, cold: *const Loader.ColdAsset, id: u32) !void {
+    const s = zprobe.span("ModelRegistry/acquire", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const model = &self.models.items[id];
     const data = try loader.load(io, cold);
     defer loader.unload(io, cold);
@@ -140,12 +145,16 @@ pub fn acquire(self: *ModelRegistry, alloc: Allocator, io: std.Io, loader: *Load
 }
 
 pub fn release(self: *ModelRegistry, alloc: Allocator, id: u32) !void {
+    const s = zprobe.span("ModelRegistry/release", .{ .id = id });
+    s.enter();
+    defer s.exit();
+
     const model = &self.models.items[id];
 
     model.meshes.deinit(alloc);
-    if (model.skeleton) |*s| {
-        for (s.skins) |*skin| skin.deinit(alloc);
-        alloc.free(s.skins);
+    if (model.skeleton) |*skeleton| {
+        for (skeleton.skins) |*skin| skin.deinit(alloc);
+        alloc.free(skeleton.skins);
     }
     model.* = .{};
 

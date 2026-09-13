@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base");
+const zprobe = base.zprobe;
 
 const Allocator = std.mem.Allocator;
 
@@ -155,6 +156,20 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .transport, .graphi
         }
     }
 
+    const valid_entry_count = entries.len - free_entries.items.len;
+    zprobe.event(.info, "asset system initialized", .{
+        .valid_entries = valid_entry_count,
+        .free_entry_slots = free_entries.items.len,
+        .locations = loader.locations.items.len,
+    });
+    if (loader.locations.items.len <= 10) {
+        for (loader.locations.items, 0..) |location, i| {
+            if (!location.isNone()) {
+                zprobe.event(.info, "asset location", .{ .index = i, .path = location.path });
+            }
+        }
+    }
+
     var texture_reg = try TextureRegistry.init(ctx, alloc);
     errdefer texture_reg.deinitNow(.from(ctx));
 
@@ -266,6 +281,13 @@ pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !G
         (try rdeps.addOne(self.alloc)).* = gid;
     }
 
+    zprobe.event(.info, "AssetSystem/finalizeAsset", .{
+        .gid_gen = gid.gen,
+        .gid_slot = gid.slot,
+        .kind = @tagName(e.kind),
+        .name = e.name,
+    });
+
     return gid;
 }
 
@@ -304,6 +326,7 @@ pub fn ingestAsset(self: *AssetSystem, data: KindData, target_path: []const u8) 
         self.alloc.free(path);
         return e;
     };
+    zprobe.event(.info, "AssetSystem/ingestAsset", .{ .kind = @tagName(std.meta.activeTag(data)), .path = path, .location = loc });
     errdefer self.loader.removeLocation(self.alloc, self.io(), loc) catch {};
 
     const location: types.IngestLocation = .{
@@ -346,10 +369,16 @@ pub fn removeAsset(self: *AssetSystem, gid: Gid) !void {
     var e = slice.get(gid.slot);
     if (e.isNone()) return; // NOTE: should imply that it's in `free_entries`
 
+    const s = zprobe.span("AssetSystem/removeAsset", .{ .gid_gen = gid.gen, .gid_slot = gid.slot, .kind = @tagName(e.kind), .name = e.name });
+    s.enter();
+    defer s.exit();
+
     self.ingestAssetCleanup(&e);
 
     slice.set(gid.slot, Entry.none);
     try self.free_entries.append(self.alloc, gid.slot);
+
+    zprobe.event(.info, "completed", .{});
 }
 
 /// gid of the first non-none entry with the given kind and name
@@ -370,6 +399,10 @@ pub fn denseIndex(self: *const AssetSystem, gid: Gid) u32 {
 }
 
 pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport, .vma_allocator, .graphics_family, .transport_family, .destroy_queue })) !void {
+    var s = zprobe.span("AssetSystem/tick", .{});
+    s.enter();
+    defer s.exit();
+
     const slice = self.entries.slice();
     const dense = slice.items(.dense);
     const kinds = slice.items(.kind);
@@ -414,7 +447,17 @@ pub fn tick(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .transport, .vm
             },
         };
 
-        if (remove) _ = self.pending_patches.swapRemove(i) else i += 1;
+        if (remove) {
+            const patch_gid, _ = pending.patch();
+            const target_gid = pending.target();
+            zprobe.event(.debug, "patch applied", .{
+                .patch_gen = patch_gid.gen,
+                .patch_slot = patch_gid.slot,
+                .target_gen = target_gid.gen,
+                .target_slot = target_gid.slot,
+            });
+            _ = self.pending_patches.swapRemove(i);
+        } else i += 1;
     }
 
     try self.material_reg.tick(.from(ctx));
@@ -546,6 +589,10 @@ pub const CommandBuffer = struct {
 };
 
 pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .transport, .graphics_family, .transport_family }), cmds: *CommandBuffer) !void {
+    var s = zprobe.span("AssetSystem/submit", .{});
+    s.enter();
+    defer s.exit();
+
     const slice = self.entries.slice();
     const cold_assets = slice.items(.cold_asset);
     const deps = slice.items(.deps);
@@ -575,6 +622,11 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
     }
 
     try cmds.buildOrder(self);
+
+    for (cmds.order.items) |gid| {
+        const op = cmds.ops.get(gid).?;
+        zprobe.event(.debug, "delta", .{ .gid_gen = gid.gen, .gid_slot = gid.slot, .delta = op.delta });
+    }
 
     var resolve_buf: std.ArrayList(resolver.ResolvedEntry) = .empty;
     defer resolve_buf.deinit(self.alloc);
