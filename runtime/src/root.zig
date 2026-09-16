@@ -13,6 +13,7 @@ pub const PbrShading = @import("PbrShading.zig");
 pub const MaterialHandler = @import("MaterialHandler.zig");
 pub const Culling = @import("Culling.zig");
 pub const AssetSystem = @import("AssetSystem.zig");
+pub const Scene = @import("Scene.zig");
 
 test  {
     @import("std").testing.refAllDecls(@This());
