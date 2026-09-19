@@ -360,7 +360,7 @@ pub fn ingestAssetCleanup(self: *AssetSystem, e: *Entry) void {
 }
 
 pub fn removeAsset(self: *AssetSystem, gid: Gid) !void {
-    const slice = self.entries.slice();
+    var slice = self.entries.slice();
 
     if (slice.len <= gid.slot) return error.OutOfBoundsGitSlot;
     if (slice.items(.generation)[gid.slot] != gid.gen) return error.NonExistentGidReferenced;
