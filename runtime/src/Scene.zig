@@ -39,6 +39,50 @@ const Range = struct {
     }
 };
 
+const Exposed = struct {
+    stable_counter: u32 = 0,
+    data: std.MultiArrayList(struct {
+        stable: u32,
+        node_id: u32,
+    }) = .empty,
+
+    const Self = @This();
+
+    inline fn findByStable(self: *const Self, stable_id: u32) ?usize {
+        const S = struct {
+            fn order(context: u32, ix: u32) std.math.Order {
+                return std.math.order(context, ix);
+            }
+        };
+
+        const slice = self.data.slice();
+
+        return std.sort.binarySearch(u32, slice.items(.stable), stable_id, S.order);
+    }
+
+    pub inline fn find(self: *const Self, stable_id: u32) ?u32 {
+        return self.data.items(.node_id)[self.findByStable(stable_id) orelse return null];
+    }
+
+    pub inline fn expose(self: *Self, alloc: Allocator, node_id: u32) !u32 {
+        try self.data.append(alloc, .{
+            .stable = self.stable_counter,
+            .node_id = node_id,
+        });
+        self.stable_counter += 1;
+    }
+
+    pub inline fn unexpose(self: *Self, stable_id: u32) void {
+        self.data.orderedRemove(self.findByStable(stable_id) orelse return);
+    }
+
+    pub inline fn incrNodeIds(self: *Self, above: u32, delta: u32) void {
+        for (self.data.items(.node_id)) |*id| {
+            if (id > above) id += delta;
+        }
+    }
+};
+
 const NodeDebug = struct {
     mesh_gid: ?Gid,
     skeleton_gid: ?Gid,
@@ -77,11 +121,7 @@ nodes: []Node = &.{}, // topo sorted
 /// [start, end) range
 dirty_transforms: std.ArrayList(Range) = .empty,
 
-expose_counter: u32 = 0,
-exposed: []struct {
-    stable: u32,
-    node_id: u32,
-} = &.{},
+exposed: Exposed = .{},
 
 pub fn rebuildDirtyTransforms(self: *Scene) void {
     while (self.dirty_transforms.pop()) |range| {
@@ -109,10 +149,8 @@ pub fn rebuildDirtyTransforms(self: *Scene) void {
 }
 
 /// `tree` expected to be in DFS pre order
-pub fn addNodes(self: *Scene, alloc: Allocator, tree: []const Node, target_node: u32, tree_debug: []const NodeDebug) !void {
-    const target_node_id = blk: for (self.exposed) |e| {
-        if (e.stable == target_node) break :blk e.node_id;
-    } else return error.TargetNotExposed;
+pub fn addTree(self: *Scene, alloc: Allocator, tree: []const Node, target_node: u32, tree_debug: []const NodeDebug, comptime expose: bool) !(if (expose) u32 else void) {
+    const target_node_id = self.exposed.find(target_node) orelse return error.TargetNotExposed;
 
     const orig_nodes_len = self.nodes.len;
     self.nodes = try alloc.realloc(self.nodes, self.nodes.len + tree.len);
@@ -138,14 +176,20 @@ pub fn addNodes(self: *Scene, alloc: Allocator, tree: []const Node, target_node:
         node.parent += @intCast(tree.len);
     }
 
-    for (self.exposed) |*e| {
-        if (e.node_id > target_node_id) e.node_id += @intCast(tree.len);
-    }
+    self.exposed.incrNodeIds(target_node_id, @intCast(tree.len));
 
     try addDirtyRange(&self.dirty_transforms, alloc, .{
         .start = target_node_id + 1,
         .end = @intCast(tree.len),
     });
+
+    if (expose) {
+        return try self.exposed.expose(alloc, target_node_id + 1);
+    }
+}
+
+pub fn removeTree(self: *Scene, target_node: u32) void {
+
 }
 
 fn addDirtyRange(self: *std.ArrayList(Range), alloc: Allocator, range: Range) !void {
