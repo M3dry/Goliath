@@ -478,12 +478,15 @@ pub const CommandBuffer = struct {
     };
 
     alloc: Allocator,
+    asset_system: *const AssetSystem,
+
     ops: std.AutoHashMapUnmanaged(Gid, Op) = .empty,
     visited: std.AutoHashMapUnmanaged(Gid, void) = .empty, // per-walk dedup scratch
     order: std.ArrayList(Gid) = .empty, // releases (pre-order) then acquires (post-order), built by buildOrder
 
-    pub fn init(alloc: Allocator) CommandBuffer {
+    pub fn init(asset_system: *const AssetSystem, alloc: Allocator) CommandBuffer {
         return .{
+            .asset_system = asset_system,
             .alloc = alloc,
         };
     }
@@ -501,17 +504,17 @@ pub const CommandBuffer = struct {
         self.order = .empty;
     }
 
-    pub fn request(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) (GidError || error{OutOfMemory})!void {
-        try self.walk(system, gid, 1);
+    pub fn request(self: *CommandBuffer, gid: Gid) (GidError || error{OutOfMemory})!void {
+        try self.walk(gid, 1);
     }
 
-    pub fn release(self: *CommandBuffer, system: *const AssetSystem, gid: Gid) (GidError || error{OutOfMemory})!void {
-        try self.walk(system, gid, -1);
+    pub fn release(self: *CommandBuffer, gid: Gid) (GidError || error{OutOfMemory})!void {
+        try self.walk(gid, -1);
     }
 
-    fn walk(self: *CommandBuffer, system: *const AssetSystem, gid: Gid, step: i32) (GidError || error{OutOfMemory})!void {
+    fn walk(self: *CommandBuffer, gid: Gid, step: i32) (GidError || error{OutOfMemory})!void {
         defer self.visited.clearRetainingCapacity();
-        try self.walkRec(system.entries.slice(), gid, step);
+        try self.walkRec(self.asset_system.entries.slice(), gid, step);
     }
 
     fn walkRec(self: *CommandBuffer, slice: std.MultiArrayList(Entry).Slice, gid: Gid, step: i32) (GidError || error{OutOfMemory})!void {
@@ -540,11 +543,11 @@ pub const CommandBuffer = struct {
         }
     }
 
-    fn buildOrder(self: *CommandBuffer, system: *const AssetSystem) !void {
+    fn buildOrder(self: *CommandBuffer) !void {
         self.order.clearRetainingCapacity();
         defer self.visited.clearRetainingCapacity();
 
-        const slice = system.entries.slice();
+        const slice = self.asset_system.entries.slice();
 
         {
             var it = self.ops.iterator();
@@ -588,6 +591,10 @@ pub const CommandBuffer = struct {
     }
 };
 
+pub fn newCommandBuffer(self: *const AssetSystem, cmd_alloc: Allocator) CommandBuffer {
+    return CommandBuffer.init(self, cmd_alloc);
+}
+
 pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .transport, .graphics_family, .transport_family }), cmds: *CommandBuffer) !void {
     var s = zprobe.span("AssetSystem/submit", .{});
     s.enter();
@@ -621,7 +628,7 @@ pub fn submit(self: *AssetSystem, ctx: base.Ctx.Query(&.{ .device, .vma_allocato
         dense[kv.key_ptr.slot] = op.dense;
     }
 
-    try cmds.buildOrder(self);
+    try cmds.buildOrder();
 
     for (cmds.order.items) |gid| {
         const op = cmds.ops.get(gid).?;

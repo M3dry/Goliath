@@ -17,6 +17,12 @@ pub const SkeletonData = struct {
     skins: []Skin,
 };
 
+pub const ConstSkeletonData = struct {
+    gid: Gid,
+    dense: u32,
+    skins: []const Skin,
+};
+
 const Model = struct {
     meshes: std.MultiArrayList(struct {
         gid: Gid,
@@ -204,22 +210,30 @@ pub fn ingest(io: std.Io, alloc: Allocator, location: types.IngestLocation, data
     return entry;
 }
 
-pub fn getMeshGids(self: *ModelRegistry, id: u32) []const Gid {
+pub fn getMeshGids(self: *const ModelRegistry, id: u32) []const Gid {
     return self.models.items[id].meshes.items(.gid);
 }
 
-pub fn getMeshDenseIds(self: *ModelRegistry, id: u32) []const u32 {
+pub fn getMeshDenseIds(self: *const ModelRegistry, id: u32) []const u32 {
     return self.models.items[id].meshes.items(.dense);
 }
 
-pub fn getMeshTransforms(self: *ModelRegistry, id: u32) []const base.zmath.Mat {
+pub fn getMeshTransforms(self: *const ModelRegistry, id: u32) []const base.zmath.Mat {
     return self.models.items[id].meshes.items(.transform);
 }
 
-pub fn getMeshSkins(self: *ModelRegistry, id: u32) []const u32 {
+pub fn getMeshSkins(self: *const ModelRegistry, id: u32) []const u32 {
     return self.models.items[id].meshes.items(.skin);
 }
 
-pub fn getSkeleton(self: *ModelRegistry, id: u32) ?SkeletonData {
-    return self.models.items[id].skeleton;
+pub fn getSkeleton(self: *const ModelRegistry, id: u32) ?ConstSkeletonData {
+    if (self.models.items[id].skeleton) |skeleton| {
+        return .{
+            .gid = skeleton.gid,
+            .dense = skeleton.dense,
+            .skins = skeleton.skins,
+        };
+    }
+
+    return null;
 }

@@ -26,6 +26,22 @@ pub const Sampler = struct {
     output: []f32,
 };
 
+fn pathFromGltf(path: zcgltf.AnimationPathType) ?Path {
+    return switch (path) {
+        .translation => .translation,
+        .rotation => .rotation,
+        .scale => .scale,
+        else => null,
+    };
+}
+
+fn componentCount(path: Path) usize {
+    return switch (path) {
+        .translation, .scale => 3,
+        .rotation => 4,
+    };
+}
+
 channels: []Channel,
 samplers: []Sampler,
 duration: f32,
@@ -67,11 +83,17 @@ pub fn fromGltf(
         const input = try alloc.alloc(f32, gs.input.unpackFloatsCount());
         errdefer alloc.free(input);
         _ = gs.input.unpackFloats(input);
+        if (input.len == 0) return error.EmptyAnimationSampler;
+        for (input, 0..) |key_time, key_index| {
+            if (!std.math.isFinite(key_time)) return error.InvalidAnimationKeyTime;
+            if (key_index > 0 and key_time <= input[key_index - 1]) return error.AnimationKeyTimesNotStrictlyIncreasing;
+        }
         if (input.len > 0) duration = @max(duration, input[input.len - 1]);
 
         const output = try alloc.alloc(f32, gs.output.unpackFloatsCount());
         errdefer alloc.free(output);
         _ = gs.output.unpackFloats(output);
+        for (output) |value| if (!std.math.isFinite(value)) return error.InvalidAnimationValue;
 
         const interp: Interpolation = switch (gs.interpolation) {
             .linear => .linear,
@@ -90,7 +112,8 @@ pub fn fromGltf(
     var valid_count: usize = 0;
     for (0..gltf_anim.channels_count) |i| {
         const chan = gltf_anim.channels[i];
-        if (chan.target_node) |node| {
+        if (pathFromGltf(chan.target_path) != null and chan.target_node != null) {
+            const node = chan.target_node.?;
             const gltf_ix = @as(u32, @intCast(
                 (@intFromPtr(node) - @intFromPtr(nodes_slice.ptr)) / @sizeOf(zcgltf.Node),
             ));
@@ -124,12 +147,10 @@ pub fn fromGltf(
             (@intFromPtr(chan.sampler) - @intFromPtr(gltf_samplers.ptr)) / @sizeOf(zcgltf.AnimationSampler),
         ));
 
-        const path: Path = switch (chan.target_path) {
-            .translation => .translation,
-            .rotation => .rotation,
-            .scale => .scale,
-            else => continue,
-        };
+        const path = pathFromGltf(chan.target_path) orelse continue;
+        const sampler = samplers[sampler_ix];
+        const value_count = sampler.input.len * componentCount(path) * (if (sampler.interpolation == .cubic_spline) @as(usize, 3) else 1);
+        if (sampler.output.len != value_count) return error.InvalidAnimationSamplerOutput;
 
         channels[ch_idx] = .{
             .skeleton_node_index = local_ix,
@@ -146,44 +167,79 @@ pub fn fromGltf(
     };
 }
 
-pub fn evaluate(self: *const Animation, alloc: Allocator, skeleton: *const Skeleton, skin: *const Skin, time: f32, out: []zm.Mat) !void {
-    var eval_trs = try alloc.alloc(Skeleton.TRSNode, skeleton.bind_local_transforms.len);
-    defer alloc.free(eval_trs);
-    @memcpy(eval_trs, skeleton.bind_local_transforms);
+fn normalizeQuaternion(rotation: *[4]f32) void {
+    const length_squared = rotation[0] * rotation[0] + rotation[1] * rotation[1] + rotation[2] * rotation[2] + rotation[3] * rotation[3];
+    if (!(length_squared > 0) or !std.math.isFinite(length_squared)) {
+        rotation.* = .{ 0, 0, 0, 1 };
+        return;
+    }
+    const inverse_length = 1.0 / @sqrt(length_squared);
+    for (rotation) |*component| component.* *= inverse_length;
+}
+
+fn keyframeAtOrBefore(input: []const f32, time: f32) usize {
+    var low: usize = 0;
+    var high = input.len;
+    while (low < high) {
+        const middle = low + (high - low) / 2;
+        if (input[middle] <= time) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return if (low == 0) 0 else low - 1;
+}
+
+/// Samples this clip into caller-owned local-space pose storage. The output is
+/// reset to the skeleton's bind pose before animation channels are applied.
+pub fn sample(self: *const Animation, skeleton: *const Skeleton, time: f32, out_local_pose: []Skeleton.TRSNode) !void {
+    if (out_local_pose.len != skeleton.bind_local_transforms.len) return error.PoseSizeMismatch;
+    if (!std.math.isFinite(time)) return error.InvalidAnimationTime;
+    @memcpy(out_local_pose, skeleton.bind_local_transforms);
 
     for (self.channels) |ch| {
+        if (ch.skeleton_node_index >= out_local_pose.len) return error.InvalidAnimationNodeIndex;
+        if (ch.sampler_index >= self.samplers.len) return error.InvalidAnimationSamplerIndex;
         const sampler = self.samplers[ch.sampler_index];
         const input = sampler.input;
-        if (input.len == 0) continue;
         const t = @min(@max(time, input[0]), input[input.len - 1]);
+        const kf = keyframeAtOrBefore(input, t);
+        const stride = componentCount(ch.path);
 
-        var kf: usize = 0;
-        for (input, 0..) |key_time, i| {
-            if (t >= key_time) kf = i;
-        }
-
-        const stride: u32 = switch (ch.path) { .translation => 3, .rotation => 4, .scale => 3 };
-
-        if (sampler.interpolation == .step or kf == input.len - 1) {
+        if (sampler.interpolation == .step) {
             const b0 = kf * stride;
             switch (ch.path) {
                 .translation => for (0..3) |j| {
-                    eval_trs[ch.skeleton_node_index].translation[j] = sampler.output[b0 + j];
+                    out_local_pose[ch.skeleton_node_index].translation[j] = sampler.output[b0 + j];
                 },
                 .rotation => for (0..4) |j| {
-                    eval_trs[ch.skeleton_node_index].rotation[j] = sampler.output[b0 + j];
+                    out_local_pose[ch.skeleton_node_index].rotation[j] = sampler.output[b0 + j];
                 },
                 .scale => for (0..3) |j| {
-                    eval_trs[ch.skeleton_node_index].scale[j] = sampler.output[b0 + j];
+                    out_local_pose[ch.skeleton_node_index].scale[j] = sampler.output[b0 + j];
                 },
             }
+            if (ch.path == .rotation) normalizeQuaternion(&out_local_pose[ch.skeleton_node_index].rotation);
         } else if (sampler.interpolation == .linear) {
+            if (kf == input.len - 1) {
+                const base_index = kf * stride;
+                switch (ch.path) {
+                    .translation => @memcpy(&out_local_pose[ch.skeleton_node_index].translation, sampler.output[base_index..][0..3]),
+                    .rotation => {
+                        @memcpy(&out_local_pose[ch.skeleton_node_index].rotation, sampler.output[base_index..][0..4]);
+                        normalizeQuaternion(&out_local_pose[ch.skeleton_node_index].rotation);
+                    },
+                    .scale => @memcpy(&out_local_pose[ch.skeleton_node_index].scale, sampler.output[base_index..][0..3]),
+                }
+                continue;
+            }
             const t_norm = (t - input[kf]) / (input[kf + 1] - input[kf]);
             const b0 = kf * stride;
             const b1 = (kf + 1) * stride;
             switch (ch.path) {
                 .translation => for (0..3) |j| {
-                    eval_trs[ch.skeleton_node_index].translation[j] = sampler.output[b0 + j] + (sampler.output[b1 + j] - sampler.output[b0 + j]) * t_norm;
+                    out_local_pose[ch.skeleton_node_index].translation[j] = sampler.output[b0 + j] + (sampler.output[b1 + j] - sampler.output[b0 + j]) * t_norm;
                 },
                 .rotation => {
                     const q = zm.slerp(
@@ -191,22 +247,118 @@ pub fn evaluate(self: *const Animation, alloc: Allocator, skeleton: *const Skele
                         zm.f32x4(sampler.output[b1 + 0], sampler.output[b1 + 1], sampler.output[b1 + 2], sampler.output[b1 + 3]),
                         t_norm,
                     );
-                    eval_trs[ch.skeleton_node_index].rotation = .{ q[0], q[1], q[2], q[3] };
+                    out_local_pose[ch.skeleton_node_index].rotation = .{ q[0], q[1], q[2], q[3] };
+                    normalizeQuaternion(&out_local_pose[ch.skeleton_node_index].rotation);
                 },
                 .scale => for (0..3) |j| {
-                    eval_trs[ch.skeleton_node_index].scale[j] = sampler.output[b0 + j] + (sampler.output[b1 + j] - sampler.output[b0 + j]) * t_norm;
+                    out_local_pose[ch.skeleton_node_index].scale[j] = sampler.output[b0 + j] + (sampler.output[b1 + j] - sampler.output[b0 + j]) * t_norm;
                 },
+            }
+        } else {
+            const value_base = (kf * 3 + 1) * stride;
+            if (kf == input.len - 1) {
+                switch (ch.path) {
+                    .translation => @memcpy(&out_local_pose[ch.skeleton_node_index].translation, sampler.output[value_base..][0..3]),
+                    .rotation => {
+                        @memcpy(&out_local_pose[ch.skeleton_node_index].rotation, sampler.output[value_base..][0..4]);
+                        normalizeQuaternion(&out_local_pose[ch.skeleton_node_index].rotation);
+                    },
+                    .scale => @memcpy(&out_local_pose[ch.skeleton_node_index].scale, sampler.output[value_base..][0..3]),
+                }
+                continue;
+            }
+
+            const delta = input[kf + 1] - input[kf];
+            const u = (t - input[kf]) / delta;
+            const u_squared = u * u;
+            const u_cubed = u_squared * u;
+            const h00 = 2 * u_cubed - 3 * u_squared + 1;
+            const h10 = u_cubed - 2 * u_squared + u;
+            const h01 = -2 * u_cubed + 3 * u_squared;
+            const h11 = u_cubed - u_squared;
+            const out_tangent_base = (kf * 3 + 2) * stride;
+            const next_in_tangent_base = ((kf + 1) * 3) * stride;
+            const next_value_base = ((kf + 1) * 3 + 1) * stride;
+            var value: [4]f32 = undefined;
+            for (0..stride) |j| {
+                value[j] = h00 * sampler.output[value_base + j] +
+                    h10 * delta * sampler.output[out_tangent_base + j] +
+                    h01 * sampler.output[next_value_base + j] +
+                    h11 * delta * sampler.output[next_in_tangent_base + j];
+            }
+            switch (ch.path) {
+                .translation => @memcpy(&out_local_pose[ch.skeleton_node_index].translation, value[0..3]),
+                .rotation => {
+                    out_local_pose[ch.skeleton_node_index].rotation = value;
+                    normalizeQuaternion(&out_local_pose[ch.skeleton_node_index].rotation);
+                },
+                .scale => @memcpy(&out_local_pose[ch.skeleton_node_index].scale, value[0..3]),
             }
         }
     }
+}
 
-    var joint_world = try alloc.alloc(zm.Mat, skeleton.bind_local_transforms.len);
-    defer alloc.free(joint_world);
-
-    for (eval_trs, skeleton.parents, 0..) |trs, parent, i| {
-        const local = zm.mul(zm.scaling(trs.scale[0], trs.scale[1], trs.scale[2]), zm.mul(zm.matFromQuat(zm.f32x4(trs.rotation[0], trs.rotation[1], trs.rotation[2], trs.rotation[3])), zm.translation(trs.translation[0], trs.translation[1], trs.translation[2])));
-        joint_world[i] = if (parent == std.math.maxInt(u32)) local else zm.mul(local, joint_world[parent]);
+pub fn buildModelPose(skeleton: *const Skeleton, local_pose: []const Skeleton.TRSNode, out_model_pose: []zm.Mat) !void {
+    if (local_pose.len != skeleton.parents.len or out_model_pose.len != skeleton.parents.len) return error.PoseSizeMismatch;
+    for (local_pose, skeleton.parents, 0..) |trs, parent, i| {
+        const local = trs.toMat();
+        if (parent != std.math.maxInt(u32) and parent >= i) return error.InvalidSkeletonParent;
+        out_model_pose[i] = if (parent == std.math.maxInt(u32)) local else zm.mul(local, out_model_pose[parent]);
     }
+}
 
-    for (0..out.len) |i| out[i] = zm.mul(skin.inverse_bind_matrices[i], joint_world[skin.skeleton_node_indices[i]]);
+pub fn buildSkinPalette(skin: *const Skin, model_pose: []const zm.Mat, out_palette: []zm.Mat) !void {
+    if (out_palette.len != skin.skeleton_node_indices.len or out_palette.len != skin.inverse_bind_matrices.len) return error.SkinPaletteSizeMismatch;
+    for (out_palette, skin.skeleton_node_indices, skin.inverse_bind_matrices) |*out, skeleton_node_index, inverse_bind| {
+        if (skeleton_node_index >= model_pose.len) return error.InvalidSkinJointIndex;
+        out.* = zm.mul(inverse_bind, model_pose[skeleton_node_index]);
+    }
+}
+
+test "linear and cubic sampling use caller-owned pose storage" {
+    var bind_pose = [_]Skeleton.TRSNode{.{
+        .translation = .{ 0, 0, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .scale = .{ 1, 1, 1 },
+    }};
+    var parents = [_]u32{std.math.maxInt(u32)};
+    const skeleton = Skeleton{ .bind_local_transforms = &bind_pose, .parents = &parents };
+    var times = [_]f32{ 0, 1 };
+    var linear_values = [_]f32{ 0, 0, 0, 2, 4, 6 };
+    var linear_samplers = [_]Sampler{.{ .interpolation = .linear, .input = &times, .output = &linear_values }};
+    var translation_channels = [_]Channel{.{ .skeleton_node_index = 0, .path = .translation, .sampler_index = 0 }};
+    const linear = Animation{ .channels = &translation_channels, .samplers = &linear_samplers, .duration = 1 };
+    var pose: [1]Skeleton.TRSNode = undefined;
+
+    try linear.sample(&skeleton, 0.5, &pose);
+    try std.testing.expectEqualSlices(f32, &.{ 1, 2, 3 }, &pose[0].translation);
+
+    // Two cubic keys, each encoded as in-tangent/value/out-tangent.
+    var cubic_values = [_]f32{
+        0, 0, 0, 0, 0, 0, 1, 0, 0,
+        1, 0, 0, 1, 0, 0, 0, 0, 0,
+    };
+    var cubic_samplers = [_]Sampler{.{ .interpolation = .cubic_spline, .input = &times, .output = &cubic_values }};
+    const cubic = Animation{ .channels = &translation_channels, .samplers = &cubic_samplers, .duration = 1 };
+    try cubic.sample(&skeleton, 0.5, &pose);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), pose[0].translation[0], 0.0001);
+}
+
+test "sample normalizes animated quaternions" {
+    var bind_pose = [_]Skeleton.TRSNode{.{
+        .translation = .{ 0, 0, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .scale = .{ 1, 1, 1 },
+    }};
+    var parents = [_]u32{std.math.maxInt(u32)};
+    const skeleton = Skeleton{ .bind_local_transforms = &bind_pose, .parents = &parents };
+    var times = [_]f32{0};
+    var values = [_]f32{ 0, 0, 0, 2 };
+    var samplers = [_]Sampler{.{ .interpolation = .step, .input = &times, .output = &values }};
+    var channels = [_]Channel{.{ .skeleton_node_index = 0, .path = .rotation, .sampler_index = 0 }};
+    const animation = Animation{ .channels = &channels, .samplers = &samplers, .duration = 0 };
+    var pose: [1]Skeleton.TRSNode = undefined;
+
+    try animation.sample(&skeleton, 0, &pose);
+    try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0, 1 }, &pose[0].rotation);
 }

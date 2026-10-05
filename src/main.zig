@@ -261,13 +261,11 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        const material_gid = try ingestAndFinalize(&asset_system, .{
-            .material_instance = .{
-                .schema = schema_gid,
-                .blob = std.mem.asBytes(&asset_inst),
-                .deps = material_deps[0..dep_count],
-            }
-        }, "paladin_material");
+        const material_gid = try ingestAndFinalize(&asset_system, .{ .material_instance = .{
+            .schema = schema_gid,
+            .blob = std.mem.asBytes(&asset_inst),
+            .deps = material_deps[0..dep_count],
+        } }, "paladin_material");
 
         var body_lods: [1]runtime.AssetSystem.MeshRegistry.LodEntryBlob = undefined;
         const body_gid = try ingestAndFinalize(&asset_system, .{ .mesh = meshBlob(&body_mesh, body_geo_gid, schema_gid, material_gid, &body_lods) }, "body_mesh");
@@ -282,38 +280,28 @@ pub fn main(init: std.process.Init) !void {
         defer for (&paladin_anims) |*a| a.deinit(gpa);
         for (&paladin_anims, 0..) |*a, i| a.* = try runtime.Animation.fromGltf(gpa, gltf_data, @intCast(i), paladin_node_map);
 
-        const skeleton_gid = try ingestAndFinalize(&asset_system, .{
-            .skeleton = .{
-                .animation_names = &.{},
-                .joint_names = &.{},
-                .skeleton = paladin_skeleton,
-                .animations = &paladin_anims,
-            }
-        }, "paladin_skeleton");
+        const skeleton_gid = try ingestAndFinalize(&asset_system, .{ .skeleton = .{
+            .animation_names = &.{},
+            .joint_names = &.{},
+            .skeleton = paladin_skeleton,
+            .animations = &paladin_anims,
+        } }, "paladin_skeleton");
 
         const paladin_skin = try runtime.Skin.fromGltf(gpa, gltf_data, 0, paladin_node_map);
         defer paladin_skin.deinit(gpa);
 
-        _ = try ingestAndFinalize(&asset_system, .{
-            .model = .{
-                .meshes = &([2]runtime.AssetSystem.ModelRegistry.IngestModel.MeshData{
-                    .{
-                        .gid = body_gid,
-                        .transform = zm.scaling(0.05, 0.05, 0.05),
-                        .skin = 0,
-                    },
-                    .{
-                        .gid = helmet_gid,
-                        .transform = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05)),
-                        .skin = 0,
-                    }
-                }),
-                .skeleton = .{
-                    .gid = skeleton_gid,
-                    .skins = (&paladin_skin)[0..1],
-                }
-            }
-        }, "paladin");
+        _ = try ingestAndFinalize(&asset_system, .{ .model = .{ .meshes = &([2]runtime.AssetSystem.ModelRegistry.IngestModel.MeshData{ .{
+            .gid = body_gid,
+            .transform = zm.scaling(0.05, 0.05, 0.05),
+            .skin = 0,
+        }, .{
+            .gid = helmet_gid,
+            .transform = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05)),
+            .skin = 0,
+        } }), .skeleton = .{
+            .gid = skeleton_gid,
+            .skins = (&paladin_skin)[0..1],
+        } } }, "paladin");
 
         // write the manifest
         var manifest_writer_buf: [1024]u8 = undefined;
@@ -333,15 +321,13 @@ pub fn main(init: std.process.Init) !void {
     const material_gid = asset_system.findEntry(.material_instance, "paladin_material") orelse return error.AssetEntryNotFound;
     const paladin_gid = asset_system.findEntry(.model, "paladin") orelse return error.AssetEntryNotFound;
 
-    var asset_cmd_buf = runtime.AssetSystem.CommandBuffer.init(gpa);
+    var asset_cmd_buf = asset_system.newCommandBuffer(gpa);
     defer asset_cmd_buf.deinit();
-    try asset_cmd_buf.request(&asset_system, material_gid);
-    // try asset_cmd_buf.request(&asset_system, body_mesh_gid);
-    // try asset_cmd_buf.request(&asset_system, helmet_mesh_gid);
+    try asset_cmd_buf.request(material_gid);
     // geometry and instance deps on meshes are soft; request them explicitly
-    try asset_cmd_buf.request(&asset_system, body_geo_gid);
-    try asset_cmd_buf.request(&asset_system, helmet_geo_gid);
-    try asset_cmd_buf.request(&asset_system, paladin_gid);
+    try asset_cmd_buf.request(body_geo_gid);
+    try asset_cmd_buf.request(helmet_geo_gid);
+    try asset_cmd_buf.request(paladin_gid);
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
 
     const pbr_schema_id = asset_system.denseIndex(pbr_schema_gid);
@@ -351,6 +337,11 @@ pub fn main(init: std.process.Init) !void {
 
     const skeleton = asset_system.skeleton_reg.getSkeleton(paladin_skeleton.dense);
     const anims = asset_system.skeleton_reg.getAnimations(paladin_skeleton.dense);
+
+    const paladin_local_pose = try gpa.alloc(runtime.Skeleton.TRSNode, skeleton.bind_local_transforms.len);
+    defer gpa.free(paladin_local_pose);
+    const paladin_model_pose = try gpa.alloc(zm.Mat, skeleton.bind_local_transforms.len);
+    defer gpa.free(paladin_model_pose);
 
     std.debug.assert(paladin_skeleton.skins.len == 1);
     const skin = paladin_skeleton.skins[0];
@@ -449,21 +440,12 @@ pub fn main(init: std.process.Init) !void {
         .color_attachments = &.{
             base.GraphicsPipeline.ColorAttachment{
                 .format = render_format,
-                .blend = .{
-                    .blend_enable = .true,
-                    .src_color_blend_factor = .one,
-                    .src_alpha_blend_factor = .one,
-                    .dst_color_blend_factor = .one_minus_src_alpha,
-                    .dst_alpha_blend_factor = .one_minus_src_alpha,
-                    .color_blend_op = .add,
-                    .alpha_blend_op = .add,
-                    .color_write_mask = .{
-                        .r_bit = true,
-                        .g_bit = true,
-                        .b_bit = true,
-                        .a_bit = true,
-                    }
-                },
+                .blend = .{ .blend_enable = .true, .src_color_blend_factor = .one, .src_alpha_blend_factor = .one, .dst_color_blend_factor = .one_minus_src_alpha, .dst_alpha_blend_factor = .one_minus_src_alpha, .color_blend_op = .add, .alpha_blend_op = .add, .color_write_mask = .{
+                    .r_bit = true,
+                    .g_bit = true,
+                    .b_bit = true,
+                    .a_bit = true,
+                } },
             },
         },
         .depth_format = base.Ctx.depth_texture,
@@ -559,11 +541,16 @@ pub fn main(init: std.process.Init) !void {
             const rt = ctx.renderTarget();
             const dt = ctx.depthTarget();
 
-            const anim_time = @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration);
+            const anim_time = if (anims[1].duration > 0)
+                @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration)
+            else
+                0;
             {
                 const buf = &joint_matrices_bufs[ctx.current_frame];
                 const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
-                try anims[1].evaluate(gpa, &skeleton, &skin, anim_time, mats);
+                try anims[1].sample(&skeleton, anim_time, paladin_local_pose);
+                try runtime.Animation.buildModelPose(&skeleton, paladin_local_pose, paladin_model_pose);
+                try runtime.Animation.buildSkinPalette(&skin, paladin_model_pose, mats);
                 if (!buf.coherent) buf.flush(.from(&ctx), 0, buf.size);
             }
 
@@ -751,7 +738,7 @@ pub fn main(init: std.process.Init) !void {
             const zero_pass = try rg.addTransferPass(.{});
             try zero_pass.clearImage(.{
                 .image = rt_ref,
-                .color = .{ .float_32 = .{ 36.0/255.0, 36.0/255.0, 36.0/255.0, 1.0 } },
+                .color = .{ .float_32 = .{ 36.0 / 255.0, 36.0 / 255.0, 36.0 / 255.0, 1.0 } },
             });
             try zero_pass.fillBuffer(.{ .buffer = renderables_ref, .size = renderables_buf.size });
             try zero_pass.fillBuffer(.{ .buffer = draw_cmds_ref, .size = draw_cmds_buf.size });
@@ -814,7 +801,7 @@ pub fn main(init: std.process.Init) !void {
                 if (!skinned_world_instances_buf.coherent)
                     skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
 
-                const base_off2 = Culling.skinned_world_instance_size*2;
+                const base_off2 = Culling.skinned_world_instance_size * 2;
                 const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
 
                 inst3[0] = helmet_dense;
@@ -823,7 +810,7 @@ pub fn main(init: std.process.Init) !void {
                 if (!skinned_world_instances_buf.coherent)
                     skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
 
-                const base_off3 = Culling.skinned_world_instance_size*3;
+                const base_off3 = Culling.skinned_world_instance_size * 3;
                 const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
 
                 inst4[0] = body_dense;
@@ -922,7 +909,6 @@ pub fn main(init: std.process.Init) !void {
                 .light_count = 0,
                 .pc_buf = &pbr_pc_buf,
             });
-
 
             var grid_pc_buf: [base.push_constant.size(GridPC, base.layout.scalar)]u8 = undefined;
             base.push_constant.write(GridPC, &grid_pc_buf, .{

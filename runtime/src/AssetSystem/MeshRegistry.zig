@@ -240,7 +240,7 @@ pub fn patch(self: *MeshRegistry, target: u32, resolved: struct { Gid, u32 }, ge
 }
 
 pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport, .destroy_queue })) !void {
-    const s = zprobe.span("MeshRegistry/tick", .{ .stale = self.stale  });
+    const s = zprobe.span("MeshRegistry/tick", .{ .stale = self.stale });
     s.enter();
     defer s.exit();
 
@@ -287,6 +287,15 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
     errdefer transport.unqueue(self.staging_tickets[1], false);
 
     self.stale = false;
+}
+
+pub inline fn getLodRange(self: *const MeshRegistry, mesh: u32) struct { u32, u32 } {
+    const desc = self.meshes.items(.desc)[mesh];
+    return .{ desc.lod_offset, desc.lod_offset + desc.lod_count };
+}
+
+pub inline fn getLodAssets(self: *const MeshRegistry, lod: u32) std.EnumArray(PatchKind, Gid) {
+    return self.lods.items(.patch_lookup)[lod];
 }
 
 // TODO: hole tracking + filling
