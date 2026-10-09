@@ -9,13 +9,16 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(shaders.step);
 
     const rebuild_assets = b.option(bool, "asset_system_rebuild", "Rebuild the asset system manifest from the model textures (wipes testing_asset_system)") orelse false;
+    const debug_build = b.option(bool, "debug_build", "Include debug data in runtime builds") orelse (optimize == .Debug);
     const build_options = b.addOptions();
     build_options.addOption(bool, "asset_system_rebuild", rebuild_assets);
+    build_options.addOption(bool, "debug_build", debug_build);
     const build_options_mod = build_options.createModule();
 
     const runtime_mod = b.dependency("runtime", .{
         .target = target,
         .optimize = optimize,
+        .debug_build = debug_build,
     }).module("runtime");
 
     const exe_opts: std.Build.ExecutableOptions = .{

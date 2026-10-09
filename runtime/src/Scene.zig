@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 const base = @import("base");
 const Allocator = std.mem.Allocator;
@@ -9,7 +10,8 @@ const Skin = @import("Skin.zig");
 const PosePool = @import("PosePool.zig");
 const TemplateScene = @import("TemplateScene.zig");
 
-const debug_enabled = true;
+// TODO: take in as comptime param to the functins that use this one/carry it comptime on the struct (probably better)
+const debug_enabled = build_options.debug_build;
 
 const Scene = @This();
 
@@ -147,6 +149,7 @@ const DirtyRanges = struct {
     }
 };
 
+pub const ExposedId = Exposed.Id;
 const Exposed = struct {
     pub const Id = struct {
         gen: u32,
@@ -244,7 +247,7 @@ pub const Node = struct {
 
     parent_transform_relation: union(enum) {
         inherit_transform,
-        attachment: u31, // points into `attachments`, still inherits the parent's transform (makes it easier to do dirty tracking, and most of the time what is wanted, otherwise node should be placed as the child of the root)
+        attachment: u32, // points into `attachments`, still inherits the parent's transform (makes it easier to do dirty tracking, and most of the time what is wanted, otherwise node should be placed as the child of the root)
     },
 
     local_transform: Mat, // will get stored as TRS in the asset, for runtime we can convert to 4x4 at load once

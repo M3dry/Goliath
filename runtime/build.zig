@@ -4,6 +4,11 @@ const build_shaders = @import("build_shaders.zig");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const debug_build = b.option(bool, "debug_build", "Include debug data in runtime builds") orelse (optimize == .Debug);
+
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "debug_build", debug_build);
+    const build_options_mod = build_options.createModule();
 
     const shaders = build_shaders.shadersStep(b, "shaders");
     b.getInstallStep().dependOn(shaders.step);
@@ -27,6 +32,7 @@ pub fn build(b: *std.Build) !void {
     const mod = b.addModule("runtime", .{
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
+            .{ .name = "build_options", .module = build_options_mod },
             .{ .name = "base", .module = base_mod },
             .{ .name = "shaders", .module = shaders.mod },
             .{ .name = "zmesh", .module = zmesh_dep.module("root") },

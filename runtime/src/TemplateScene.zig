@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 const zm = @import("base").zmath;
 
@@ -9,6 +10,7 @@ const TRS = @import("Skeleton.zig").TRSNode;
 const TemplateScene = @This();
 
 const Scene = @import("Scene.zig");
+const PosePool = @import("PosePool.zig");
 
 pub const NodeRef = struct {
     ix: u32,
@@ -41,13 +43,13 @@ pub const NodeRef = struct {
     pub fn expose(self: NodeRef, e: Expose) void {
         const node = &self.ts.nodes.items[self.ix];
 
-        node.expose.* = node.expose.extend(e);
+        node.expose = node.expose.extend(e);
     }
 
     pub fn unexpose(self: NodeRef, e: Expose) void {
         const node = &self.ts.nodes.items[self.ix];
 
-        node.expose.* = node.expose.subtract(e);
+        node.expose = node.expose.subtract(e);
     }
 
     /// adds `sibling` as a sibling of `self`
@@ -196,10 +198,10 @@ pub fn addNode(self: *TemplateScene) !NodeRef {
     };
 }
 
-pub const GroupKey = u31;
-pub const Expose = packed struct(u64) {
-    node: ?GroupKey = false,
-    pose: ?GroupKey = false,
+pub const GroupKey = u32;
+pub const Expose = struct {
+    node: ?GroupKey = null,
+    pose: ?GroupKey = null,
 
     pub fn extend(self: Expose, other: Expose) Expose {
         return .{
@@ -285,37 +287,127 @@ pub const PreorderIter = struct {
     }
 };
 
+pub const ExposeBuild = struct {
+    const ExposeTypes = enum {
+        node,
+        pose,
+    };
+    // count while building, range afterwards
+    const Map = std.AutoHashMapUnmanaged(GroupKey, union {
+        range: std.EnumArray(ExposeTypes, struct { u32, u32 }),
+        count: std.EnumArray(ExposeTypes, u32),
+    });
+    map: Map = .empty,
+
+    exposed_nodes: []Scene.ExposedId = &.{},
+    exposed_poses: []PosePool.PoseId = &.{},
+
+
+    pub fn initArrays(self: *ExposeBuild, alloc: Allocator, node_count: u32, pose_count: u32) !void {
+        self.exposed_nodes = try alloc.alloc(Scene.ExposedId, node_count);
+        errdefer alloc.free(self.exposed_nodes);
+        errdefer self.exposed_nodes = &.{};
+
+        self.exposed_poses = try alloc.alloc(PosePool.PoseId, pose_count);
+        errdefer alloc.free(self.exposed_poses);
+        errdefer self.exposed_nodes = &.{};
+    }
+
+    pub fn deinit(self: *ExposeBuild, alloc: Allocator) void {
+        self.map.deinit(alloc);
+        alloc.free(self.exposed_nodes);
+        alloc.free(self.exposed_poses);
+
+        self.map = .empty;
+        self.exposed_nodes = &.{};
+        self.exposed_poses = &.{};
+    }
+
+    pub inline fn nodes(self: *ExposeBuild, key: GroupKey) []const Scene.ExposedId {
+        const u = self.map.get(key) orelse return &.{};
+        const start, const end = u.range.get(.node);
+
+        return self.exposed_nodes[start..end];
+    }
+
+    pub inline fn poses(self: *ExposeBuild, key: GroupKey) []const PosePool.PoseId {
+        const u = self.map.get(key) orelse return &.{};
+        const start, const end = u.range.get(.pose);
+
+        return self.exposed_poses[start..end];
+    }
+
+    pub fn build(self: *ExposeBuild) void {
+        var map_it = self.map.iterator();
+
+        var node_start: usize = 0;
+        var pose_start: usize = 0;
+        while (map_it.next()) |kv| {
+            const counts = kv.value_ptr.count;
+
+            const node_count = counts.get(.node);
+            std.debug.assert(node_start + node_count <= self.exposed_nodes.len);
+
+            const pose_count = counts.get(.pose);
+            std.debug.assert(pose_start + pose_count <= self.exposed_poses.len);
+
+            kv.value_ptr.* = .{ .range = .init(.{
+                .node = .{ node_start, node_start }, // end range gets updated as the arrays get populated in buildRecurse
+                .pose = .{ pose_start, pose_start },
+            }) };
+
+            node_start += node_count;
+            pose_start += pose_count;
+        }
+    }
+};
+
 pub const Build = struct {
     nodes: []Scene.Node,
     debug_nodes: ?[]Scene.NodeDebug = null,
 
+    exposed: ExposeBuild,
+
     pub fn deinit(self: *Build, alloc: Allocator, debug_alloc: Allocator) void {
         alloc.free(self.nodes);
         if (self.debug_nodes) |nodes| debug_alloc.free(nodes);
+
+        self.exposed.deinit(alloc);
     }
 };
 
 pub const BuildConfig = struct {
     alloc: Allocator,
     debug_alloc: Allocator,
+    // elements won't get freed individually
     name_alloc: Allocator,
-    comptime build_debug: bool = false,
     as: *const AssetSystem,
+
+    comptime build_debug: bool = build_options.debug_build,
 };
 
 fn build(self: *TemplateScene, config: BuildConfig, root: u32) !Build {
-    const node_count: usize = try self.countNodes(config.alloc, config.as, root);
+    var exposed = ExposeBuild{};
+    errdefer exposed.deinit(config.alloc);
 
-    var res: Build = .{ .nodes = undefined };
-    res.nodes = try config.alloc.alloc(Scene.Node, node_count);
+    const counts = try self.countNodes(config.alloc, config.as, &exposed, root);
+
+    try exposed.initArrays(config.alloc, counts.exposed_nodes, counts.exposed_poses);
+    exposed.build();
+
+    var res: Build = undefined;
+    res.exposed = exposed;
+
+    res.nodes = try config.alloc.alloc(Scene.Node, counts.nodes);
     errdefer config.alloc.free(res.nodes);
-    if (config.build_debug) res.debug_nodes = try config.debug_alloc.alloc(Scene.NodeDebug, node_count);
+
+    if (config.build_debug) res.debug_nodes = try config.debug_alloc.alloc(Scene.NodeDebug, counts.nodes);
     errdefer if (res.debug_nodes) |nodes| config.debug_alloc.free(nodes);
 
     // can't use PreorderIter because of subtree_size and child_count calculations
     var cursor: u32 = 0;
     try buildRecurse(self, &res, config.as, root, 0, &cursor, config.name_alloc, config.build_debug);
-    if (cursor != node_count) return error.RuntimeNodeCountMismatch;
+    if (cursor != counts.nodes) return error.RuntimeNodeCountMismatch;
 
     return res;
 }
@@ -324,8 +416,33 @@ fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, templat
     var child_count: u32 = 0;
 
     const node = self.nodes.items[template_node];
+
+    if (node.expose.node) |node_key| {
+        const v = b.exposed.map.getPtr(node_key) orelse unreachable;
+        const range = v.range.getPtr(.node);
+
+        b.exposed.exposed_nodes[range.@"1"] = .{
+            .gen = cursor.*,
+            .id = std.math.maxInt(u32),
+        };
+
+        range.@"1" += 1;
+    }
+
+    if (node.expose.pose) |pose_key| {
+        const v = b.exposed.map.getPtr(pose_key) orelse unreachable;
+        const range = v.range.getPtr(.pose);
+
+        b.exposed.exposed_poses[range.@"1"] = .{
+            .skeleton = cursor.*,
+            .gen = std.math.maxInt(u8),
+            .slot = std.math.maxInt(u24),
+        };
+
+        range.@"1" += 1;
+    }
+
     const payload = node.payload;
-    var model_anchor: ?u32 = null;
     const last_output = switch (payload) {
         .model => |gid| blk: {
             const model_dense = as.denseIndex(gid);
@@ -336,7 +453,6 @@ fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, templat
             const skeleton = as.model_reg.getSkeleton(model_dense);
 
             const anchor = cursor.*;
-            model_anchor = anchor;
             b.nodes[anchor] = .{
                 .mesh = null,
                 .model_gid = gid,
@@ -379,7 +495,7 @@ fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, templat
 
                 cursor.* += 1;
             }
-            break :blk if (meshes.len == 0) anchor else cursor.* - 1;
+            break :blk anchor;
         },
         .nothing, .mesh => blk: {
             const mesh = switch (payload) {
@@ -418,23 +534,50 @@ fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, templat
         child = self.nodes.items[c_ix].next_sibling;
     }
 
-    b.nodes[last_output].child_count = child_count;
+    // A model anchor already counts its emitted mesh children; include the
+    // template-authored children emitted below as additional direct children.
+    b.nodes[last_output].child_count += child_count;
     b.nodes[last_output].subtree_size = cursor.* - last_output - 1;
-    if (model_anchor) |anchor| b.nodes[anchor].subtree_size = cursor.* - anchor - 1;
 }
 
-fn countNodes(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, root: u32) !usize {
+fn countNodes(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, exposed_build: *ExposeBuild, root: u32) !struct {
+    nodes: usize,
+    exposed_nodes: u32,
+    exposed_poses: u32,
+} {
     var it = try PreorderIter.init(alloc, self, root);
     defer it.deinit(alloc);
 
     var count: usize = 0;
+    var exposed_nodes: u32 = 0;
+    var exposed_poses: u32 = 0;
     while (try it.next(alloc)) |node_ix| {
         count += switch (self.nodes.items[node_ix].payload) {
             .mesh, .nothing => 1,
             .model => |gid| 1 + as.model_reg.getMeshDenseIds(as.denseIndex(gid)).len,
         };
+
+        const exposed = self.nodes.items[node_ix].expose;
+        if (exposed.node) |group_key| {
+            const res = try exposed_build.map.getOrPut(alloc, group_key);
+            if (!res.found_existing) res.value_ptr.* = .{ .count = .initFill(0) };
+
+            res.value_ptr.count.getPtr(.node).* += 1;
+            exposed_nodes += 1;
+        }
+        if (exposed.pose) |group_key| {
+            const res = try exposed_build.map.getOrPut(alloc, group_key);
+            if (!res.found_existing) res.value_ptr.* = .{ .count = .initFill(0) };
+
+            res.value_ptr.count.getPtr(.pose).* += 1;
+            exposed_poses += 1;
+        }
     }
-    return count;
+    return .{
+        .nodes = count,
+        .exposed_nodes = exposed_nodes,
+        .exposed_poses = exposed_poses,
+    };
 }
 
 /// Checks child/sibling links reachable from `root`; the root's own sibling is
