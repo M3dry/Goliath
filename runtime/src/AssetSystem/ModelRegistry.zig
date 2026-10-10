@@ -17,12 +17,6 @@ pub const SkeletonData = struct {
     skins: []Skin,
 };
 
-pub const ConstSkeletonData = struct {
-    gid: Gid,
-    dense: u32,
-    skins: []const Skin,
-};
-
 const Model = struct {
     meshes: std.MultiArrayList(struct {
         gid: Gid,
@@ -226,13 +220,9 @@ pub fn getMeshSkins(self: *const ModelRegistry, id: u32) []const u32 {
     return self.models.items[id].meshes.items(.skin);
 }
 
-pub fn getSkeleton(self: *const ModelRegistry, id: u32) ?ConstSkeletonData {
+pub fn getSkeleton(self: *const ModelRegistry, id: u32) ?base.util.ConstView(SkeletonData) {
     if (self.models.items[id].skeleton) |skeleton| {
-        return .{
-            .gid = skeleton.gid,
-            .dense = skeleton.dense,
-            .skins = skeleton.skins,
-        };
+        return base.util.toConstView(skeleton);
     }
 
     return null;

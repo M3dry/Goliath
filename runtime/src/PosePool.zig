@@ -1,4 +1,5 @@
 const std = @import("std");
+const base = @import("base");
 
 const Allocator = std.mem.Allocator;
 const PosePool = @This();
@@ -6,20 +7,26 @@ const PosePool = @This();
 const AssetSystem = @import("AssetSystem.zig");
 const TRS = @import("Skeleton.zig").TRSNode;
 const zm = @import("base").zmath;
+const Animation = @import("Animation.zig");
 
-pub const ConstPose = struct {
-    local: []const TRS,
-    model: []const zm.Mat,
-
-    skeleton: u32,
-};
+const cs = base.util.const_view;
 
 pub const Pose = struct {
     local: []TRS,
     model: []zm.Mat,
 
     skeleton: u32,
+
+    pub fn resetPose(self: *Pose, as: *const AssetSystem) !void {
+        const skeleton = as.skeleton_reg.getSkeleton(self.skeleton);
+        std.debug.assert(skeleton.bind_local_transforms.len == self.local.len);
+
+        @memcpy(self.local, skeleton.bind_local_transforms);
+        try Animation.buildModelPose(skeleton, self.local, self.model);
+    }
 };
+
+pub const ConstPose = cs.ConstView(Pose);
 
 pub const SkeletonPool = struct {
     pub const StableId = packed struct(u32) {
@@ -114,7 +121,7 @@ pub const SkeletonPool = struct {
         return slot.ix;
     }
 
-    pub fn getConstPose(self: *SkeletonPool, id: StableId) !ConstPose {
+    fn getPose(self: *SkeletonPool, id: StableId) !Pose {
         const ix = try self.getIx(id);
 
         return .{
@@ -124,14 +131,12 @@ pub const SkeletonPool = struct {
         };
     }
 
-    pub fn editPose(self: *SkeletonPool, id: StableId) !Pose {
-        const ix = try self.getIx(id);
+    pub fn getConstPose(self: *SkeletonPool, id: StableId) !ConstPose {
+        return cs.toConstView(try self.getPose(id));
+    }
 
-        return .{
-            .local = self.local.items[ix..][0..self.joint_count],
-            .model = self.model.items[ix..][0..self.joint_count],
-            .skeleton = self.skeleton,
-        };
+    pub fn editPose(self: *SkeletonPool, id: StableId) !Pose {
+        return self.getPose(id);
     }
 
     pub fn finalizeEdit(self: *SkeletonPool, id: StableId) !void {

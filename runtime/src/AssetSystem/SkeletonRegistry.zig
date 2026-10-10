@@ -144,11 +144,11 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, data: IngestData) type
     };
 }
 
-pub inline fn getSkeleton(self: *SkeletonRegistry, id: u32) Skeleton {
-    return self.data.items(.skeleton)[id];
+pub inline fn getSkeleton(self: *const SkeletonRegistry, id: u32) base.util.ConstView(Skeleton) {
+    return base.util.toConstView(self.data.items(.skeleton)[id]);
 }
 
-pub inline fn getAnimations(self: *SkeletonRegistry, id: u32) []const Animation {
+pub inline fn getAnimations(self: *const SkeletonRegistry, id: u32) []const Animation {
     return self.data.items(.animations)[id];
 }
 

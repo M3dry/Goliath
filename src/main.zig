@@ -548,9 +548,9 @@ pub fn main(init: std.process.Init) !void {
             {
                 const buf = &joint_matrices_bufs[ctx.current_frame];
                 const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
-                try anims[1].sample(&skeleton, anim_time, paladin_local_pose);
-                try runtime.Animation.buildModelPose(&skeleton, paladin_local_pose, paladin_model_pose);
-                try runtime.Animation.buildSkinPalette(&skin, paladin_model_pose, mats);
+                try anims[1].sample(skeleton, anim_time, paladin_local_pose);
+                try runtime.Animation.buildModelPose(skeleton, paladin_local_pose, paladin_model_pose);
+                try runtime.Animation.buildSkinPalette(skin, paladin_model_pose, mats);
                 if (!buf.coherent) buf.flush(.from(&ctx), 0, buf.size);
             }
 

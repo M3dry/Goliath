@@ -132,23 +132,26 @@ pub const NodeRef = struct {
         try self.ts.validateAcyclic(alloc, self.ix);
     }
 
-    /// Builds runtime nodes after all referenced assets have been acquired.
-    pub fn build(self: NodeRef, bc: BuildConfig) !Build {
-        return self.ts.build(bc, self.ix);
+    pub fn prepareBuild(self: NodeRef, alloc: Allocator, as: *const AssetSystem) !BuildPrepare {
+        return self.ts.prepareBuild(alloc, as, self.ix);
     }
 };
 
 pub const Node = struct {
     pub const Payload = union(enum) {
-        nothing,
-        mesh: AssetSystem.Gid,
+        /// user needs to ensure that the PoseId belongs to the correct PosePool (each runtime scene has a separate pool)
+        nothing: ?PosePool.PoseId,
+        mesh: struct {
+            gid: AssetSystem.Gid,
+            custom_skin: u32 = std.math.maxInt(u32),
+        },
         model: AssetSystem.Gid,
         // later also a scene gid
     };
 
     name: []const u8 = &.{},
 
-    payload: Payload = .nothing,
+    payload: Payload = .{ .nothing = null },
     expose: Expose = .{},
 
     local_transform: TRS = .{
@@ -231,8 +234,9 @@ fn acquireAll(self: *TemplateScene, cmd_buf: *AssetSystem.CommandBuffer, root: u
 
     while (try it.next(cmd_buf.alloc)) |node_ix| {
         switch (self.nodes.items[node_ix].payload) {
-            .mesh, .model => |gid| try cmd_buf.request(gid),
             .nothing => {},
+            .mesh => |m| try cmd_buf.request(m.gid),
+            .model => |gid| try cmd_buf.request(gid),
         }
     }
 }
@@ -243,8 +247,9 @@ fn releaseAll(self: *TemplateScene, cmd_buf: *AssetSystem.CommandBuffer, root: u
 
     while (try it.next(cmd_buf.alloc)) |node_ix| {
         switch (self.nodes.items[node_ix].payload) {
-            .mesh, .model => |gid| try cmd_buf.release(gid),
             .nothing => {},
+            .mesh => |m| try cmd_buf.release(m.gid),
+            .model => |gid| try cmd_buf.release(gid),
         }
     }
 }
@@ -287,7 +292,95 @@ pub const PreorderIter = struct {
     }
 };
 
-pub const ExposeBuild = struct {
+/// A build-facing view of a logical template node. It intentionally omits the
+/// template's linked-list topology; BuildIter communicates that via events.
+pub const BuildNode = struct {
+    template_index: u32,
+    name: []const u8,
+    payload: Node.Payload,
+    expose: Expose,
+    local_transform: TRS,
+};
+
+pub const BuildIter = struct {
+    pub const Exit = struct {
+        template_index: u32,
+        child_count: u32,
+    };
+
+    pub const Event = union(enum) {
+        enter: BuildNode,
+        exit: Exit,
+    };
+
+    const Frame = struct {
+        node: u32,
+        next_child: ?u32,
+        entered: bool = false,
+        child_count: u32 = 0,
+    };
+
+    ts: *const TemplateScene,
+    stack: std.ArrayList(Frame) = .empty,
+
+    pub fn init(alloc: Allocator, ts: *const TemplateScene, root: u32) !BuildIter {
+        if (root >= ts.nodes.items.len) return error.RootOutOfRange;
+
+        var it: BuildIter = .{ .ts = ts };
+        errdefer it.stack.deinit(alloc);
+        try it.stack.append(alloc, .{
+            .node = root,
+            .next_child = ts.nodes.items[root].first_child,
+        });
+        return it;
+    }
+
+    pub fn deinit(self: *BuildIter, alloc: Allocator) void {
+        self.stack.deinit(alloc);
+    }
+
+    /// Emits an enter event before a node's descendants and an exit event
+    /// afterwards. The root's sibling is excluded. As with PreorderIter,
+    /// callers should validate the selected subtree before walking it.
+    pub fn next(self: *BuildIter, alloc: Allocator) !?Event {
+        while (self.stack.items.len > 0) {
+            const frame = &self.stack.items[self.stack.items.len - 1];
+            if (!frame.entered) {
+                frame.entered = true;
+                const node = self.ts.nodes.items[frame.node];
+                return .{ .enter = .{
+                    .template_index = frame.node,
+                    .name = node.name,
+                    .payload = node.payload,
+                    .expose = node.expose,
+                    .local_transform = node.local_transform,
+                } };
+            }
+
+            if (frame.next_child) |child_ix| {
+                if (child_ix >= self.ts.nodes.items.len) return error.NodeIndexOutOfRange;
+                const child = self.ts.nodes.items[child_ix];
+                frame.next_child = child.next_sibling;
+                frame.child_count += 1;
+                try self.stack.append(alloc, .{
+                    .node = child_ix,
+                    .next_child = child.first_child,
+                });
+                continue;
+            }
+
+            const exit: Exit = .{
+                .template_index = frame.node,
+                .child_count = frame.child_count,
+            };
+            _ = self.stack.pop();
+            return .{ .exit = exit };
+        }
+        return null;
+    }
+};
+
+pub const ExposedGroups = struct {
     const ExposeTypes = enum {
         node,
         pose,
@@ -302,8 +395,7 @@ pub const ExposeBuild = struct {
     exposed_nodes: []Scene.ExposedId = &.{},
     exposed_poses: []PosePool.PoseId = &.{},
 
-
-    pub fn initArrays(self: *ExposeBuild, alloc: Allocator, node_count: u32, pose_count: u32) !void {
+    pub fn initArrays(self: *ExposedGroups, alloc: Allocator, node_count: u32, pose_count: u32) !void {
         self.exposed_nodes = try alloc.alloc(Scene.ExposedId, node_count);
         errdefer alloc.free(self.exposed_nodes);
         errdefer self.exposed_nodes = &.{};
@@ -313,7 +405,7 @@ pub const ExposeBuild = struct {
         errdefer self.exposed_nodes = &.{};
     }
 
-    pub fn deinit(self: *ExposeBuild, alloc: Allocator) void {
+    pub fn deinit(self: *ExposedGroups, alloc: Allocator) void {
         self.map.deinit(alloc);
         alloc.free(self.exposed_nodes);
         alloc.free(self.exposed_poses);
@@ -323,25 +415,25 @@ pub const ExposeBuild = struct {
         self.exposed_poses = &.{};
     }
 
-    pub inline fn nodes(self: *ExposeBuild, key: GroupKey) []const Scene.ExposedId {
+    pub inline fn nodes(self: *ExposedGroups, key: GroupKey) []const Scene.ExposedId {
         const u = self.map.get(key) orelse return &.{};
         const start, const end = u.range.get(.node);
 
         return self.exposed_nodes[start..end];
     }
 
-    pub inline fn poses(self: *ExposeBuild, key: GroupKey) []const PosePool.PoseId {
+    pub inline fn poses(self: *ExposedGroups, key: GroupKey) []const PosePool.PoseId {
         const u = self.map.get(key) orelse return &.{};
         const start, const end = u.range.get(.pose);
 
         return self.exposed_poses[start..end];
     }
 
-    pub fn build(self: *ExposeBuild) void {
+    pub fn build(self: *ExposedGroups) void {
         var map_it = self.map.iterator();
 
-        var node_start: usize = 0;
-        var pose_start: usize = 0;
+        var node_start: u32 = 0;
+        var pose_start: u32 = 0;
         while (map_it.next()) |kv| {
             const counts = kv.value_ptr.count;
 
@@ -351,10 +443,12 @@ pub const ExposeBuild = struct {
             const pose_count = counts.get(.pose);
             std.debug.assert(pose_start + pose_count <= self.exposed_poses.len);
 
-            kv.value_ptr.* = .{ .range = .init(.{
-                .node = .{ node_start, node_start }, // end range gets updated as the arrays get populated in buildRecurse
-                .pose = .{ pose_start, pose_start },
-            }) };
+            kv.value_ptr.* = .{
+                .range = .init(.{
+                    .node = .{ node_start, node_start }, // end range gets updated as the arrays get populated in buildRecurse
+                    .pose = .{ pose_start, pose_start },
+                }),
+            };
 
             node_start += node_count;
             pose_start += pose_count;
@@ -362,185 +456,234 @@ pub const ExposeBuild = struct {
     }
 };
 
-pub const Build = struct {
-    nodes: []Scene.Node,
-    debug_nodes: ?[]Scene.NodeDebug = null,
+// pub const Build = struct {
+//     nodes: []Scene.Node,
+//     debug_nodes: ?[]Scene.NodeDebug = null,
+//
+//     exposed: ExposeBuild,
+//
+//     pub fn deinit(self: *Build, alloc: Allocator, debug_alloc: Allocator) void {
+//         alloc.free(self.nodes);
+//         if (self.debug_nodes) |nodes| debug_alloc.free(nodes);
+//
+//         self.exposed.deinit(alloc);
+//     }
+// };
+//
+// pub const BuildConfig = struct {
+//     alloc: Allocator,
+//     debug_alloc: Allocator,
+//     // elements won't get freed individually
+//     name_alloc: Allocator,
+//     as: *const AssetSystem,
+//
+//     comptime build_debug: bool = build_options.debug_build,
+// };
 
-    exposed: ExposeBuild,
+// fn build(self: *TemplateScene, config: BuildConfig, root: u32) !Build {
+//     var exposed = ExposeBuild{};
+//     errdefer exposed.deinit(config.alloc);
+//
+//     const counts = try self.countNodes(config.alloc, config.as, &exposed, root);
+//
+//     try exposed.initArrays(config.alloc, counts.exposed_nodes, counts.exposed_poses);
+//     exposed.build();
+//
+//     var res: Build = undefined;
+//     res.exposed = exposed;
+//
+//     res.nodes = try config.alloc.alloc(Scene.Node, counts.nodes);
+//     errdefer config.alloc.free(res.nodes);
+//
+//     if (config.build_debug) res.debug_nodes = try config.debug_alloc.alloc(Scene.NodeDebug, counts.nodes);
+//     errdefer if (res.debug_nodes) |nodes| config.debug_alloc.free(nodes);
+//
+//     // can't use PreorderIter because of subtree_size and child_count calculations
+//     var cursor: u32 = 0;
+//     try buildRecurse(self, &res, config.as, root, 0, &cursor, config.name_alloc, config.build_debug);
+//     if (cursor != counts.nodes) return error.RuntimeNodeCountMismatch;
+//
+//     return res;
+// }
+//
+// fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, template_node: u32, parent_node: u32, cursor: *u32, name_alloc: Allocator, comptime build_debug: bool) !void {
+//     var child_count: u32 = 0;
+//
+//     const node = self.nodes.items[template_node];
+//
+//     if (node.expose.node) |node_key| {
+//         const v = b.exposed.map.getPtr(node_key) orelse unreachable;
+//         const range = v.range.getPtr(.node);
+//
+//         b.exposed.exposed_nodes[range.@"1"] = .{
+//             .gen = cursor.*,
+//             .id = std.math.maxInt(u32),
+//         };
+//
+//         range.@"1" += 1;
+//     }
+//
+//     if (node.expose.pose) |pose_key| {
+//         const v = b.exposed.map.getPtr(pose_key) orelse unreachable;
+//         const range = v.range.getPtr(.pose);
+//
+//         b.exposed.exposed_poses[range.@"1"] = .{
+//             .skeleton = cursor.*,
+//             .gen = std.math.maxInt(u8),
+//             .slot = std.math.maxInt(u24),
+//         };
+//
+//         range.@"1" += 1;
+//     }
+//
+//     const payload = node.payload;
+//     const last_output = switch (payload) {
+//         // nodes of a model is the anchor (node with model_gid, but no mesh), and the children of the anchor that have a mesh + model_gid
+//         .model => |model_gid| blk: {
+//             const model_dense = as.denseIndex(model_gid);
+//
+//             const meshes = as.model_reg.getMeshDenseIds(model_dense);
+//             const transforms = as.model_reg.getMeshTransforms(model_dense);
+//             const skins = as.model_reg.getMeshSkins(model_dense);
+//             const skeleton = as.model_reg.getSkeleton(model_dense);
+//
+//             const anchor = cursor.*;
+//             b.nodes[anchor] = .{
+//                 .mesh = null,
+//                 .model = .{
+//                     .gid = model_gid,
+//                     .dense = model_dense,
+//                 },
+//                 .pose = if (skeleton) |_| .{
+//                     .id = undefined,
+//                     .revision = 0,
+//                 } else null,
+//                 .parent_transform_relation = .{.inherit_transform},
+//                 .local_transform = node.local_transform.toMat(),
+//                 .world_transform = undefined,
+//                 .self = anchor,
+//                 .parent = parent_node,
+//                 .child_count = @intCast(meshes.len),
+//                 .subtree_size = 0,
+//             };
+//             if (build_debug) b.debug_nodes.?[anchor] = .{
+//                 .node_name = try name_alloc.dupe(u8, node.name),
+//             };
+//             cursor.* += 1;
+//
+//             for (meshes, transforms, skins, as.model_reg.getMeshGids(model_dense)) |mesh, transform, skin, mesh_gid| {
+//                 if (skin != std.math.maxInt(u32) and skeleton == null) return error.SkinWithoutSkeleton;
+//
+//                 b.nodes[cursor.*] = .{
+//                     .mesh = .{ .dense = mesh, .gid = mesh_gid, .skin = skin },
+//                     .model = .{ .dense = model_dense, .gid = model_gid },
+//                     .pose = null,
+//                     .parent_transform_relation = .{.inherit_transform},
+//                     .local_transform = transform,
+//                     .world_transform = undefined,
+//                     .self = cursor.*,
+//                     .parent = anchor,
+//                     .child_count = 0,
+//                     .subtree_size = 0,
+//                 };
+//                 if (build_debug) b.debug_nodes.?[cursor.*] = .{
+//                     .node_name = try name_alloc.dupe(u8, node.name),
+//                 };
+//
+//                 cursor.* += 1;
+//             }
+//             break :blk anchor;
+//         },
+//         .nothing => |pose| blk: {
+//             b.nodes[cursor.*] = .{
+//                 .mesh = null,
+//                 .model = null,
+//                 .pose = if (pose) |p| .{
+//                     .id = p,
+//                     .revision = 0,
+//                 } else null,
+//                 .parent_transform_relation = .{.inherit_transform},
+//                 .local_transform = node.local_transform.toMat(),
+//                 .world_transform = undefined,
+//                 .self = cursor.*,
+//                 .parent = parent_node,
+//                 .child_count = 0,
+//                 .subtree_size = 0,
+//             };
+//             if (build_debug) b.debug_nodes.?[cursor.*] = .{
+//                 .node_name = try name_alloc.dupe(u8, node.name),
+//             };
+//
+//             cursor.* += 1;
+//             break :blk cursor.* - 1;
+//         },
+//         .mesh => |m| blk: {
+//             b.nodes[cursor.*] = .{
+//                 .mesh = .{ .dense = as.denseIndex(m.gid), .gid = m.gid, .skin = m.custom_skin },
+//                 .model = null,
+//                 .pose = null,
+//                 .parent_transform_relation = .{.inherit_transform},
+//                 .local_transform = node.local_transform.toMat(),
+//                 .world_transform = undefined,
+//                 .self = cursor.*,
+//                 .parent = parent_node,
+//                 .child_count = 0,
+//                 .subtree_size = 0,
+//             };
+//             if (build_debug) b.debug_nodes.?[cursor.*] = .{
+//                 .node_name = try name_alloc.dupe(u8, node.name),
+//             };
+//
+//             cursor.* += 1;
+//             break :blk cursor.* - 1;
+//         },
+//     };
+//
+//     var child = self.nodes.items[template_node].first_child;
+//     while (child) |c_ix| {
+//         try buildRecurse(self, b, as, c_ix, last_output, cursor, name_alloc, build_debug);
+//
+//         child_count += 1;
+//         child = self.nodes.items[c_ix].next_sibling;
+//     }
+//
+//     // A model anchor already counts its emitted mesh children; include the
+//     // template-authored children emitted below as additional direct children.
+//     b.nodes[last_output].child_count += child_count;
+//     b.nodes[last_output].subtree_size = cursor.* - last_output - 1;
+// }
 
-    pub fn deinit(self: *Build, alloc: Allocator, debug_alloc: Allocator) void {
-        alloc.free(self.nodes);
-        if (self.debug_nodes) |nodes| debug_alloc.free(nodes);
+pub const BuildPrepare = struct {
+    node_count: usize,
+    exposed_groups: ExposedGroups,
 
-        self.exposed.deinit(alloc);
+    iter: BuildIter,
+
+    pub fn deinit(self: *BuildPrepare, alloc: Allocator) void {
+        self.exposed_groups.deinit(alloc);
+        self.iter.deinit(alloc);
     }
 };
 
-pub const BuildConfig = struct {
-    alloc: Allocator,
-    debug_alloc: Allocator,
-    // elements won't get freed individually
-    name_alloc: Allocator,
-    as: *const AssetSystem,
+fn prepareBuild(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, root: u32) !BuildPrepare {
+    var exposed_groups: ExposedGroups = .{};
+    errdefer exposed_groups.deinit(alloc);
 
-    comptime build_debug: bool = build_options.debug_build,
-};
+    const counts = try self.countNodes(alloc, as, &exposed_groups, root);
 
-fn build(self: *TemplateScene, config: BuildConfig, root: u32) !Build {
-    var exposed = ExposeBuild{};
-    errdefer exposed.deinit(config.alloc);
+    try exposed_groups.initArrays(alloc, counts.exposed_nodes, counts.exposed_poses);
 
-    const counts = try self.countNodes(config.alloc, config.as, &exposed, root);
+    var iter: BuildIter = try .init(alloc, self, root);
+    errdefer iter.deinit(alloc);
 
-    try exposed.initArrays(config.alloc, counts.exposed_nodes, counts.exposed_poses);
-    exposed.build();
-
-    var res: Build = undefined;
-    res.exposed = exposed;
-
-    res.nodes = try config.alloc.alloc(Scene.Node, counts.nodes);
-    errdefer config.alloc.free(res.nodes);
-
-    if (config.build_debug) res.debug_nodes = try config.debug_alloc.alloc(Scene.NodeDebug, counts.nodes);
-    errdefer if (res.debug_nodes) |nodes| config.debug_alloc.free(nodes);
-
-    // can't use PreorderIter because of subtree_size and child_count calculations
-    var cursor: u32 = 0;
-    try buildRecurse(self, &res, config.as, root, 0, &cursor, config.name_alloc, config.build_debug);
-    if (cursor != counts.nodes) return error.RuntimeNodeCountMismatch;
-
-    return res;
-}
-
-fn buildRecurse(self: *TemplateScene, b: *Build, as: *const AssetSystem, template_node: u32, parent_node: u32, cursor: *u32, name_alloc: Allocator, comptime build_debug: bool) !void {
-    var child_count: u32 = 0;
-
-    const node = self.nodes.items[template_node];
-
-    if (node.expose.node) |node_key| {
-        const v = b.exposed.map.getPtr(node_key) orelse unreachable;
-        const range = v.range.getPtr(.node);
-
-        b.exposed.exposed_nodes[range.@"1"] = .{
-            .gen = cursor.*,
-            .id = std.math.maxInt(u32),
-        };
-
-        range.@"1" += 1;
-    }
-
-    if (node.expose.pose) |pose_key| {
-        const v = b.exposed.map.getPtr(pose_key) orelse unreachable;
-        const range = v.range.getPtr(.pose);
-
-        b.exposed.exposed_poses[range.@"1"] = .{
-            .skeleton = cursor.*,
-            .gen = std.math.maxInt(u8),
-            .slot = std.math.maxInt(u24),
-        };
-
-        range.@"1" += 1;
-    }
-
-    const payload = node.payload;
-    const last_output = switch (payload) {
-        .model => |gid| blk: {
-            const model_dense = as.denseIndex(gid);
-
-            const meshes = as.model_reg.getMeshDenseIds(model_dense);
-            const transforms = as.model_reg.getMeshTransforms(model_dense);
-            const skins = as.model_reg.getMeshSkins(model_dense);
-            const skeleton = as.model_reg.getSkeleton(model_dense);
-
-            const anchor = cursor.*;
-            b.nodes[anchor] = .{
-                .mesh = null,
-                .model_gid = gid,
-                .animated = null,
-                .parent_transform_relation = .{.inherit_transform},
-                .local_transform = node.local_transform.toMat(),
-                .world_transform = undefined,
-                .self = anchor,
-                .parent = parent_node,
-                .child_count = @intCast(meshes.len),
-                .subtree_size = 0,
-            };
-            if (build_debug) b.debug_nodes.?[anchor] = .{
-                .node_name = try name_alloc.dupe(u8, node.name),
-            };
-            cursor.* += 1;
-
-            for (meshes, transforms, skins, as.model_reg.getMeshGids(model_dense)) |mesh, transform, skin, mesh_gid| {
-                if (skin != std.math.maxInt(u32) and skeleton == null) return error.SkinWithoutSkeleton;
-                b.nodes[cursor.*] = .{
-                    .mesh = .{ .dense = mesh, .gid = mesh_gid },
-                    .model_gid = null,
-                    .animated = if (skin != std.math.maxInt(u32)) .{
-                        .model = model_dense,
-                        .skin = skin,
-                        .pose = undefined,
-                        .pose_revision = 0,
-                    } else null,
-                    .parent_transform_relation = .{.inherit_transform},
-                    .local_transform = transform,
-                    .world_transform = undefined,
-                    .self = cursor.*,
-                    .parent = anchor,
-                    .child_count = 0,
-                    .subtree_size = 0,
-                };
-                if (build_debug) b.debug_nodes.?[cursor.*] = .{
-                    .node_name = try name_alloc.dupe(u8, node.name),
-                };
-
-                cursor.* += 1;
-            }
-            break :blk anchor;
-        },
-        .nothing, .mesh => blk: {
-            const mesh = switch (payload) {
-                .mesh => |gid| as.denseIndex(gid),
-                _ => null,
-            };
-            b.nodes[cursor.*] = .{
-                .mesh = if (mesh) |dense| .{ .dense = dense, .gid = switch (payload) {
-                    .mesh => |gid| gid,
-                    else => unreachable,
-                } } else null,
-                .model_gid = null,
-                .animated = null,
-                .parent_transform_relation = .{.inherit_transform},
-                .local_transform = node.local_transform.toMat(),
-                .world_transform = undefined,
-                .self = cursor.*,
-                .parent = parent_node,
-                .child_count = 0,
-                .subtree_size = 0,
-            };
-            if (build_debug) b.debug_nodes.?[cursor.*] = .{
-                .node_name = try name_alloc.dupe(u8, node.name),
-            };
-
-            cursor.* += 1;
-            break :blk cursor.* - 1;
-        },
+    return .{
+        .node_count = counts.nodes,
+        .exposed_groups = exposed_groups,
+        .iter = iter,
     };
-
-    var child = self.nodes.items[template_node].first_child;
-    while (child) |c_ix| {
-        try buildRecurse(self, b, as, c_ix, last_output, cursor, name_alloc, build_debug);
-
-        child_count += 1;
-        child = self.nodes.items[c_ix].next_sibling;
-    }
-
-    // A model anchor already counts its emitted mesh children; include the
-    // template-authored children emitted below as additional direct children.
-    b.nodes[last_output].child_count += child_count;
-    b.nodes[last_output].subtree_size = cursor.* - last_output - 1;
 }
 
-fn countNodes(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, exposed_build: *ExposeBuild, root: u32) !struct {
+fn countNodes(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, exposed_build: *ExposedGroups, root: u32) !struct {
     nodes: usize,
     exposed_nodes: u32,
     exposed_poses: u32,
@@ -627,6 +770,10 @@ pub fn validateAcyclic(self: *const TemplateScene, alloc: Allocator, root: u32) 
     }
 }
 
+test {
+    std.testing.refAllDecls(@This());
+}
+
 test "preorder iterator yields root and descendants in depth-first order" {
     const alloc = std.testing.allocator;
     var ts = TemplateScene.init(alloc, alloc);
@@ -704,4 +851,118 @@ test "cycle validation catches child and sibling loops but ignores root sibling"
     ts.nodes.items[2].next_sibling = null;
     ts.nodes.items[1].first_child = 0;
     try std.testing.expectError(error.CycleDetected, ts.validateAcyclic(alloc, 0));
+}
+
+test "build iterator emits depth-first enter and exit events with direct child counts" {
+    const alloc = std.testing.allocator;
+    var ts = TemplateScene.init(alloc, alloc);
+    defer ts.nodes.deinit(alloc);
+
+    // root
+    // ├─ a
+    // │  ├─ c
+    // │  └─ d
+    // └─ b
+    // root's own sibling is deliberately outside the traversal.
+    try ts.nodes.append(alloc, .{ .name = "root", .first_child = 1, .next_sibling = 5 });
+    try ts.nodes.append(alloc, .{ .name = "a", .parent = 0, .first_child = 3, .next_sibling = 2 });
+    try ts.nodes.append(alloc, .{ .name = "b", .parent = 0 });
+    try ts.nodes.append(alloc, .{ .name = "c", .parent = 1, .next_sibling = 4 });
+    try ts.nodes.append(alloc, .{ .name = "d", .parent = 1 });
+    try ts.nodes.append(alloc, .{ .name = "outside" });
+
+    const Seen = struct { entering: bool, index: u32, child_count: u32 = 0 };
+    const expected = [_]Seen{
+        .{ .entering = true, .index = 0 },
+        .{ .entering = true, .index = 1 },
+        .{ .entering = true, .index = 3 },
+        .{ .entering = false, .index = 3, .child_count = 0 },
+        .{ .entering = true, .index = 4 },
+        .{ .entering = false, .index = 4, .child_count = 0 },
+        .{ .entering = false, .index = 1, .child_count = 2 },
+        .{ .entering = true, .index = 2 },
+        .{ .entering = false, .index = 2, .child_count = 0 },
+        .{ .entering = false, .index = 0, .child_count = 2 },
+    };
+
+    var it = try BuildIter.init(alloc, &ts, 0);
+    defer it.deinit(alloc);
+    for (expected) |want| {
+        const event = (try it.next(alloc)).?;
+        const got = switch (event) {
+            .enter => |node| Seen{ .entering = true, .index = node.template_index },
+            .exit => |node| Seen{ .entering = false, .index = node.template_index, .child_count = node.child_count },
+        };
+        try std.testing.expectEqual(want, got);
+    }
+    try std.testing.expectEqual(@as(?BuildIter.Event, null), try it.next(alloc));
+}
+
+test "build iterator exposes the node descriptor on entry" {
+    const alloc = std.testing.allocator;
+    var ts = TemplateScene.init(alloc, alloc);
+    defer ts.nodes.deinit(alloc);
+    try ts.nodes.append(alloc, .{ .name = "exposed", .expose = .{ .node = 7 } });
+
+    var it = try BuildIter.init(alloc, &ts, 0);
+    defer it.deinit(alloc);
+    const event = (try it.next(alloc)).?;
+    const node = event.enter;
+    try std.testing.expectEqual(@as(u32, 0), node.template_index);
+    try std.testing.expectEqualStrings("exposed", node.name);
+    try std.testing.expectEqual(@as(?GroupKey, 7), node.expose.node);
+    switch (node.payload) {
+        .nothing => {},
+        else => return error.ExpectedNothingPayload,
+    }
+
+    const exit = (try it.next(alloc)).?;
+    switch (exit) {
+        .exit => |info| {
+            try std.testing.expectEqual(@as(u32, 0), info.template_index);
+            try std.testing.expectEqual(@as(u32, 0), info.child_count);
+        },
+        .enter => return error.ExpectedExitEvent,
+    }
+}
+
+test "build iterator handles depth greater than the former fixed preorder stack" {
+    const alloc = std.testing.allocator;
+    var ts = TemplateScene.init(alloc, alloc);
+    defer ts.nodes.deinit(alloc);
+
+    const depth = 600;
+    try ts.nodes.ensureTotalCapacity(alloc, depth);
+    for (0..depth) |i| {
+        try ts.nodes.append(alloc, .{
+            .parent = if (i == 0) null else @intCast(i - 1),
+            .first_child = if (i + 1 == depth) null else @intCast(i + 1),
+        });
+    }
+
+    var it = try BuildIter.init(alloc, &ts, 0);
+    defer it.deinit(alloc);
+    var enters: usize = 0;
+    var exits: usize = 0;
+    while (try it.next(alloc)) |event| {
+        switch (event) {
+            .enter => enters += 1,
+            .exit => exits += 1,
+        }
+    }
+    try std.testing.expectEqual(depth, enters);
+    try std.testing.expectEqual(depth, exits);
+}
+
+test "build iterator reports invalid child indices and roots" {
+    const alloc = std.testing.allocator;
+    var ts = TemplateScene.init(alloc, alloc);
+    defer ts.nodes.deinit(alloc);
+    try ts.nodes.append(alloc, .{ .first_child = 1 });
+
+    try std.testing.expectError(error.RootOutOfRange, BuildIter.init(alloc, &ts, 1));
+    var it = try BuildIter.init(alloc, &ts, 0);
+    defer it.deinit(alloc);
+    _ = try it.next(alloc); // enter root
+    try std.testing.expectError(error.NodeIndexOutOfRange, it.next(alloc));
 }

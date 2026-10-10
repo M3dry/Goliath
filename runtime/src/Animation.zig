@@ -193,7 +193,7 @@ fn keyframeAtOrBefore(input: []const f32, time: f32) usize {
 
 /// Samples this clip into caller-owned local-space pose storage. The output is
 /// reset to the skeleton's bind pose before animation channels are applied.
-pub fn sample(self: *const Animation, skeleton: *const Skeleton, time: f32, out_local_pose: []Skeleton.TRSNode) !void {
+pub fn sample(self: *const Animation, skeleton: base.util.ConstView(Skeleton), time: f32, out_local_pose: []Skeleton.TRSNode) !void {
     if (out_local_pose.len != skeleton.bind_local_transforms.len) return error.PoseSizeMismatch;
     if (!std.math.isFinite(time)) return error.InvalidAnimationTime;
     @memcpy(out_local_pose, skeleton.bind_local_transforms);
@@ -298,7 +298,7 @@ pub fn sample(self: *const Animation, skeleton: *const Skeleton, time: f32, out_
     }
 }
 
-pub fn buildModelPose(skeleton: *const Skeleton, local_pose: []const Skeleton.TRSNode, out_model_pose: []zm.Mat) !void {
+pub fn buildModelPose(skeleton: base.util.ConstView(Skeleton), local_pose: []const Skeleton.TRSNode, out_model_pose: []zm.Mat) !void {
     if (local_pose.len != skeleton.parents.len or out_model_pose.len != skeleton.parents.len) return error.PoseSizeMismatch;
     for (local_pose, skeleton.parents, 0..) |trs, parent, i| {
         const local = trs.toMat();
@@ -307,7 +307,7 @@ pub fn buildModelPose(skeleton: *const Skeleton, local_pose: []const Skeleton.TR
     }
 }
 
-pub fn buildSkinPalette(skin: *const Skin, model_pose: []const zm.Mat, out_palette: []zm.Mat) !void {
+pub fn buildSkinPalette(skin: base.util.ConstView(Skin), model_pose: []const zm.Mat, out_palette: []zm.Mat) !void {
     if (out_palette.len != skin.skeleton_node_indices.len or out_palette.len != skin.inverse_bind_matrices.len) return error.SkinPaletteSizeMismatch;
     for (out_palette, skin.skeleton_node_indices, skin.inverse_bind_matrices) |*out, skeleton_node_index, inverse_bind| {
         if (skeleton_node_index >= model_pose.len) return error.InvalidSkinJointIndex;
