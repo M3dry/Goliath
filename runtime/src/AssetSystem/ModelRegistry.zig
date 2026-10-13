@@ -11,6 +11,7 @@ const Skin = @import("../Skin.zig");
 const Allocator = std.mem.Allocator;
 const ModelRegistry = @This();
 
+// NOTE: `skins` can't move in memory as Scene.zig.AnimationInstances relies on the slice location
 pub const SkeletonData = struct {
     gid: Gid,
     dense: u32,

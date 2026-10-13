@@ -5,7 +5,19 @@ pub fn ConstView(comptime T: type) type {
     switch (info) {
         .@"struct" => |s| {
             if (s.backing_integer != null) return T;
-            if (s.is_tuple) @compileError("TODO");
+            if (s.is_tuple) {
+                var types: [s.fields.len]type = undefined;
+
+                var same = true;
+                for (s.fields, 0..) |field, i| {
+                    const CT = ConstView(field.type);
+                    same &= field.type == CT;
+                    types[i] = CT;
+                }
+
+                if (same) return T;
+                return @Tuple(types);
+            }
 
             var field_names: [s.fields.len][]const u8 = undefined;
             var field_types: [s.fields.len]type = undefined;

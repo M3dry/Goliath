@@ -18,17 +18,7 @@ fn normalizeQuaternion(rotation: *[4]f32) void {
     for (rotation) |*component| component.* *= inverse_length;
 }
 
-pub const TRSNode = struct {
-    translation: [3]f32,
-    rotation: [4]f32,
-    scale: [3]f32,
-
-    pub fn toMat(self: TRSNode) zm.Mat {
-        return zm.mul(zm.scaling(self.scale[0], self.scale[1], self.scale[2]), zm.mul(zm.matFromQuat(zm.f32x4(self.rotation[0], self.rotation[1], self.rotation[2], self.rotation[3])), zm.translation(self.translation[0], self.translation[1], self.translation[2])));
-    }
-};
-
-bind_local_transforms: []TRSNode,
+bind_local_transforms: []base.util.TRS,
 parents: []u32,
 
 pub fn deinit(self: *const Skeleton, alloc: Allocator) void {
@@ -130,7 +120,7 @@ pub fn fromGltf(
     const node_map = try collected.toOwnedSlice(alloc);
     errdefer alloc.free(node_map);
 
-    const bind_local_transforms = try alloc.alloc(TRSNode, count);
+    const bind_local_transforms = try alloc.alloc(base.util.TRS, count);
     errdefer alloc.free(bind_local_transforms);
 
     const parents = try alloc.alloc(u32, count);

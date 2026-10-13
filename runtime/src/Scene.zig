@@ -44,10 +44,10 @@ const Range = struct {
     }
 };
 
-const DirtyRanges = struct {
+const DisjointRanges = struct {
     ranges: std.ArrayList(Range) = .empty,
 
-    pub fn add(self: *DirtyRanges, alloc: Allocator, range: Range) !void {
+    pub fn add(self: *DisjointRanges, alloc: Allocator, range: Range) !void {
         if (range.start >= range.end) return;
 
         var merged = range;
@@ -74,7 +74,7 @@ const DirtyRanges = struct {
         self.ranges.replaceRangeAssumeCapacity(first, end - first, &.{merged});
     }
 
-    pub fn remove(self: *DirtyRanges, alloc: Allocator, range: Range) !void {
+    pub fn remove(self: *DisjointRanges, alloc: Allocator, range: Range) !void {
         if (range.start >= range.end) return;
 
         var first: usize = 0;
@@ -100,7 +100,7 @@ const DirtyRanges = struct {
         try self.ranges.replaceRange(alloc, first, end - first, replacement[0..replacement_len]);
     }
 
-    pub fn update(self: *DirtyRanges, alloc: Allocator, from: u32, by: u32, comptime negative: bool) !void {
+    pub fn update(self: *DisjointRanges, alloc: Allocator, from: u32, by: u32, comptime negative: bool) !void {
         if (by == 0) return;
 
         const boundary = if (negative) from else from + 1;
@@ -144,8 +144,9 @@ const DirtyRanges = struct {
         }
     }
 
-    pub fn deinit(self: *DirtyRanges, alloc: Allocator) void {
+    pub fn deinit(self: *DisjointRanges, alloc: Allocator) void {
         self.ranges.deinit(alloc);
+        self.ranges = .empty;
     }
 };
 
@@ -156,12 +157,14 @@ const Exposed = struct {
         id: u32,
     };
 
-    stable_counter: u32 = 0,
     data: std.ArrayList(struct {
         gen: u32,
         node_id: u32,
     }) = .empty,
     free: std.ArrayList(u32) = .empty,
+
+    /// from node_id to slot
+    backlink: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
     const Self = @This();
 
@@ -174,16 +177,27 @@ const Exposed = struct {
         return d.node_id;
     }
 
-    pub inline fn expose(self: *Self, alloc: Allocator, node_id: u32) !Id {
-        if (self.free.pop()) |id| {
-            self.data.items[id].gen +%= 1;
-            self.data.items[id].node_id = node_id;
-
+    pub fn expose(self: *Self, alloc: Allocator, node_id: u32) !Id {
+        if (self.backlink.get(node_id)) |id| {
             return .{
                 .gen = self.data.items[id].gen,
                 .id = id,
             };
         }
+
+        if (self.free.pop()) |id| {
+            self.data.items[id].gen +%= 1;
+            self.data.items[id].node_id = node_id;
+
+            try self.backlink.put(alloc, node_id, id);
+            return .{
+                .gen = self.data.items[id].gen,
+                .id = id,
+            };
+        }
+
+        const id: u32 = @intCast(self.data.items.len);
+        try self.backlink.put(alloc, node_id, id);
 
         try self.data.append(alloc, .{
             .gen = 0,
@@ -192,26 +206,44 @@ const Exposed = struct {
 
         return .{
             .gen = 0,
-            .id = @intCast(self.data.items.len - 1),
+            .id = id,
         };
     }
 
     pub inline fn unexpose(self: *Self, alloc: Allocator, stable_id: Id) void {
-        if (getNodeId(self, stable_id) == null) return;
+        const node_id = getNodeId(self, stable_id) orelse return;
+
+        _ = self.backlink.remove(node_id);
 
         self.data.items[stable_id.id].gen +%= 1;
         try self.free.append(alloc, stable_id.id);
     }
 
-    pub inline fn incrNodeIds(self: *Self, above: u32, delta: i32) void {
-        for (self.data.items) |*id| {
-            if (id.node_id > above) id.node_id = @intCast(@as(i64, id.node_id) + delta);
+    pub fn incrNodeIds(self: *Self, above: u32, delta: i32) void {
+        if (delta == 0) return;
+
+        // Remove old keys first so shifted ids cannot shadow an existing
+        // backlink while the mapping is being updated.
+        for (self.data.items, 0..) |id, slot| {
+            if (id.node_id <= above) continue;
+            if (self.backlink.get(id.node_id) == @as(u32, @intCast(slot))) _ = self.backlink.remove(id.node_id);
+        }
+
+        for (self.data.items, 0..) |*id, slot| {
+            if (id.node_id <= above) continue;
+            id.node_id = @intCast(@as(i64, id.node_id) + delta);
+            // Free slots retain their last node id in `data`, but have no
+            // backlink and must not be reinserted.
+            if (std.mem.indexOfScalar(u32, self.free.items, @intCast(slot)) == null)
+                self.backlink.putAssumeCapacity(id.node_id, @intCast(slot));
         }
     }
 
     pub fn removeNodeRange(self: *Self, alloc: Allocator, range: Range) !void {
         for (0.., self.data.items) |i, *d| {
             if (!range.in(d.node_id)) continue;
+
+            _ = self.backlink.remove(d.node_id);
 
             d.gen +%= 1;
             try self.free.append(alloc, @intCast(i));
@@ -221,6 +253,226 @@ const Exposed = struct {
     pub fn deinit(self: *Self, alloc: Allocator) void {
         self.data.deinit(alloc);
         self.free.deinit(alloc);
+
+        self.backlink.deinit(alloc);
+
+        self.data = .empty;
+        self.free = .empty;
+
+        self.backlink = .empty;
+    }
+};
+
+// on dispatch: 1) check if instance is valid,
+//              2) dispatch animation task,
+//              3) check the scene node's children to see if they have an attachment on this pose,
+//                 if yes, then add to the diry ranges - here we might want to wait until after animation and check if the pose changed at the attachment location (in either case we can only update the world transforms after animation is done)
+const AnimatedInstances = struct {
+    pub const Id = struct {
+        slot: u32,
+    };
+
+    const Instance = struct {
+        skins: []const base.util.ConstView(Skin) = &.{},
+        pose: PosePool.PoseId = undefined,
+        joint_range: Range = undefined,
+        revision: u64 = std.math.maxInt(u32),
+    };
+
+    instances: std.MultiArrayList(Instance) = .empty,
+    free_instances: std.ArrayList(u32) = .empty,
+
+    joints: std.ArrayList(Mat) = .empty,
+    free_joints: DisjointRanges = .{},
+
+    pub fn addInstance(self: *AnimatedInstances, alloc: Allocator, skins: []const base.util.ConstView(Skin), pose_id: PosePool.PoseId, joint_count: u32) !Id {
+        const slot: u32 = @intCast(if (self.free_instances.pop()) |id| id else try self.instances.addOne(alloc));
+
+        var found_range: ?Range = null;
+        for (self.free_joints.ranges.items) |free_range| {
+            if (free_range.end - free_range.start >= joint_count) found_range = free_range;
+        }
+
+        const joint_range = if (found_range) |found| blk: {
+            const r: Range = .{ .start = found.start, .end = found.start + joint_count };
+            try self.free_joints.remove(alloc, r);
+
+            break :blk r;
+        } else blk: {
+            const start = self.joints.items.len;
+            _ = try self.joints.addManyAsSlice(alloc, joint_count);
+
+            break :blk Range{
+                .start = @intCast(start),
+                .end = @intCast(self.joints.items.len),
+            };
+        };
+
+        self.instances.set(slot, .{
+            .skins = skins,
+            .pose = pose_id,
+            .joint_range = joint_range,
+            .revision = 0,
+        });
+
+        return .{
+            .slot = slot,
+        };
+    }
+
+    pub fn removeInstance(self: *AnimatedInstances, alloc: Allocator, id: Id) !void {
+        const inst = self.instances.get(id.slot);
+
+        self.instances.set(id.slot, .{});
+
+        try self.free_joints.add(alloc, inst.joint_range);
+        self.free_instances.append(alloc, id.slot);
+    }
+
+    pub fn isInvalid(self: *AnimatedInstances, id: Id) bool {
+        return self.instances.items(.revision)[id.slot] == std.math.maxInt(u32);
+    }
+
+    pub fn deinit(self: *AnimatedInstances, alloc: Allocator) void {
+        self.instances.deinit(alloc);
+        self.free_instances.deinit(alloc);
+
+        self.joints.deinit(alloc);
+        self.free_joints.deinit(alloc);
+
+        self.instances = .empty;
+        self.free_instances = .empty;
+
+        self.joints = .empty;
+        self.free_joints = .{};
+    }
+};
+
+const DrawableMeshes = struct {
+    pub const Id = struct {
+        sparse: u32,
+    };
+
+    const Kind = enum { static, skinned };
+    const SparseEntry = struct {
+        dense: u32,
+        kind: Kind,
+    };
+
+    static_drawlist: std.ArrayList(struct {
+        mesh_desc_ix: u32,
+        world_transform: [4][4]f32,
+        sparse_id: u32,
+    }) = .empty,
+
+    skinned_drawlist: std.ArrayList(struct {
+        mesh_desc_ix: u32,
+        joint_offset: u32,
+        world_transform: [4][4]f32,
+        sparse_id: u32,
+    }) = .empty,
+
+    // Each live Id points to an entry in one of the two dense draw lists.
+    sparse: std.ArrayList(SparseEntry) = .empty,
+
+    pub fn addStatic(self: *DrawableMeshes, alloc: Allocator, mesh_dense: u32, world_transform: Mat) !Id {
+        const reusable = self.findInvalidSparse();
+        try self.static_drawlist.ensureUnusedCapacity(alloc, 1);
+        if (reusable == null) try self.sparse.ensureUnusedCapacity(alloc, 1);
+
+        const dense: u32 = @intCast(self.static_drawlist.items.len);
+        const sparse_id: u32 = reusable orelse @intCast(self.sparse.items.len);
+
+        self.static_drawlist.appendAssumeCapacity(.{
+            .mesh_desc_ix = mesh_dense,
+            .world_transform = @bitCast(world_transform),
+            .sparse_id = sparse_id,
+        });
+
+        if (reusable != null) {
+            self.sparse.items[sparse_id] = .{ .dense = dense, .kind = .static };
+        } else {
+            self.sparse.appendAssumeCapacity(.{ .dense = dense, .kind = .static });
+        }
+        return .{ .sparse = sparse_id };
+    }
+
+    pub fn addSkinned(self: *DrawableMeshes, alloc: Allocator, mesh_dense: u32, joint_offset: u32, world_transform: Mat) !Id {
+        const reusable = self.findInvalidSparse();
+        try self.skinned_drawlist.ensureUnusedCapacity(alloc, 1);
+        if (reusable == null) try self.sparse.ensureUnusedCapacity(alloc, 1);
+
+        const dense: u32 = @intCast(self.skinned_drawlist.items.len);
+        const sparse_id: u32 = reusable orelse @intCast(self.sparse.items.len);
+        self.skinned_drawlist.appendAssumeCapacity(.{
+            .mesh_desc_ix = mesh_dense,
+            .joint_offset = joint_offset,
+            .world_transform = @bitCast(world_transform),
+            .sparse_id = sparse_id,
+        });
+
+        if (reusable != null) {
+            self.sparse.items[sparse_id] = .{ .dense = dense, .kind = .skinned };
+        } else {
+            self.sparse.appendAssumeCapacity(.{ .dense = dense, .kind = .skinned });
+        }
+        return .{ .sparse = sparse_id };
+    }
+
+    fn findInvalidSparse(self: *const DrawableMeshes) ?u32 {
+        for (self.sparse.items, 0..) |entry, i| {
+            if (entry.dense == std.math.maxInt(u32)) return @intCast(i);
+        }
+        return null;
+    }
+
+    pub fn updateTransform(self: *DrawableMeshes, id: Id, world_transform: Mat) void {
+        if (id.sparse >= self.sparse.items.len) return;
+
+        const entry = self.sparse.items[id.sparse];
+        if (entry.dense == std.math.maxInt(u32)) return;
+
+        switch (entry.kind) {
+            .static => self.static_drawlist.items[entry.dense].world_transform = @bitCast(world_transform),
+            .skinned => self.skinned_drawlist.items[entry.dense].world_transform = @bitCast(world_transform),
+        }
+    }
+
+    pub fn remove(self: *DrawableMeshes, id: Id) void {
+        if (id.sparse >= self.sparse.items.len) return;
+
+        const entry = self.sparse.items[id.sparse];
+        if (entry.dense == std.math.maxInt(u32)) return;
+
+        switch (entry.kind) {
+            .static => {
+                const last: u32 = @intCast(self.static_drawlist.items.len - 1);
+                const moved_sparse_id = self.static_drawlist.items[last].sparse_id;
+                _ = self.static_drawlist.swapRemove(entry.dense);
+                if (entry.dense != last) {
+                    self.sparse.items[moved_sparse_id].dense = entry.dense;
+                }
+            },
+            .skinned => {
+                const last: u32 = @intCast(self.skinned_drawlist.items.len - 1);
+                const moved_sparse_id = self.skinned_drawlist.items[last].sparse_id;
+                _ = self.skinned_drawlist.swapRemove(entry.dense);
+                if (entry.dense != last) {
+                    self.sparse.items[moved_sparse_id].dense = entry.dense;
+                }
+            },
+        }
+        self.sparse.items[id.sparse].dense = std.math.maxInt(u32);
+    }
+
+    pub fn deinit(self: *DrawableMeshes, alloc: Allocator) void {
+        self.static_drawlist.deinit(alloc);
+        self.skinned_drawlist.deinit(alloc);
+        self.sparse.deinit(alloc);
+
+        self.static_drawlist = .empty;
+        self.skinned_drawlist = .empty;
+        self.sparse = .empty;
     }
 };
 
@@ -231,21 +483,30 @@ pub const NodeDebug = struct {
 };
 
 pub const Node = struct {
-    mesh: ?struct {
-        gid: Gid,
-        dense: u32,
-        skin: u32 = std.math.maxInt(u32), // gets passed into the animation system, either it gets interpretted as normal skin indices, or for procedural animations it can be used as an identifier of the mesh eg. => TODO: modify TemplateScene to be able to set the skin value of a mesh payload node
-    },
-    // model anchor has .mesh = null, but .model != null, the anchor's children that have .mesh set, and .model fields equal to anchor's
-    // pose is only set for the anchor node, it's children that have skin set "inherit" the pose (get sent to animation)
-    model: ?struct {
-        gid: Gid,
-        dense: u32,
-    },
-    pose: ?struct {
-        id: PosePool.PoseId,
-        revision: u64,
-    },
+    pub const Payload = union(enum) {
+        mesh: struct {
+            gid: Gid,
+            dense: u32,
+
+            drawable_id: DrawableMeshes.Id,
+        },
+        model_mesh: struct {
+            gid: Gid,
+            dense: u32,
+            joint_offset: u32 = std.math.maxInt(u32),
+
+            drawable_id: DrawableMeshes.Id,
+        },
+        model_anchor: struct {
+            model_gid: Gid,
+            model_dense: u32,
+            animation: ?AnimatedInstances.Id,
+        },
+        nothing,
+    };
+
+    // Model anchors carry the pose; their mesh children refer back to the model.
+    payload: Payload,
 
     parent_transform_relation: union(enum) {
         inherit_transform,
@@ -265,13 +526,16 @@ pub const Node = struct {
 };
 
 pose_pool: PosePool = .{},
+animated_instances: AnimatedInstances = .{},
+drawable_meshes: DrawableMeshes = .{},
 
 nodes_debug: std.ArrayList(NodeDebug) = .empty,
 nodes: std.MultiArrayList(struct {
     world_transform: Mat,
     node: Node,
 }) = .empty, // topo sorted; transform storage is a contiguous field for GPU uploads
-dirty_transforms: DirtyRanges = .{},
+
+dirty_transforms: DisjointRanges = .{},
 
 exposed: Exposed = .{},
 
@@ -280,15 +544,13 @@ attachments: Attachments = .{},
 pub fn initRoot(self: *Scene, alloc: Allocator) !Exposed.Id {
     if (self.nodes.len != 0) return error.SceneNotEmpty;
 
-    try self.nodes_debug.append(alloc, .{
+    if (debug_enabled) try self.nodes_debug.append(alloc, .{
         .node_name = "root",
     });
 
     try self.nodes.append(alloc, .{
         .node = .{
-            .mesh = null,
-            .model = null,
-            .pose = null,
+            .payload = .nothing,
             .parent_transform_relation = .inherit_transform,
             .local_transform = base.zmath.identity(),
             .self = 0,
@@ -304,11 +566,22 @@ pub fn initRoot(self: *Scene, alloc: Allocator) !Exposed.Id {
 
 pub fn deinit(self: *Scene, alloc: Allocator) void {
     self.pose_pool.deinit(alloc);
+    self.animated_instances.deinit(alloc);
+    self.drawable_meshes.deinit(alloc);
 
-    self.nodes_debug.deinit(alloc);
+    if (debug_enabled) self.nodes_debug.deinit(alloc);
     self.nodes.deinit(alloc);
     self.dirty_transforms.deinit(alloc);
     self.exposed.deinit(alloc);
+
+    self.pose_pool = .{};
+    self.animated_instances = .{};
+    self.drawable_meshes = .{};
+
+    if (debug_enabled) self.nodes_debug = .empty;
+    self.nodes = .empty;
+    self.dirty_transforms = .{};
+    self.exposed = .{};
 }
 
 pub fn rebuildDirtyTransforms(self: *Scene) void {
@@ -319,19 +592,25 @@ pub fn rebuildDirtyTransforms(self: *Scene) void {
             const node = &nodes[ix];
             if (node.isRootNode()) {
                 world_transforms[ix] = node.local_transform;
-                continue;
+            } else {
+                switch (node.parent_transform_relation) {
+                    .attachment => |att| {
+                        _ = att;
+                        // TODO:
+                        unreachable;
+                    },
+                    .inherit_transform => {
+                        world_transforms[ix] = base.zmath.mul(node.local_transform, world_transforms[node.parent]);
+                    },
+                }
             }
 
-            switch (node.parent_transform_relation) {
-                .attachment => |att| {
-                    _ = att;
-                    // TODO:
-                    unreachable;
-                },
-                .inherit_transform => {
-                    world_transforms[ix] = base.zmath.mul(node.local_transform, world_transforms[node.parent]);
-                },
-            }
+            const drawable_id = switch (node.payload) {
+                .mesh => |mesh| mesh.drawable_id,
+                .model_mesh => |mesh| mesh.drawable_id,
+                .model_anchor, .nothing => continue,
+            };
+            self.drawable_meshes.updateTransform(drawable_id, world_transforms[ix]);
         }
     }
 }
@@ -391,18 +670,13 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                     frames.items[frames.items.len - 1].runtime_index;
                 const runtime_index: u32 = @intCast(insert_at + cursor);
                 const local_transform = build_node.local_transform.toMat();
-                var pose: @FieldType(Node, "pose") = null;
+                var pose: ?PosePool.PoseId = null;
                 var mesh_child_count: u32 = 0;
 
                 switch (build_node.payload) {
-                    .nothing => |maybe_pose| {
-                        if (maybe_pose) |id| {
-                            pose = .{ .id = id, .revision = try self.pose_pool.getRevision(id) };
-                        }
+                    .nothing => {
                         node_items[runtime_index] = .{
-                            .mesh = null,
-                            .model = null,
-                            .pose = pose,
+                            .payload = .nothing,
                             .parent_transform_relation = .inherit_transform,
                             .local_transform = local_transform,
                             .self = runtime_index,
@@ -412,11 +686,13 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                         };
                         cursor += 1;
                     },
-                    .mesh => |mesh| {
+                    .mesh => |gid| {
+                        const dense = as.denseIndex(gid);
+                        const drawable_id = try self.drawable_meshes.addStatic(alloc, dense, base.zmath.identity());
+                        errdefer self.drawable_meshes.remove(drawable_id);
+
                         node_items[runtime_index] = .{
-                            .mesh = .{ .gid = mesh.gid, .dense = as.denseIndex(mesh.gid), .skin = mesh.custom_skin },
-                            .model = null,
-                            .pose = null,
+                            .payload = .{ .mesh = .{ .gid = gid, .dense = as.denseIndex(gid), .drawable_id = drawable_id } },
                             .parent_transform_relation = .inherit_transform,
                             .local_transform = local_transform,
                             .self = runtime_index,
@@ -426,8 +702,9 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                         };
                         cursor += 1;
                     },
-                    .model => |model_gid| {
-                        const model_dense = as.denseIndex(model_gid);
+                    .model => |m| {
+                        const model_dense = as.denseIndex(m.gid);
+
                         const meshes = as.model_reg.getMeshDenseIds(model_dense);
                         const transforms = as.model_reg.getMeshTransforms(model_dense);
                         const skins = as.model_reg.getMeshSkins(model_dense);
@@ -438,25 +715,48 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                             return error.ModelMeshDataLengthMismatch;
                         mesh_child_count = @intCast(meshes.len);
 
-                        if (skeleton) |s| {
+                        pose = if (skeleton) |s| blk: {
+                            if (m.pose_overwrite) |p| {
+                                if (p.skeleton != s.dense) {
+                                    base.zprobe.event(.err, "Pose overwrite isn't the same skeleton", .{
+                                        .overwritten_skeleton = p.skeleton,
+                                        .needed_skeleton = s.dense,
+                                    });
+                                    break :blk null;
+                                }
+
+                                break :blk p;
+                            }
+
                             if (self.pose_pool.pools.items.len <= s.dense or self.pose_pool.pools.items[s.dense].isUninitialized()) {
                                 const skeleton_data = as.skeleton_reg.getSkeleton(s.dense);
                                 try self.pose_pool.newSkeletonPool(
                                     alloc,
-                                    s.gid,
                                     s.dense,
                                     @intCast(skeleton_data.bind_local_transforms.len),
                                 );
                             }
 
-                            const id = self.pose_pool.newPose(alloc, s.dense) catch unreachable;
-                            pose = .{ .id = id, .revision = self.pose_pool.getRevision(id) catch unreachable };
-                        }
+                            break :blk self.pose_pool.newPose(alloc, s.dense) catch unreachable;
+                        } else if (m.pose_overwrite) |_| blk: {
+                            base.zprobe.event(.err, "Trying to overwrite pose for a static model", .{});
+                            break :blk null;
+                        } else null;
 
+                        var joint_offset_start: u32 = 0;
                         node_items[runtime_index] = .{
-                            .mesh = null,
-                            .model = .{ .gid = model_gid, .dense = model_dense },
-                            .pose = pose,
+                            .payload = .{ .model_anchor = .{
+                                .model_gid = m.gid,
+                                .model_dense = model_dense,
+                                .animation = if (pose) |p| blk: {
+                                    var joint_count: u32 = 0;
+                                    for (skeleton.?.skins) |s| joint_count += @intCast(s.inverse_bind_matrices.len);
+
+                                    const id = try self.animated_instances.addInstance(alloc, skeleton.?.skins, p, joint_count);
+                                    joint_offset_start = self.animated_instances.instances.items(.joint_range)[id.slot].start;
+                                    break :blk id;
+                                } else null,
+                            } },
                             .parent_transform_relation = .inherit_transform,
                             .local_transform = local_transform,
                             .self = runtime_index,
@@ -466,13 +766,21 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                         };
                         cursor += 1;
 
+                        errdefer for (insert_at + 1..insert_at + cursor) |i| self.drawable_meshes.remove(node_items[i].payload.model_mesh.drawable_id);
+
                         for (meshes, transforms, skins, mesh_gids) |mesh_dense, transform, skin, mesh_gid| {
                             if (skin != std.math.maxInt(u32) and skeleton == null) return error.SkinWithoutSkeleton;
+
+                            const joint_offset: u32, const drawable_id: DrawableMeshes.Id = if (skeleton) |s| blk: {
+                                var sum: u32 = joint_offset_start;
+                                for (0..skin) |s_ix| sum += @intCast(s.skins[s_ix].inverse_bind_matrices.len);
+
+                                break :blk .{ sum, try self.drawable_meshes.addSkinned(alloc, mesh_dense, sum, base.zmath.identity()) };
+                            } else .{ std.math.maxInt(u32), try self.drawable_meshes.addStatic(alloc, mesh_dense, base.zmath.identity()) };
+
                             const child_index: u32 = @intCast(insert_at + cursor);
                             node_items[child_index] = .{
-                                .mesh = .{ .gid = mesh_gid, .dense = mesh_dense, .skin = skin },
-                                .model = .{ .gid = model_gid, .dense = model_dense },
-                                .pose = null,
+                                .payload = .{ .model_mesh = .{ .gid = mesh_gid, .dense = mesh_dense, .joint_offset = joint_offset, .drawable_id = drawable_id } },
                                 .parent_transform_relation = .inherit_transform,
                                 .local_transform = transform,
                                 .self = child_index,
@@ -483,6 +791,7 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                             if (debug_enabled) self.nodes_debug.items[child_index] = .{
                                 .node_name = try name_alloc.dupe(u8, build_node.name),
                             };
+
                             cursor += 1;
                         }
                     },
@@ -496,6 +805,7 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                     const stable_id = try self.exposed.expose(alloc, runtime_index);
                     try recordExposedNode(&ts.exposed_groups, key, stable_id);
                 }
+
                 if (build_node.expose.pose) |key| {
                     if (pose == null) {
                         base.zprobe.event(.err, "Node doesn't have a pose to expose", .{
@@ -503,8 +813,7 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                             .node_name = if (debug_enabled) self.nodes_debug.items[runtime_index].node_name else "",
                         });
                     } else {
-                        const node_pose = node_items[runtime_index].pose orelse return error.ExposedNodeHasNoPose;
-                        try recordExposedPose(&ts.exposed_groups, key, node_pose.id);
+                        try recordExposedPose(&ts.exposed_groups, key, pose.?);
                     }
                 }
 
@@ -669,8 +978,13 @@ pub fn removeTree(self: *Scene, alloc: Allocator, target_node: Exposed.Id) !void
 pub fn requestAllMeshDeps(self: *const Scene, cmd_buf: *AssetSystem.CommandBuffer, range: Range) !void {
     // not very efficient, later on the scene will be split into chunks by which these will get requested + GPU requesting
     for (self.nodes.items(.node)[range.start..range.end]) |node| {
-        const mesh = node.mesh orelse continue;
-        const lod_range = cmd_buf.asset_system.mesh_reg.getLodRange(mesh.dense);
+        const mesh_dense = switch (node.payload) {
+            .mesh => |mesh| mesh.dense,
+            .model_mesh => |mesh| mesh.dense,
+            else => continue,
+        };
+
+        const lod_range = cmd_buf.asset_system.mesh_reg.getLodRange(mesh_dense);
         for (lod_range.@"0"..lod_range.@"1") |lod| {
             var assets = cmd_buf.asset_system.mesh_reg.getLodAssets(@intCast(lod));
             var it = assets.iterator();
@@ -683,8 +997,12 @@ pub fn requestAllMeshDeps(self: *const Scene, cmd_buf: *AssetSystem.CommandBuffe
 
 pub fn releaseAllMeshDeps(self: *const Scene, cmd_buf: *AssetSystem.CommandBuffer, range: Range) !void {
     for (self.nodes.items(.node)[range.start..range.end]) |node| {
-        const mesh = node.mesh orelse continue;
-        const lod_range = cmd_buf.asset_system.mesh_reg.getLodRange(mesh.dense);
+        const mesh_dense = switch (node.payload) {
+            .mesh => |mesh| mesh.dense,
+            .model_mesh => |mesh| mesh.dense,
+            else => continue,
+        };
+        const lod_range = cmd_buf.asset_system.mesh_reg.getLodRange(mesh_dense);
         for (lod_range.@"0"..lod_range.@"1") |lod| {
             var assets = cmd_buf.asset_system.mesh_reg.getLodAssets(@intCast(lod));
             var it = assets.iterator();
@@ -701,7 +1019,7 @@ test {
 
 test "add dirty range" {
     const alloc = std.testing.allocator;
-    var ranges = DirtyRanges{};
+    var ranges = DisjointRanges{};
     defer ranges.deinit(alloc);
 
     try ranges.add(alloc, .{
@@ -753,7 +1071,7 @@ test "add dirty range" {
 
 test "dirty ranges add bridges all touching ranges" {
     const alloc = std.testing.allocator;
-    var ranges: DirtyRanges = .{};
+    var ranges: DisjointRanges = .{};
     defer ranges.deinit(alloc);
 
     try ranges.add(alloc, .{ .start = 1, .end = 3 });
@@ -766,7 +1084,7 @@ test "dirty ranges add bridges all touching ranges" {
 
 test "dirty ranges remove trims splits and spans ranges" {
     const alloc = std.testing.allocator;
-    var ranges: DirtyRanges = .{};
+    var ranges: DisjointRanges = .{};
     defer ranges.deinit(alloc);
 
     try ranges.add(alloc, .{ .start = 0, .end = 10 });
@@ -786,7 +1104,7 @@ test "dirty ranges remove trims splits and spans ranges" {
 
 test "dirty ranges update preserves insertion gap and closes deletion gap" {
     const alloc = std.testing.allocator;
-    var ranges: DirtyRanges = .{};
+    var ranges: DisjointRanges = .{};
     defer ranges.deinit(alloc);
 
     try ranges.add(alloc, .{ .start = 2, .end = 8 });
@@ -803,9 +1121,7 @@ test "dirty ranges update preserves insertion gap and closes deletion gap" {
 
 fn testNode(self_id: u32, parent_id: u32, child_count: u32, subtree_size: u32) Node {
     return .{
-        .mesh = null,
-        .model = null,
-        .pose = null,
+        .payload = .nothing,
         .parent_transform_relation = .inherit_transform,
         .local_transform = base.zmath.identity(),
         .self = self_id,

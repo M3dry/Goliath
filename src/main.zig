@@ -207,7 +207,6 @@ pub fn main(init: std.process.Init) !void {
         const body_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(body_mesh.lods[0]) }, "body_geometry");
         const helmet_geo_gid = try ingestAndFinalize(&asset_system, .{ .geometry = geometryIngest(helmet_mesh.lods[0]) }, "helmet_geometry");
 
-        // TODO: material ingestion
         const schema_gid = try ingestAndFinalize(&asset_system, .{
             .material_schema = .{
                 .blob_size = @sizeOf(runtime.PbrShading.GPUPBRInstance),
@@ -338,7 +337,7 @@ pub fn main(init: std.process.Init) !void {
     const skeleton = asset_system.skeleton_reg.getSkeleton(paladin_skeleton.dense);
     const anims = asset_system.skeleton_reg.getAnimations(paladin_skeleton.dense);
 
-    const paladin_local_pose = try gpa.alloc(runtime.Skeleton.TRSNode, skeleton.bind_local_transforms.len);
+    const paladin_local_pose = try gpa.alloc(base.util.TRS, skeleton.bind_local_transforms.len);
     defer gpa.free(paladin_local_pose);
     const paladin_model_pose = try gpa.alloc(zm.Mat, skeleton.bind_local_transforms.len);
     defer gpa.free(paladin_model_pose);

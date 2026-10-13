@@ -5,8 +5,8 @@ const Allocator = std.mem.Allocator;
 const PosePool = @This();
 
 const AssetSystem = @import("AssetSystem.zig");
-const TRS = @import("Skeleton.zig").TRSNode;
-const zm = @import("base").zmath;
+const TRS = base.util.TRS;
+const zm = base.zmath;
 const Animation = @import("Animation.zig");
 
 const cs = base.util.const_view;
@@ -34,7 +34,6 @@ pub const SkeletonPool = struct {
         slot: u24,
     };
 
-    skeleton_gid: AssetSystem.Gid,
     skeleton: u32,
     joint_count: u32,
 
@@ -45,17 +44,10 @@ pub const SkeletonPool = struct {
     // TODO: merge revisions with slots via MultiArrayList
     revisions: std.ArrayList(u64) = .empty,
 
-    slots: std.ArrayList(packed struct(u64) {
-        gen: u8,
-        ix: u56,
-    }) = .empty,
+    generations: std.ArrayList(u8) = .empty,
     free_slots: std.ArrayList(u32) = .empty,
 
     pub const uninitialized: SkeletonPool = .{
-        .skeleton_gid = .{
-            .gen = std.math.maxInt(u32),
-            .slot = std.math.maxInt(u32),
-        },
         .skeleton = std.math.maxInt(u32),
         .joint_count = std.math.maxInt(u32),
     };
@@ -70,59 +62,57 @@ pub const SkeletonPool = struct {
 
         self.revisions.deinit(alloc);
 
-        self.slots.deinit(alloc);
+        self.generations.deinit(alloc);
         self.free_slots.deinit(alloc);
     }
 
     pub fn newPose(self: *SkeletonPool, alloc: Allocator) !StableId {
         if (self.free_slots.pop()) |slot_ix| {
-            const slot = &self.slots.items[slot_ix];
-            slot.gen +%= 1;
+            const gen = &self.generations.items[slot_ix];
+            gen.* +%= 1;
 
             return .{
-                .gen = slot.gen,
+                .gen = gen.*,
                 .slot = @intCast(slot_ix),
             };
         } else {
-            const ix = self.local.items.len;
-
             _ = try self.local.addManyAsSlice(alloc, self.joint_count);
             _ = try self.model.addManyAsSlice(alloc, self.joint_count);
 
             try self.revisions.append(alloc, 0);
 
-            try self.slots.append(alloc, .{
-                .gen = 0,
-                .ix = @intCast(ix),
-            });
+            try self.generations.append(alloc, 0);
 
             return .{
                 .gen = 0,
-                .slot = @intCast(self.slots.items.len - 1),
+                .slot = @intCast(self.generations.items.len - 1),
             };
         }
     }
 
     pub fn removePose(self: *SkeletonPool, alloc: Allocator, id: StableId) !void {
-        _ = try self.getIx(id); // check validity of `id`
+        try self.checkId(id);
 
         self.revisions.items[id.slot] = 0;
-        self.slots.items[id.slot].gen +%= 1;
+        self.generations.items[id.slot] +%= 1;
 
         try self.free_slots.append(alloc, id.slot);
     }
 
-    fn getIx(self: *SkeletonPool, id: StableId) !u56 {
-        if (self.slots.items.len <= id.slot) return error.SlotOutOfRange;
+    fn checkId(self: *SkeletonPool, id: StableId) !void {
+        if (self.generations.items.len <= id.slot) return error.SlotOutOfRange;
 
-        const slot = self.slots.items[id.slot];
-        if (slot.gen != id.gen) return error.GenerationMismatch;
+        const gen = self.generations.items[id.slot];
+        if (gen != id.gen) return error.GenerationMismatch;
+    }
 
-        return slot.ix;
+    inline fn getIx(self: *SkeletonPool, id: StableId) usize {
+        return id.slot * self.joint_count;
     }
 
     fn getPose(self: *SkeletonPool, id: StableId) !Pose {
-        const ix = try self.getIx(id);
+        try self.checkId(id);
+        const ix = self.getIx(id);
 
         return .{
             .local = self.local.items[ix..][0..self.joint_count],
@@ -140,13 +130,13 @@ pub const SkeletonPool = struct {
     }
 
     pub fn finalizeEdit(self: *SkeletonPool, id: StableId) !void {
-        _ = try self.getIx(id);
+        _ = try self.checkId(id);
 
         self.revisions.items[id.slot] += 1;
     }
 
     pub fn getRevision(self: *SkeletonPool, id: StableId) !u64 {
-        _ = try self.getIx(id);
+        try self.checkId(id);
 
         return self.revisions.items[id.slot];
     }
@@ -161,25 +151,23 @@ pub const PoseId = packed struct(u64) {
 pools: std.ArrayList(SkeletonPool) = .empty,
 
 // Instead of passing in the joint count via args we could pass in the skeleton registry and look it up there, but that seems unnecessarily complex
-/// `skeleton_gid` needs to stay acquired until `removeSkeletonPool` or `deinit` are called
-pub fn newSkeletonPool(self: *PosePool, alloc: Allocator, skeleton_gid: AssetSystem.Gid, skeleton: u32, joint_count: u32) !void {
-    if (self.pools.items.len > skeleton) {
-        if (!self.pools.items[skeleton].isUninitialized()) return error.SkeletonPoolAlreadyInitialized;
+/// skeleton needs to stay acquired (`skeleton_dense` needs to stay valid) until `removeSkeletonPool` or `deinit` are called
+pub fn newSkeletonPool(self: *PosePool, alloc: Allocator, skeleton_dense: u32, joint_count: u32) !void {
+    if (self.pools.items.len > skeleton_dense) {
+        if (!self.pools.items[skeleton_dense].isUninitialized()) return error.SkeletonPoolAlreadyInitialized;
 
-        self.pools.items[skeleton] = .{
-            .skeleton_gid = skeleton_gid,
-            .skeleton = skeleton,
+        self.pools.items[skeleton_dense] = .{
+            .skeleton = skeleton_dense,
             .joint_count = joint_count,
         };
 
         return;
     }
 
-    @memset(try self.pools.addManyAsSlice(alloc, skeleton - self.pools.items.len + 1), SkeletonPool.uninitialized);
+    @memset(try self.pools.addManyAsSlice(alloc, skeleton_dense - self.pools.items.len + 1), SkeletonPool.uninitialized);
 
-    self.pools.items[skeleton] = .{
-        .skeleton_gid = skeleton_gid,
-        .skeleton = skeleton,
+    self.pools.items[skeleton_dense] = .{
+        .skeleton = skeleton_dense,
         .joint_count = joint_count,
     };
 }

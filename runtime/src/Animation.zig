@@ -193,7 +193,7 @@ fn keyframeAtOrBefore(input: []const f32, time: f32) usize {
 
 /// Samples this clip into caller-owned local-space pose storage. The output is
 /// reset to the skeleton's bind pose before animation channels are applied.
-pub fn sample(self: *const Animation, skeleton: base.util.ConstView(Skeleton), time: f32, out_local_pose: []Skeleton.TRSNode) !void {
+pub fn sample(self: *const Animation, skeleton: base.util.ConstView(Skeleton), time: f32, out_local_pose: []base.util.TRS) !void {
     if (out_local_pose.len != skeleton.bind_local_transforms.len) return error.PoseSizeMismatch;
     if (!std.math.isFinite(time)) return error.InvalidAnimationTime;
     @memcpy(out_local_pose, skeleton.bind_local_transforms);
@@ -298,7 +298,7 @@ pub fn sample(self: *const Animation, skeleton: base.util.ConstView(Skeleton), t
     }
 }
 
-pub fn buildModelPose(skeleton: base.util.ConstView(Skeleton), local_pose: []const Skeleton.TRSNode, out_model_pose: []zm.Mat) !void {
+pub fn buildModelPose(skeleton: base.util.ConstView(Skeleton), local_pose: []const base.util.TRS, out_model_pose: []zm.Mat) !void {
     if (local_pose.len != skeleton.parents.len or out_model_pose.len != skeleton.parents.len) return error.PoseSizeMismatch;
     for (local_pose, skeleton.parents, 0..) |trs, parent, i| {
         const local = trs.toMat();
@@ -316,7 +316,7 @@ pub fn buildSkinPalette(skin: base.util.ConstView(Skin), model_pose: []const zm.
 }
 
 test "linear and cubic sampling use caller-owned pose storage" {
-    var bind_pose = [_]Skeleton.TRSNode{.{
+    var bind_pose = [_]base.util.TRS{.{
         .translation = .{ 0, 0, 0 },
         .rotation = .{ 0, 0, 0, 1 },
         .scale = .{ 1, 1, 1 },
@@ -328,9 +328,9 @@ test "linear and cubic sampling use caller-owned pose storage" {
     var linear_samplers = [_]Sampler{.{ .interpolation = .linear, .input = &times, .output = &linear_values }};
     var translation_channels = [_]Channel{.{ .skeleton_node_index = 0, .path = .translation, .sampler_index = 0 }};
     const linear = Animation{ .channels = &translation_channels, .samplers = &linear_samplers, .duration = 1 };
-    var pose: [1]Skeleton.TRSNode = undefined;
+    var pose: [1]base.util.TRS = undefined;
 
-    try linear.sample(&skeleton, 0.5, &pose);
+    try linear.sample(base.util.toConstView(skeleton), 0.5, &pose);
     try std.testing.expectEqualSlices(f32, &.{ 1, 2, 3 }, &pose[0].translation);
 
     // Two cubic keys, each encoded as in-tangent/value/out-tangent.
@@ -340,12 +340,12 @@ test "linear and cubic sampling use caller-owned pose storage" {
     };
     var cubic_samplers = [_]Sampler{.{ .interpolation = .cubic_spline, .input = &times, .output = &cubic_values }};
     const cubic = Animation{ .channels = &translation_channels, .samplers = &cubic_samplers, .duration = 1 };
-    try cubic.sample(&skeleton, 0.5, &pose);
+    try cubic.sample(base.util.toConstView(skeleton), 0.5, &pose);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), pose[0].translation[0], 0.0001);
 }
 
 test "sample normalizes animated quaternions" {
-    var bind_pose = [_]Skeleton.TRSNode{.{
+    var bind_pose = [_]base.util.TRS{.{
         .translation = .{ 0, 0, 0 },
         .rotation = .{ 0, 0, 0, 1 },
         .scale = .{ 1, 1, 1 },
@@ -357,8 +357,8 @@ test "sample normalizes animated quaternions" {
     var samplers = [_]Sampler{.{ .interpolation = .step, .input = &times, .output = &values }};
     var channels = [_]Channel{.{ .skeleton_node_index = 0, .path = .rotation, .sampler_index = 0 }};
     const animation = Animation{ .channels = &channels, .samplers = &samplers, .duration = 0 };
-    var pose: [1]Skeleton.TRSNode = undefined;
+    var pose: [1]base.util.TRS = undefined;
 
-    try animation.sample(&skeleton, 0, &pose);
+    try animation.sample(base.util.toConstView(skeleton), 0, &pose);
     try std.testing.expectEqualSlices(f32, &.{ 0, 0, 0, 1 }, &pose[0].rotation);
 }

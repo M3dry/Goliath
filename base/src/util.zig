@@ -13,6 +13,16 @@ pub const AABB = struct {
     max: zm.Vec,
 };
 
+pub const TRS = struct {
+    translation: [3]f32,
+    rotation: [4]f32,
+    scale: [3]f32,
+
+    pub fn toMat(self: TRS) zm.Mat {
+        return zm.mul(zm.scaling(self.scale[0], self.scale[1], self.scale[2]), zm.mul(zm.matFromQuat(zm.f32x4(self.rotation[0], self.rotation[1], self.rotation[2], self.rotation[3])), zm.translation(self.translation[0], self.translation[1], self.translation[2])));
+    }
+};
+
 pub fn fullRange(aspect: vk.ImageAspectFlags) vk.ImageSubresourceRange {
     return .{
         .aspect_mask = aspect,

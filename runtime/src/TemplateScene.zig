@@ -1,11 +1,12 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-const zm = @import("base").zmath;
+const base = @import("base");
+const zm = base.zmath;
 
 const Allocator = std.mem.Allocator;
 const AssetSystem = @import("AssetSystem.zig");
-const TRS = @import("Skeleton.zig").TRSNode;
+const TRS = base.util.TRS;
 
 const TemplateScene = @This();
 
@@ -139,19 +140,19 @@ pub const NodeRef = struct {
 
 pub const Node = struct {
     pub const Payload = union(enum) {
-        /// user needs to ensure that the PoseId belongs to the correct PosePool (each runtime scene has a separate pool)
-        nothing: ?PosePool.PoseId,
-        mesh: struct {
+        nothing,
+        mesh: AssetSystem.Gid,
+        model: struct {
             gid: AssetSystem.Gid,
-            custom_skin: u32 = std.math.maxInt(u32),
+            /// user needs to ensure that the PoseId belongs to the correct PosePool (each runtime scene has a separate pool), and to the correct skeleton
+            pose_overwrite: ?PosePool.PoseId,
         },
-        model: AssetSystem.Gid,
         // later also a scene gid
     };
 
     name: []const u8 = &.{},
 
-    payload: Payload = .{ .nothing = null },
+    payload: Payload = .nothing,
     expose: Expose = .{},
 
     local_transform: TRS = .{
@@ -697,7 +698,7 @@ fn countNodes(self: *TemplateScene, alloc: Allocator, as: *const AssetSystem, ex
     while (try it.next(alloc)) |node_ix| {
         count += switch (self.nodes.items[node_ix].payload) {
             .mesh, .nothing => 1,
-            .model => |gid| 1 + as.model_reg.getMeshDenseIds(as.denseIndex(gid)).len,
+            .model => |m| 1 + as.model_reg.getMeshDenseIds(as.denseIndex(m.gid)).len,
         };
 
         const exposed = self.nodes.items[node_ix].expose;

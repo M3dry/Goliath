@@ -203,7 +203,6 @@ pub fn removeLocation(self: *Loader, alloc: Allocator, io: std.Io, loc: u32) !vo
     try self.free_locations.append(alloc, loc);
 }
 
-// TODO: serialize also the index
 pub const ManifestLocation = struct {
     ix: u32,
     path: []const u8,
