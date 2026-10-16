@@ -55,11 +55,13 @@ const DisjointRanges = struct {
         while (first < self.ranges.items.len and self.ranges.items[first].end < merged.start) : (first += 1) {}
 
         if (first == self.ranges.items.len) {
-            try self.ranges.append(alloc, merged);
+            try self.ensureUnusedCapacity(alloc);
+            self.ranges.appendAssumeCapacity(merged);
             return;
         }
         if (merged.end < self.ranges.items[first].start) {
-            try self.ranges.insert(alloc, first, merged);
+            try self.ensureUnusedCapacity(alloc);
+            self.ranges.insertAssumeCapacity(first, merged);
             return;
         }
 
@@ -74,7 +76,24 @@ const DisjointRanges = struct {
         self.ranges.replaceRangeAssumeCapacity(first, end - first, &.{merged});
     }
 
+    /// A single add or remove can increase the range count by at most one.
+    pub fn ensureUnusedCapacity(self: *DisjointRanges, alloc: Allocator) !void {
+        try self.ranges.ensureUnusedCapacity(alloc, 1);
+    }
+
     pub fn remove(self: *DisjointRanges, alloc: Allocator, range: Range) !void {
+        if (range.start < range.end) {
+            for (self.ranges.items) |existing| {
+                if (existing.start < range.start and existing.end > range.end) {
+                    try self.ensureUnusedCapacity(alloc);
+                    break;
+                }
+            }
+        }
+        self.removeAssumeCapacity(range);
+    }
+
+    pub fn removeAssumeCapacity(self: *DisjointRanges, range: Range) void {
         if (range.start >= range.end) return;
 
         var first: usize = 0;
@@ -97,7 +116,7 @@ const DisjointRanges = struct {
             replacement_len += 1;
         }
 
-        try self.ranges.replaceRange(alloc, first, end - first, replacement[0..replacement_len]);
+        self.ranges.replaceRangeAssumeCapacity(first, end - first, replacement[0..replacement_len]);
     }
 
     pub fn update(self: *DisjointRanges, alloc: Allocator, from: u32, by: u32, comptime negative: bool) !void {
@@ -185,11 +204,15 @@ const Exposed = struct {
             };
         }
 
+        try self.backlink.ensureUnusedCapacity(alloc, 1);
+        if (self.free.items.len == 0) try self.data.ensureUnusedCapacity(alloc, 1);
+
         if (self.free.pop()) |id| {
             self.data.items[id].gen +%= 1;
             self.data.items[id].node_id = node_id;
 
-            try self.backlink.put(alloc, node_id, id);
+            self.backlink.putAssumeCapacity(node_id, id);
+
             return .{
                 .gen = self.data.items[id].gen,
                 .id = id,
@@ -197,7 +220,7 @@ const Exposed = struct {
         }
 
         const id: u32 = @intCast(self.data.items.len);
-        try self.backlink.put(alloc, node_id, id);
+        self.backlink.putAssumeCapacity(node_id, id);
 
         try self.data.append(alloc, .{
             .gen = 0,
@@ -286,26 +309,34 @@ const AnimatedInstances = struct {
     free_joints: DisjointRanges = .{},
 
     pub fn addInstance(self: *AnimatedInstances, alloc: Allocator, skins: []const base.util.ConstView(Skin), pose_id: PosePool.PoseId, joint_count: u32) !Id {
-        const slot: u32 = @intCast(if (self.free_instances.pop()) |id| id else try self.instances.addOne(alloc));
-
+        const reuse_instance = self.free_instances.items.len != 0;
         var found_range: ?Range = null;
         for (self.free_joints.ranges.items) |free_range| {
             if (free_range.end - free_range.start >= joint_count) found_range = free_range;
         }
 
-        const joint_range = if (found_range) |found| blk: {
-            const r: Range = .{ .start = found.start, .end = found.start + joint_count };
-            try self.free_joints.remove(alloc, r);
+        // Prepare all storage before consuming either reusable slot/range.
+        if (!reuse_instance) try self.instances.ensureUnusedCapacity(alloc, 1);
 
-            break :blk r;
+        if (found_range) |_| {
+            try self.free_joints.ensureUnusedCapacity(alloc);
+        } else {
+            try self.joints.ensureUnusedCapacity(alloc, joint_count);
+        }
+
+        const slot: u32 = if (reuse_instance)
+            self.free_instances.pop().?
+        else
+            @intCast(self.instances.addOneAssumeCapacity());
+
+        const joint_range: Range = if (found_range) |found| blk: {
+            const range: Range = .{ .start = found.start, .end = found.start + joint_count };
+            self.free_joints.removeAssumeCapacity(range);
+            break :blk range;
         } else blk: {
             const start = self.joints.items.len;
-            _ = try self.joints.addManyAsSlice(alloc, joint_count);
-
-            break :blk Range{
-                .start = @intCast(start),
-                .end = @intCast(self.joints.items.len),
-            };
+            _ = self.joints.addManyAsSliceAssumeCapacity(joint_count);
+            break :blk .{ .start = @intCast(start), .end = @intCast(self.joints.items.len) };
         };
 
         self.instances.set(slot, .{
@@ -323,10 +354,12 @@ const AnimatedInstances = struct {
     pub fn removeInstance(self: *AnimatedInstances, alloc: Allocator, id: Id) !void {
         const inst = self.instances.get(id.slot);
 
-        self.instances.set(id.slot, .{});
+        try self.free_instances.ensureUnusedCapacity(alloc, 1);
 
         try self.free_joints.add(alloc, inst.joint_range);
-        self.free_instances.append(alloc, id.slot);
+
+        self.instances.set(id.slot, .{});
+        self.free_instances.appendAssumeCapacity(id.slot);
     }
 
     pub fn isInvalid(self: *AnimatedInstances, id: Id) bool {

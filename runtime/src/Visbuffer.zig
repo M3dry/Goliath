@@ -76,7 +76,7 @@ count_pipeline: base.ComputePipeline,
 offsets_pipeline: base.ComputePipeline,
 fragments_pipeline: base.ComputePipeline,
 
-pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .graphics_family, .transport_family, .render_extent }), render_extent: base.vk.Extent2D) !Self {
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .subgroup_props, .vma_allocator, .destroy_queue, .graphics_family, .transport_family, .render_extent }), render_extent: base.vk.Extent2D) !Self {
     const vis_format: base.vk.Format = .r32_uint;
 
     var images: [base.Ctx.frames_in_flight]base.Image2D = undefined;
@@ -166,11 +166,20 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .destroy_queue, .gr
     var frag_ids_buf = try base.Buffer.init(.from(ctx), .graphics, "Fragment ids", @as(u64, render_extent.width) * render_extent.height * 4, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
     errdefer frag_ids_buf.deinit(.from(ctx));
 
-    const count_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_count));
+    const subgroup_size = ctx.view.subgroup_props.subgroup_size;
+    const wavematch = ctx.view.subgroup_props.supported_operations.partitioned_bit_ext;
+    const waveballot = ctx.view.subgroup_props.supported_operations.ballot_bit;
+    const wavearithmetic = ctx.view.subgroup_props.supported_operations.arithmetic_bit;
+
+    const count_mod_spv = if (wavematch) shaders.get(.visbuffer_schema_count_wavematch) else if (waveballot) shaders.get(.visbuffer_schema_count_waveballot) else shaders.get(.visbuffer_schema_count_default);
+    const fragments_mod_spv = if (wavematch) shaders.get(.visbuffer_schema_fragments_wavematch) else if (waveballot) shaders.get(.visbuffer_schema_fragments_waveballot) else shaders.get(.visbuffer_schema_fragments_default);
+    const offsets_shader = if (wavearithmetic and subgroup_size * subgroup_size >= 256) shaders.get(.visbuffer_schema_offsets_wavearithmetic) else shaders.get(.visbuffer_schema_offsets_default);
+
+    const count_mod = try base.ShaderModule.init(.from(ctx), count_mod_spv);
     defer count_mod.deinit(.from(ctx));
-    const offsets_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_offsets));
+    const offsets_mod = try base.ShaderModule.init(.from(ctx), offsets_shader);
     defer offsets_mod.deinit(.from(ctx));
-    const fragments_mod = try base.ShaderModule.init(.from(ctx), shaders.get(.visbuffer_schema_fragments));
+    const fragments_mod = try base.ShaderModule.init(.from(ctx), fragments_mod_spv);
     defer fragments_mod.deinit(.from(ctx));
 
     var count_pipeline = try base.ComputePipeline.init(.from(ctx), .{

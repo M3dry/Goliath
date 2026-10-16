@@ -76,12 +76,16 @@ pub const SkeletonPool = struct {
                 .slot = @intCast(slot_ix),
             };
         } else {
-            _ = try self.local.addManyAsSlice(alloc, self.joint_count);
-            _ = try self.model.addManyAsSlice(alloc, self.joint_count);
+            try self.local.ensureUnusedCapacity(alloc, self.joint_count);
+            try self.model.ensureUnusedCapacity(alloc, self.joint_count);
+            try self.revisions.ensureUnusedCapacity(alloc, 1);
+            try self.generations.ensureUnusedCapacity(alloc, 1);
 
-            try self.revisions.append(alloc, 0);
+            _ = self.local.addManyAsSliceAssumeCapacity(self.joint_count);
+            _ = self.model.addManyAsSliceAssumeCapacity(self.joint_count);
 
-            try self.generations.append(alloc, 0);
+            self.revisions.appendAssumeCapacity(0);
+            self.generations.appendAssumeCapacity(0);
 
             return .{
                 .gen = 0,

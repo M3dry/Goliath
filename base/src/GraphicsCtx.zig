@@ -54,7 +54,7 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     return .false;
 }
 
-fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, required_device_extensions: []const [*:0]const u8) !?struct {vk.PhysicalDevice, vk.PhysicalDeviceProperties, u32, u32, bool} {
+fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, surface: vk.SurfaceKHR, required_device_extensions: []const [*:0]const u8, props2: *vk.PhysicalDeviceProperties2) !?struct {vk.PhysicalDevice, u32, u32, bool} {
     const propsv = try instance.enumerateDeviceExtensionPropertiesAlloc(pdev, null, alloc);
     defer alloc.free(propsv);
 
@@ -95,9 +95,9 @@ fn checkSuitable(alloc: Allocator, instance: Instance, pdev: vk.PhysicalDevice, 
 
     const has_dedicated_transport = transport_family != graphics_family;
 
+    instance.getPhysicalDeviceProperties2(pdev, props2);
     return .{
         pdev,
-        instance.getPhysicalDeviceProperties(pdev),
         graphics_family,
         transport_family,
         has_dedicated_transport,
@@ -112,7 +112,8 @@ pub const QueueType = enum {
 vkb: BaseWrapper,
 instance: Instance,
 pdev: vk.PhysicalDevice,
-props: vk.PhysicalDeviceProperties,
+subgroup_props: vk.PhysicalDeviceSubgroupProperties,
+props: vk.PhysicalDeviceProperties2,
 dev: Device,
 vma_alloc: vma.VmaAllocator,
 
@@ -187,13 +188,37 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
 
     const pdevs = try inst.enumeratePhysicalDevicesAlloc(alloc);
     defer alloc.free(pdevs);
-    const pdev, const props, const graphics_family, const transport_family, const has_dedicated_transport = for (pdevs) |pdev| {
-        if (try checkSuitable(alloc, inst, pdev, surface, &required_device_extensions)) |candidate| {
+
+
+    var subgroup_props: vk.PhysicalDeviceSubgroupProperties = .{
+        .quad_operations_in_all_stages = undefined,
+        .subgroup_size = undefined,
+        .supported_operations = undefined,
+        .supported_stages = undefined,
+    };
+    var props: vk.PhysicalDeviceProperties2 = .{
+        .p_next = &subgroup_props,
+        .properties = undefined,
+    };
+    const pdev, const graphics_family, const transport_family, const has_dedicated_transport = for (pdevs) |pdev| {
+        if (try checkSuitable(alloc, inst, pdev, surface, &required_device_extensions, &props)) |candidate| {
             break candidate;
         }
     } else {
         return error.NoSuitableDevice;
     };
+
+    var all_device_extensions_len: u32 = required_device_extensions.len;
+    var all_device_extensions: [required_device_extensions.len][*:0]const u8 = undefined;
+    inline for (required_device_extensions, 0..) |ext, i| {
+        all_device_extensions[i] = ext;
+    }
+
+    if (subgroup_props.supported_operations.partitioned_bit_ext) {
+        all_device_extensions[all_device_extensions_len] = vk.extensions.ext_shader_subgroup_partitioned.name;
+        all_device_extensions_len += 1;
+    }
+
 
     const priority = [_]f32{1};
     const qci = [_]vk.DeviceQueueCreateInfo{
@@ -208,7 +233,6 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
             .p_queue_priorities = &priority,
         }
     };
-
     var features13: vk.PhysicalDeviceVulkan13Features = .{
         .dynamic_rendering = .true,
         .synchronization_2 = .true,
@@ -227,6 +251,8 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
         .draw_indirect_count = .true,
         .timeline_semaphore = .true,
         .scalar_block_layout = .true,
+        .subgroup_broadcast_dynamic_id = .true,
+        .shader_subgroup_extended_types = .true,
     };
     var features11: vk.PhysicalDeviceVulkan11Features = .{
         .p_next = &features12,
@@ -246,8 +272,8 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
         .p_next = &features,
         .queue_create_info_count = if (graphics_family == transport_family) 1 else 2,
         .p_queue_create_infos = &qci,
-        .enabled_extension_count = required_device_extensions.len,
-        .pp_enabled_extension_names = &required_device_extensions,
+        .enabled_extension_count = all_device_extensions_len,
+        .pp_enabled_extension_names = &all_device_extensions,
         .enabled_layer_count = 0,
         .pp_enabled_layer_names = undefined,
     }, null);
@@ -273,10 +299,12 @@ pub fn init(alloc: Allocator, window: *zglfw.Window, app_name: [*:0]const u8) !S
     const res = vma.vmaCreateAllocator(&vma_info, &vma_alloc);
     if (res < 0) return error.VmaError;
 
+    props.p_next = null;
     return Self{
         .vkb = vkb,
         .instance = inst,
         .pdev = pdev,
+        .subgroup_props = subgroup_props,
         .props = props,
         .dev = device,
         .vma_alloc = vma_alloc,

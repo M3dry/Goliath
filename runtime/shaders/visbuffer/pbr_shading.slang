@@ -143,7 +143,7 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     if (gid >= pc.dispatch[0].count) return;
 
     uint frag_id = pc.frag_ids[pc.dispatch[0].offset + gid];
-    uint2 frag = uint2(frag_id / pc.screen.x, frag_id % pc.screen.x);
+    uint2 frag = uint2(frag_id % pc.screen.x, frag_id / pc.screen.x);
     if (frag.x >= pc.screen.x || frag.y >= pc.screen.y) return;
 
     VisFragment vis = read_vis_fragment(visbuffer[frag]);
@@ -168,8 +168,9 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     float2 uv0_ddy = interp.texcoord0.ddy;
 
     float3 albedo = (inst.albedo * get_texture(inst.albedo_map).SampleGrad(get_sampler(inst.albedo_map), uv0, uv0_ddx, uv0_ddy)).rgb;
-    float metallic = inst.metallic_factor * get_texture(inst.metallic_roughness_map).SampleGrad(get_sampler(inst.metallic_roughness_map), uv0, uv0_ddx, uv0_ddy).b;
-    float roughness = inst.roughness_factor * get_texture(inst.metallic_roughness_map).SampleGrad(get_sampler(inst.metallic_roughness_map), uv0, uv0_ddx, uv0_ddy).g;
+    float4 metallic_roughness_sample = get_texture(inst.metallic_roughness_map).SampleGrad(get_sampler(inst.metallic_roughness_map), uv0, uv0_ddx, uv0_ddy);
+    float metallic = inst.metallic_factor * metallic_roughness_sample.b;
+    float roughness = inst.roughness_factor * metallic_roughness_sample.g;
     float3 normal_map_value = get_texture(inst.normal_map).SampleGrad(get_sampler(inst.normal_map), uv0, uv0_ddx, uv0_ddy).rgb;
     normal_map_value = normal_map_value * 2.0 - 1.0;
     normal_map_value.xy *= inst.normal_factor;

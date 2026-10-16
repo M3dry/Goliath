@@ -56,8 +56,12 @@ pub const AnimatedCullPC = struct {
 pipeline: base.ComputePipeline,
 animated_pipeline: base.ComputePipeline,
 
-pub fn init(ctx: base.Ctx.Query(&.{ .device, .render_extent })) !Self {
-    const cull_comp = shaders.get(.cull_renderables);
+pub fn init(ctx: base.Ctx.Query(&.{ .device, .subgroup_props, .render_extent })) !Self {
+    // TODO: a more full check using .contains and specifying all the requirements of the shader
+    const waveballot = ctx.view.subgroup_props.supported_operations.ballot_bit;
+
+    const cull_comp = if (waveballot) shaders.get(.cull_renderables_wave) else shaders.get(.cull_renderables_default);
+
     const cull_comp_mod = try base.ShaderModule.init(.from(ctx), cull_comp);
     defer cull_comp_mod.deinit(.from(ctx));
 
@@ -67,7 +71,7 @@ pub fn init(ctx: base.Ctx.Query(&.{ .device, .render_extent })) !Self {
         .push_constant_size = @intCast(base.push_constant.size(CullPC, base.layout.scalar)),
     });
 
-    const anim_comp = shaders.get(.cull_animated_renderables);
+    const anim_comp = if (waveballot) shaders.get(.cull_animated_renderables_wave) else shaders.get(.cull_animated_renderables_default);
     const anim_comp_mod = try base.ShaderModule.init(.from(ctx), anim_comp);
     defer anim_comp_mod.deinit(.from(ctx));
 

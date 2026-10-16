@@ -25,5 +25,5 @@ void compute(uint3 tid : SV_DispatchThreadID) {
 
     uint slot;
     InterlockedAdd(pc.offsets[schema], 1, slot);
-    pc.frag_ids[slot] = tid.x * pc.screen.x + tid.y;
+    pc.frag_ids[slot] = tid.y * pc.screen.x + tid.x;
 }

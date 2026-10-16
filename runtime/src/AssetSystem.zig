@@ -246,39 +246,46 @@ pub fn finalizeAsset(self: *AssetSystem, entry: Entry, dupe_entry_name: bool) !G
         if (gens[gid.slot] != gid.gen) return error.StaleGidReferenced;
     }
 
-    if (dupe_entry_name) {
-        e.name = try self.alloc.dupe(u8, entry.name);
+    // Reserve every reverse-dependency append before publishing this entry.
+    // Count repeated dependencies together because they each need a slot.
+    for (e.deps.gids.items(), 0..) |dep_gid, i| {
+        if (std.mem.indexOfScalar(Gid, e.deps.gids.items()[0..i], dep_gid) != null) continue;
+        var occurrences: usize = 1;
+        for (e.deps.gids.items()[i + 1 ..]) |later_gid| {
+            if (later_gid == dep_gid) occurrences += 1;
+        }
+        try self.entries.items(.rdeps)[dep_gid.slot].ensureUnusedCapacity(self.alloc, occurrences);
     }
+
+    const reusing_slot = self.free_entries.items.len != 0;
+    if (!reusing_slot) try self.entries.ensureUnusedCapacity(self.alloc, 1);
+
+    if (dupe_entry_name) e.name = try self.alloc.dupe(u8, entry.name);
     errdefer if (dupe_entry_name) self.alloc.free(e.name);
 
-    const gid = if (self.free_entries.pop()) |slot| blk: {
+    const gid = if (reusing_slot) blk: {
+        const slot = self.free_entries.pop().?;
         e.generation = gens[slot] + 1;
         self.entries.set(slot, e);
 
         break :blk Gid{ .gen = e.generation, .slot = slot };
     } else blk: {
         e.generation = 0;
-        try self.entries.append(self.alloc, e);
+        self.entries.appendAssumeCapacity(e);
 
         break :blk Gid{
             .gen = e.generation,
             .slot = @intCast(self.entries.len - 1),
         };
     };
-    errdefer if (self.entries.items(.generation)[gid.slot] == gid.gen) {
-        e.deps.necessary.deinit(self.alloc);
-        e.deps.gids.deinit(self.alloc);
-        e.rdeps.deinit(self.alloc);
-        self.entries.set(gid.slot, .none);
-    };
-
     const rdepss = self.entries.items(.rdeps);
     for (e.deps.gids.items()) |dep_gid| {
         const rdeps = &rdepss[dep_gid.slot];
         for (rdeps.items()) |rdep_gid| {
             std.debug.assert(rdep_gid != gid);
         }
-        (try rdeps.addOne(self.alloc)).* = gid;
+
+        rdeps.addOneAssumeCapacity().* = gid;
     }
 
     zprobe.event(.info, "AssetSystem/finalizeAsset", .{
@@ -369,6 +376,8 @@ pub fn removeAsset(self: *AssetSystem, gid: Gid) !void {
     var e = slice.get(gid.slot);
     if (e.isNone()) return; // NOTE: should imply that it's in `free_entries`
 
+    try self.free_entries.ensureUnusedCapacity(self.alloc, 1);
+
     const s = zprobe.span("AssetSystem/removeAsset", .{ .gid_gen = gid.gen, .gid_slot = gid.slot, .kind = @tagName(e.kind), .name = e.name });
     s.enter();
     defer s.exit();
@@ -376,7 +385,7 @@ pub fn removeAsset(self: *AssetSystem, gid: Gid) !void {
     self.ingestAssetCleanup(&e);
 
     slice.set(gid.slot, Entry.none);
-    try self.free_entries.append(self.alloc, gid.slot);
+    self.free_entries.appendAssumeCapacity(gid.slot);
 
     zprobe.event(.info, "completed", .{});
 }
