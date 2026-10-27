@@ -76,5 +76,6 @@ pub inline fn toConstView(x: anytype) ConstView(@TypeOf(x)) {
     const T = @TypeOf(x);
     const CT = ConstView(T);
 
+    // probably technically UB since the layout of CT compared T can differ if it's auto, but i'll be dammened if zig actually gives the two types a different layout
     return @as(*const CT, @ptrCast(&x)).*;
 }

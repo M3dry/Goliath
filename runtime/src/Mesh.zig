@@ -137,7 +137,7 @@ pub fn removeLod(self: *Mesh, alloc: Allocator, index: usize) error{MeshOnGPU}!v
 
 pub const Lod = struct {
     geometry: Geometry,
-    geometry_buffer: ?struct {base.Buffer, base.Transport.Ticket},
+    geometry_buffer: ?struct { base.Buffer, base.Transport.Ticket },
     on_gpu: bool,
 
     draw_count: u32,
@@ -146,22 +146,24 @@ pub const Lod = struct {
     material_instance: u32,
     error_metric: f32,
 
-    pub fn initGeometryBuffer(self: *Lod, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport })) !struct{base.Buffer, base.Transport.Ticket} {
-        const buf = try base.Buffer.init(.from(ctx), .graphics, "Geometry buffer", gpu_geometry_header_size + self.geometry.data.len, .{.transfer_dst_bit = true, .storage_buffer_bit = true}, .gpu_only);
+    pub fn initGeometryBuffer(self: *Lod, ctx: base.Ctx.Query(&.{ .device, .vma_allocator, .graphics_family, .transport_family, .transport })) !struct { base.Buffer, base.Transport.Ticket } {
+        const buf = try base.Buffer.init(.from(ctx), .graphics, "Geometry buffer", gpu_geometry_header_size + self.geometry.data.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
 
         self.geometry.geo.indices_address = buf.address + gpu_geometry_header_size;
 
         const dst_stage: base.vk.PipelineStageFlags2 = .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true };
-        const dst_access: base.vk.AccessFlags2 = .{ .memory_read_bit = true, };
+        const dst_access: base.vk.AccessFlags2 = .{
+            .memory_read_bit = true,
+        };
         const tick1 = try ctx.view.transport.uploadBuffer(false, std.mem.asBytes(&self.geometry.geo), null, null, buf.handle, 0, dst_stage, dst_access, true);
         errdefer ctx.view.transport.unqueue(tick1, false);
 
         const tick2 = try ctx.view.transport.uploadBuffer(false, self.geometry.data, null, null, buf.handle, gpu_geometry_header_size, dst_stage, dst_access, true);
         errdefer ctx.view.transport.unqueue(tick2, false);
 
-        self.geometry_buffer = .{buf, tick2};
+        self.geometry_buffer = .{ buf, tick2 };
 
-        return .{buf, tick2};
+        return .{ buf, tick2 };
     }
 
     /// Returns the total bytes written (GeometryMeta + data).
@@ -229,8 +231,12 @@ pub const gpu_geometry_header_size: usize = 52;
 pub const GPUMeshDesc = struct {
     lod_offset: u32,
     lod_count: u32,
-    aabb_min_x: f32, aabb_min_y: f32, aabb_min_z: f32,
-    aabb_max_x: f32, aabb_max_y: f32, aabb_max_z: f32,
+    aabb_min_x: f32,
+    aabb_min_y: f32,
+    aabb_min_z: f32,
+    aabb_max_x: f32,
+    aabb_max_y: f32,
+    aabb_max_z: f32,
 
     pub fn fromMesh(mesh: *const Mesh) GPUMeshDesc {
         return .{

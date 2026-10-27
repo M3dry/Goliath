@@ -9,165 +9,13 @@ const Gid = AssetSystem.Gid;
 const Skin = @import("Skin.zig");
 const PosePool = @import("PosePool.zig");
 const TemplateScene = @import("TemplateScene.zig");
+const DisjointRanges = base.util.DisjointRanges;
+const Range = base.util.Range;
 
 // TODO: take in as comptime param to the functins that use this one/carry it comptime on the struct (probably better)
 const debug_enabled = build_options.debug_build;
 
 const Scene = @This();
-
-const Range = struct {
-    start: u32,
-    end: u32,
-
-    pub inline fn contains(self: Range, other: Range) bool {
-        return self.in(other.start) and self.inLimit(other.end);
-    }
-
-    /// returns the merged range of `self` and `other`
-    pub inline fn overlap(self: Range, other: Range) ?Range {
-        if (self.inLimit(other.start) or self.inLimit(other.end)) {
-            return .{
-                .start = @min(self.start, other.start),
-                .end = @max(self.end, other.end),
-            };
-        }
-
-        return null;
-    }
-
-    pub inline fn in(self: Range, point: u32) bool {
-        return self.start <= point and self.end > point;
-    }
-
-    pub inline fn inLimit(self: Range, point: u32) bool {
-        return self.start <= point and self.end >= point;
-    }
-};
-
-const DisjointRanges = struct {
-    ranges: std.ArrayList(Range) = .empty,
-
-    pub fn add(self: *DisjointRanges, alloc: Allocator, range: Range) !void {
-        if (range.start >= range.end) return;
-
-        var merged = range;
-        var first: usize = 0;
-        while (first < self.ranges.items.len and self.ranges.items[first].end < merged.start) : (first += 1) {}
-
-        if (first == self.ranges.items.len) {
-            try self.ensureUnusedCapacity(alloc);
-            self.ranges.appendAssumeCapacity(merged);
-            return;
-        }
-        if (merged.end < self.ranges.items[first].start) {
-            try self.ensureUnusedCapacity(alloc);
-            self.ranges.insertAssumeCapacity(first, merged);
-            return;
-        }
-
-        var end = first;
-        while (end < self.ranges.items.len and self.ranges.items[end].start <= merged.end) : (end += 1) {
-            merged.start = @min(merged.start, self.ranges.items[end].start);
-            merged.end = @max(merged.end, self.ranges.items[end].end);
-        }
-
-        // The replacement is never larger than the block it replaces, so it
-        // cannot allocate and shifts the tail at most once.
-        self.ranges.replaceRangeAssumeCapacity(first, end - first, &.{merged});
-    }
-
-    /// A single add or remove can increase the range count by at most one.
-    pub fn ensureUnusedCapacity(self: *DisjointRanges, alloc: Allocator) !void {
-        try self.ranges.ensureUnusedCapacity(alloc, 1);
-    }
-
-    pub fn remove(self: *DisjointRanges, alloc: Allocator, range: Range) !void {
-        if (range.start < range.end) {
-            for (self.ranges.items) |existing| {
-                if (existing.start < range.start and existing.end > range.end) {
-                    try self.ensureUnusedCapacity(alloc);
-                    break;
-                }
-            }
-        }
-        self.removeAssumeCapacity(range);
-    }
-
-    pub fn removeAssumeCapacity(self: *DisjointRanges, range: Range) void {
-        if (range.start >= range.end) return;
-
-        var first: usize = 0;
-        while (first < self.ranges.items.len and self.ranges.items[first].end <= range.start) : (first += 1) {}
-        if (first == self.ranges.items.len or self.ranges.items[first].start >= range.end) return;
-
-        var end = first + 1;
-        while (end < self.ranges.items.len and self.ranges.items[end].start < range.end) : (end += 1) {}
-
-        const first_range = self.ranges.items[first];
-        const last_range = self.ranges.items[end - 1];
-        var replacement: [2]Range = undefined;
-        var replacement_len: usize = 0;
-        if (first_range.start < range.start) {
-            replacement[replacement_len] = .{ .start = first_range.start, .end = range.start };
-            replacement_len += 1;
-        }
-        if (last_range.end > range.end) {
-            replacement[replacement_len] = .{ .start = range.end, .end = last_range.end };
-            replacement_len += 1;
-        }
-
-        self.ranges.replaceRangeAssumeCapacity(first, end - first, replacement[0..replacement_len]);
-    }
-
-    pub fn update(self: *DisjointRanges, alloc: Allocator, from: u32, by: u32, comptime negative: bool) !void {
-        if (by == 0) return;
-
-        const boundary = if (negative) from else from + 1;
-        var first: usize = 0;
-        while (first < self.ranges.items.len and self.ranges.items[first].end <= boundary) : (first += 1) {}
-        if (first == self.ranges.items.len) return;
-
-        if (!negative and self.ranges.items[first].start < boundary) {
-            const crossing = self.ranges.items[first];
-            try self.ranges.ensureUnusedCapacity(alloc, 1);
-            self.ranges.items[first].end = boundary;
-            self.ranges.insertAssumeCapacity(first + 1, .{
-                .start = boundary + by,
-                .end = crossing.end + by,
-            });
-            first += 2;
-        }
-
-        // On deletion, the removed interval must already have been subtracted.
-        std.debug.assert(!negative or self.ranges.items[first].start >= boundary);
-
-        for (self.ranges.items[first..]) |*range| {
-            if (negative) {
-                range.start -= by;
-                range.end -= by;
-            } else {
-                range.start += by;
-                range.end += by;
-            }
-        }
-
-        // Closing a deletion gap can make the ranges on either side touch.
-        if (negative and first > 0 and first < self.ranges.items.len and
-            self.ranges.items[first - 1].end >= self.ranges.items[first].start)
-        {
-            self.ranges.items[first - 1].end = @max(
-                self.ranges.items[first - 1].end,
-                self.ranges.items[first].end,
-            );
-            _ = self.ranges.orderedRemove(first);
-        }
-    }
-
-    pub fn deinit(self: *DisjointRanges, alloc: Allocator) void {
-        self.ranges.deinit(alloc);
-        self.ranges = .empty;
-    }
-};
 
 pub const ExposedId = Exposed.Id;
 const Exposed = struct {
@@ -308,32 +156,17 @@ const AnimatedInstances = struct {
     joints: std.ArrayList(Mat) = .empty,
     free_joints: DisjointRanges = .{},
 
+    dirty: bool = false,
+
     pub fn addInstance(self: *AnimatedInstances, alloc: Allocator, skins: []const base.util.ConstView(Skin), pose_id: PosePool.PoseId, joint_count: u32) !Id {
         const reuse_instance = self.free_instances.items.len != 0;
-        var found_range: ?Range = null;
-        for (self.free_joints.ranges.items) |free_range| {
-            if (free_range.end - free_range.start >= joint_count) found_range = free_range;
-        }
 
-        // Prepare all storage before consuming either reusable slot/range.
         if (!reuse_instance) try self.instances.ensureUnusedCapacity(alloc, 1);
+        try self.joints.ensureUnusedCapacity(alloc, joint_count);
 
-        if (found_range) |_| {
-            try self.free_joints.ensureUnusedCapacity(alloc);
-        } else {
-            try self.joints.ensureUnusedCapacity(alloc, joint_count);
-        }
+        const slot: u32 = if (reuse_instance) self.free_instances.pop().? else @intCast(self.instances.addOneAssumeCapacity());
 
-        const slot: u32 = if (reuse_instance)
-            self.free_instances.pop().?
-        else
-            @intCast(self.instances.addOneAssumeCapacity());
-
-        const joint_range: Range = if (found_range) |found| blk: {
-            const range: Range = .{ .start = found.start, .end = found.start + joint_count };
-            self.free_joints.removeAssumeCapacity(range);
-            break :blk range;
-        } else blk: {
+        const joint_range: Range = if (self.free_joints.takeFirstFit(joint_count)) |range| range else blk: {
             const start = self.joints.items.len;
             _ = self.joints.addManyAsSliceAssumeCapacity(joint_count);
             break :blk .{ .start = @intCast(start), .end = @intCast(self.joints.items.len) };
@@ -346,12 +179,13 @@ const AnimatedInstances = struct {
             .revision = 0,
         });
 
+        self.dirty = true;
         return .{
             .slot = slot,
         };
     }
 
-    pub fn removeInstance(self: *AnimatedInstances, alloc: Allocator, id: Id) !void {
+    pub fn removeInstance(self: *AnimatedInstances, alloc: Allocator, id: Id) !PosePool.PoseId {
         const inst = self.instances.get(id.slot);
 
         try self.free_instances.ensureUnusedCapacity(alloc, 1);
@@ -360,6 +194,9 @@ const AnimatedInstances = struct {
 
         self.instances.set(id.slot, .{});
         self.free_instances.appendAssumeCapacity(id.slot);
+
+        self.dirty = true;
+        return inst.pose;
     }
 
     pub fn isInvalid(self: *AnimatedInstances, id: Id) bool {
@@ -386,24 +223,34 @@ const DrawableMeshes = struct {
         sparse: u32,
     };
 
+    pub const StaticDrawInstance = struct {
+        mesh_desc_ix: u32,
+        world_transform: [4][4]f32,
+    };
+
+    pub const SkinnedDrawInstance = struct {
+        mesh_desc_ix: u32,
+        joint_offset: u32,
+        world_transform: [4][4]f32,
+    };
+
     const Kind = enum { static, skinned };
     const SparseEntry = struct {
         dense: u32,
         kind: Kind,
     };
 
-    static_drawlist: std.ArrayList(struct {
-        mesh_desc_ix: u32,
-        world_transform: [4][4]f32,
+    static_drawlist: std.MultiArrayList(struct {
+        draw: StaticDrawInstance,
         sparse_id: u32,
     }) = .empty,
+    static_dirty: bool = false,
 
-    skinned_drawlist: std.ArrayList(struct {
-        mesh_desc_ix: u32,
-        joint_offset: u32,
-        world_transform: [4][4]f32,
+    skinned_drawlist: std.MultiArrayList(struct {
+        draw: SkinnedDrawInstance,
         sparse_id: u32,
     }) = .empty,
+    skinned_dirty: bool = false,
 
     // Each live Id points to an entry in one of the two dense draw lists.
     sparse: std.ArrayList(SparseEntry) = .empty,
@@ -413,12 +260,14 @@ const DrawableMeshes = struct {
         try self.static_drawlist.ensureUnusedCapacity(alloc, 1);
         if (reusable == null) try self.sparse.ensureUnusedCapacity(alloc, 1);
 
-        const dense: u32 = @intCast(self.static_drawlist.items.len);
+        const dense: u32 = @intCast(self.static_drawlist.len);
         const sparse_id: u32 = reusable orelse @intCast(self.sparse.items.len);
 
         self.static_drawlist.appendAssumeCapacity(.{
-            .mesh_desc_ix = mesh_dense,
-            .world_transform = @bitCast(world_transform),
+            .draw = .{
+                .mesh_desc_ix = mesh_dense,
+                .world_transform = @bitCast(world_transform),
+            },
             .sparse_id = sparse_id,
         });
 
@@ -427,6 +276,8 @@ const DrawableMeshes = struct {
         } else {
             self.sparse.appendAssumeCapacity(.{ .dense = dense, .kind = .static });
         }
+
+        self.static_dirty = true;
         return .{ .sparse = sparse_id };
     }
 
@@ -435,12 +286,14 @@ const DrawableMeshes = struct {
         try self.skinned_drawlist.ensureUnusedCapacity(alloc, 1);
         if (reusable == null) try self.sparse.ensureUnusedCapacity(alloc, 1);
 
-        const dense: u32 = @intCast(self.skinned_drawlist.items.len);
+        const dense: u32 = @intCast(self.skinned_drawlist.len);
         const sparse_id: u32 = reusable orelse @intCast(self.sparse.items.len);
         self.skinned_drawlist.appendAssumeCapacity(.{
-            .mesh_desc_ix = mesh_dense,
-            .joint_offset = joint_offset,
-            .world_transform = @bitCast(world_transform),
+            .draw = .{
+                .mesh_desc_ix = mesh_dense,
+                .joint_offset = joint_offset,
+                .world_transform = @bitCast(world_transform),
+            },
             .sparse_id = sparse_id,
         });
 
@@ -449,6 +302,8 @@ const DrawableMeshes = struct {
         } else {
             self.sparse.appendAssumeCapacity(.{ .dense = dense, .kind = .skinned });
         }
+
+        self.skinned_dirty = true;
         return .{ .sparse = sparse_id };
     }
 
@@ -466,8 +321,14 @@ const DrawableMeshes = struct {
         if (entry.dense == std.math.maxInt(u32)) return;
 
         switch (entry.kind) {
-            .static => self.static_drawlist.items[entry.dense].world_transform = @bitCast(world_transform),
-            .skinned => self.skinned_drawlist.items[entry.dense].world_transform = @bitCast(world_transform),
+            .static => {
+                self.static_dirty = true;
+                self.static_drawlist.slice().items(.draw)[entry.dense].world_transform = @bitCast(world_transform);
+            },
+            .skinned => {
+                self.skinned_dirty = true;
+                self.skinned_drawlist.slice().items(.draw)[entry.dense].world_transform = @bitCast(world_transform);
+            },
         }
     }
 
@@ -479,20 +340,26 @@ const DrawableMeshes = struct {
 
         switch (entry.kind) {
             .static => {
-                const last: u32 = @intCast(self.static_drawlist.items.len - 1);
-                const moved_sparse_id = self.static_drawlist.items[last].sparse_id;
+                const last: u32 = @intCast(self.static_drawlist.len - 1);
+                const moved_sparse_id = self.static_drawlist.slice().items(.sparse_id)[last];
+
                 _ = self.static_drawlist.swapRemove(entry.dense);
                 if (entry.dense != last) {
                     self.sparse.items[moved_sparse_id].dense = entry.dense;
                 }
+
+                self.static_dirty = true;
             },
             .skinned => {
-                const last: u32 = @intCast(self.skinned_drawlist.items.len - 1);
-                const moved_sparse_id = self.skinned_drawlist.items[last].sparse_id;
+                const last: u32 = @intCast(self.skinned_drawlist.len - 1);
+                const moved_sparse_id = self.skinned_drawlist.slice().items(.sparse_id)[last];
+
                 _ = self.skinned_drawlist.swapRemove(entry.dense);
                 if (entry.dense != last) {
                     self.sparse.items[moved_sparse_id].dense = entry.dense;
                 }
+
+                self.skinned_dirty = true;
             },
         }
         self.sparse.items[id.sparse].dense = std.math.maxInt(u32);
@@ -506,6 +373,69 @@ const DrawableMeshes = struct {
         self.static_drawlist = .empty;
         self.skinned_drawlist = .empty;
         self.sparse = .empty;
+    }
+};
+
+pub const GPUBuffers = struct {
+    joints: [2]base.Buffer = .{ .empty, .empty },
+    staging_joints_ix: u32 = 0,
+    staging_joints_ticket: base.Transport.GroupTicket = .none,
+
+    static_drawlist: [2]base.Buffer = .{ .empty, .empty },
+    staging_static_drawlist_ix: u32 = 0,
+    staging_static_drawlist_ticket: base.Transport.GroupTicket = .none,
+
+    skinned_drawlist: [2]base.Buffer = .{ .empty, .empty },
+    staging_skinned_drawlist_ix: u32 = 0,
+    staging_skinned_drawlist_ticket: base.Transport.GroupTicket = .none,
+
+    pub fn updateJoints(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), joints: []Mat) !void {
+        try GPUBuffers.genericUpdate(Mat, .from(ctx), .{
+            .vertex_shader_bit = true,
+        }, &self.joints, &self.staging_joints_ix, &self.staging_joints_ticket, joints, "joints");
+    }
+
+    pub fn updateStaticDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []DrawableMeshes.StaticDrawInstance) !void {
+        try GPUBuffers.genericUpdate(DrawableMeshes.StaticDrawInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.static_drawlist, &self.staging_static_drawlist_ix, &self.staging_static_drawlist_ticket, drawlist, "static_drawlist");
+    }
+
+    pub fn updateSkinnedDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []DrawableMeshes.SkinnedDrawInstance) !void {
+        try GPUBuffers.genericUpdate(DrawableMeshes.SkinnedDrawInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.skinned_drawlist, &self.staging_skinned_drawlist_ix, &self.staging_skinned_drawlist_ticket, drawlist, "skinned_drawlist");
+    }
+
+    fn genericUpdate(comptime T: type, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), pipeline_stages: base.vk.PipelineStageFlags2, buffers: *[2]base.Buffer, staging_ix: *u32, ticket: *base.Transport.GroupTicket, data: []T, comptime buf_name: [:0]const u8) !void {
+        if (try ctx.view.transport.isGroupReady(ticket.*)) {
+            staging_ix.* = (staging_ix.* + 1) % 2;
+        }
+
+        const staging_buf = &buffers[staging_ix.*];
+        var first_use = false;
+        if (staging_buf.size < data.len * @sizeOf(T)) {
+            staging_buf.deinit(.from(ctx));
+
+            staging_buf.* = try .init(.from(ctx), .graphics, buf_name, data.len * @sizeOf(T), .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
+            first_use = true;
+        }
+
+        if (std.meta.eql(staging_buf.*, .empty)) return;
+
+        var gu = try ctx.view.transport.beginGroup();
+        errdefer gu.cancel(true);
+        ticket.* = try gu.uploadBufferStagedFinal(false, std.mem.sliceAsBytes(data), staging_buf.*.handle, 0, pipeline_stages, .{ .shader_read_bit = true }, first_use);
+        return;
+    }
+
+    pub fn deinit(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue })) void {
+        ctx.view.transport.unqueueGroup(self.staging_joints_ticket, true);
+        for (0..self.joints.len) |i| self.joints[i].deinit(.from(ctx));
+
+        ctx.view.transport.unqueueGroup(self.staging_static_drawlist_ticket, true);
+        for (0..self.static_drawlist.len) |i| self.static_drawlist[i].deinit(.from(ctx));
+
+        ctx.view.transport.unqueueGroup(self.staging_skinned_drawlist_ticket, true);
+        for (0..self.skinned_drawlist.len) |i| self.skinned_drawlist[i].deinit(.from(ctx));
+
+        self.* = .{};
     }
 };
 
@@ -571,7 +501,6 @@ nodes: std.MultiArrayList(struct {
 dirty_transforms: DisjointRanges = .{},
 
 exposed: Exposed = .{},
-
 attachments: Attachments = .{},
 
 pub fn initRoot(self: *Scene, alloc: Allocator) !Exposed.Id {
@@ -645,6 +574,23 @@ pub fn rebuildDirtyTransforms(self: *Scene) void {
             };
             self.drawable_meshes.updateTransform(drawable_id, world_transforms[ix]);
         }
+    }
+}
+
+pub fn collectIntoGPUBuffers(self: *Scene, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), gpu_buffers: *GPUBuffers) !void {
+    if (self.animated_instances.dirty) {
+        self.animated_instances.dirty = false;
+        try gpu_buffers.updateJoints(.from(ctx), self.animated_instances.joints.items);
+    }
+
+    if (self.drawable_meshes.static_dirty) {
+        self.drawable_meshes.static_dirty = false;
+        try gpu_buffers.updateStaticDrawlist(.from(ctx), self.drawable_meshes.static_drawlist.items(.draw));
+    }
+
+    if (self.drawable_meshes.skinned_dirty) {
+        base.zprobe.event(.debug, "collecting skinned drawlist", .{});
+        try gpu_buffers.updateSkinnedDrawlist(.from(ctx), self.drawable_meshes.skinned_drawlist.items(.draw));
     }
 }
 
@@ -761,6 +707,8 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                                 break :blk p;
                             }
 
+                            if (build_node.expose.pose == null) break :blk null;
+
                             if (self.pose_pool.pools.items.len <= s.dense or self.pose_pool.pools.items[s.dense].isUninitialized()) {
                                 const skeleton_data = as.skeleton_reg.getSkeleton(s.dense);
                                 try self.pose_pool.newSkeletonPool(
@@ -785,6 +733,7 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                                     var joint_count: u32 = 0;
                                     for (skeleton.?.skins) |s| joint_count += @intCast(s.inverse_bind_matrices.len);
 
+                                    try self.pose_pool.acquirePose(p);
                                     const id = try self.animated_instances.addInstance(alloc, skeleton.?.skins, p, joint_count);
                                     joint_offset_start = self.animated_instances.instances.items(.joint_range)[id.slot].start;
                                     break :blk id;
@@ -804,9 +753,9 @@ pub fn addTemplateScene(self: *Scene, target_node: Exposed.Id, ts: *TemplateScen
                         for (meshes, transforms, skins, mesh_gids) |mesh_dense, transform, skin, mesh_gid| {
                             if (skin != std.math.maxInt(u32) and skeleton == null) return error.SkinWithoutSkeleton;
 
-                            const joint_offset: u32, const drawable_id: DrawableMeshes.Id = if (skeleton) |s| blk: {
+                            const joint_offset: u32, const drawable_id: DrawableMeshes.Id = if (pose) |_| blk: {
                                 var sum: u32 = joint_offset_start;
-                                for (0..skin) |s_ix| sum += @intCast(s.skins[s_ix].inverse_bind_matrices.len);
+                                for (0..skin) |s_ix| sum += @intCast(skeleton.?.skins[s_ix].inverse_bind_matrices.len);
 
                                 break :blk .{ sum, try self.drawable_meshes.addSkinned(alloc, mesh_dense, sum, base.zmath.identity()) };
                             } else .{ std.math.maxInt(u32), try self.drawable_meshes.addStatic(alloc, mesh_dense, base.zmath.identity()) };
@@ -960,23 +909,53 @@ pub fn addTree(self: *Scene, alloc: Allocator, tree: []const Node, target_node: 
     }
 }
 
-pub fn removeTree(self: *Scene, alloc: Allocator, target_node: Exposed.Id) !void {
+pub fn removeTree(self: *Scene, alloc: Allocator, cmd_buf: *AssetSystem.CommandBuffer, target_node: Exposed.Id) !void {
     const target_node_id = self.exposed.getNodeId(target_node) orelse return error.TargetNotExposed;
     const node_items = self.nodes.items(.node);
     const world_transforms = self.nodes.items(.world_transform);
     if (node_items[target_node_id].isRootNode()) return error.CannotRemoveRoot;
-    const target_subtree_count = node_items[target_node_id].subtree_size;
 
-    const parent_id = node_items[target_node_id].parent;
+    // A generated model mesh is owned by its model anchor. Removing only that
+    // mesh removes its descendants, while preserving the mesh and its asset.
+    const preserve_target = switch (node_items[target_node_id].payload) {
+        .model_mesh => true,
+        else => false,
+    };
+    const range_start = target_node_id + @intFromBool(preserve_target);
+    const removed = if (preserve_target)
+        node_items[target_node_id].subtree_size
+    else
+        1 + node_items[target_node_id].subtree_size;
+    if (removed == 0) return;
+    const removed_end = range_start + removed;
 
-    const removed = 1 + target_subtree_count;
-    const removed_end = target_node_id + removed;
+    // Release resources while the node records are still available. Model
+    // mesh gids are owned by their anchor and are intentionally not released.
+    for (node_items[range_start..removed_end]) |node| {
+        switch (node.payload) {
+            .mesh => |mesh| {
+                self.drawable_meshes.remove(mesh.drawable_id);
+                try cmd_buf.release(mesh.gid);
+            },
+            .model_mesh => |mesh| self.drawable_meshes.remove(mesh.drawable_id),
+            .model_anchor => |anchor| {
+                if (anchor.animation) |animation| {
+                    const pose = try self.animated_instances.removeInstance(alloc, animation);
+                    try self.pose_pool.releasePose(alloc, pose);
+                }
+                try cmd_buf.release(anchor.model_gid);
+            },
+            .nothing => {},
+        }
+    }
 
-    try self.exposed.removeNodeRange(alloc, .{ .start = target_node_id, .end = removed_end });
-    @memmove(node_items[target_node_id .. self.nodes.len - removed], node_items[target_node_id + removed ..]);
-    @memmove(world_transforms[target_node_id .. self.nodes.len - removed], world_transforms[target_node_id + removed ..]);
+    const parent_id = if (preserve_target) target_node_id else node_items[target_node_id].parent;
+
+    try self.exposed.removeNodeRange(alloc, .{ .start = range_start, .end = removed_end });
+    @memmove(node_items[range_start .. self.nodes.len - removed], node_items[removed_end..]);
+    @memmove(world_transforms[range_start .. self.nodes.len - removed], world_transforms[removed_end..]);
     if (debug_enabled) {
-        @memmove(self.nodes_debug.items[target_node_id .. self.nodes.len - removed], self.nodes_debug.items[target_node_id + removed ..]);
+        @memmove(self.nodes_debug.items[range_start .. self.nodes.len - removed], self.nodes_debug.items[removed_end..]);
     }
 
     const new_size = self.nodes.len - removed;
@@ -985,7 +964,11 @@ pub fn removeTree(self: *Scene, alloc: Allocator, target_node: Exposed.Id) !void
 
     // propagate up the subtree size change
     var curr_parent = parent_id;
-    node_items[parent_id].child_count -= 1;
+    if (preserve_target) {
+        node_items[parent_id].child_count = 0;
+    } else {
+        node_items[parent_id].child_count -= 1;
+    }
     node_items[parent_id].subtree_size -= removed;
     while (!node_items[curr_parent].isRootNode()) {
         curr_parent = node_items[curr_parent].parent;
@@ -993,7 +976,7 @@ pub fn removeTree(self: *Scene, alloc: Allocator, target_node: Exposed.Id) !void
         node_items[curr_parent].subtree_size -= removed;
     }
 
-    for (self.nodes.items(.node)[target_node_id..]) |*node| {
+    for (self.nodes.items(.node)[range_start..]) |*node| {
         node.self -= removed;
         if (node.parent >= removed_end) node.parent -= removed;
     }
@@ -1001,8 +984,8 @@ pub fn removeTree(self: *Scene, alloc: Allocator, target_node: Exposed.Id) !void
     self.exposed.incrNodeIds(removed_end - 1, -@as(i32, @intCast(removed)));
 
     try self.dirty_transforms.remove(alloc, .{
-        .start = target_node_id,
-        .end = target_node_id + removed,
+        .start = range_start,
+        .end = removed_end,
     });
 
     try self.dirty_transforms.update(alloc, removed_end, removed, true);
@@ -1177,6 +1160,9 @@ test "tree insertion and removal preserve preorder indices and exposed handles" 
     const alloc = std.testing.allocator;
     var scene: Scene = .{};
     defer scene.deinit(alloc);
+    const assets: AssetSystem = undefined; // TODO: maybe implement an actual dummy AssetSystem for testing
+    var cmd_buf = AssetSystem.CommandBuffer.init(&assets, alloc);
+    defer cmd_buf.deinit();
 
     // Start with a root and one existing direct child.
     try appendTestNode(&scene, alloc, testNode(0, 0, 1, 1));
@@ -1199,7 +1185,7 @@ test "tree insertion and removal preserve preorder indices and exposed handles" 
     try std.testing.expectEqual(@as(u32, 0), scene.nodes.items(.node)[3].parent);
     try std.testing.expectEqual(@as(u32, 3), scene.exposed.getNodeId(existing_child).?);
 
-    try scene.removeTree(alloc, inserted_root);
+    try scene.removeTree(alloc, &cmd_buf, inserted_root);
 
     try std.testing.expectEqual(@as(usize, 2), scene.nodes.len);
     try std.testing.expectEqual(@as(u32, 1), scene.nodes.items(.node)[0].child_count);
@@ -1215,12 +1201,15 @@ test "scene root cannot be removed as a subtree" {
     const alloc = std.testing.allocator;
     var scene: Scene = .{};
     defer scene.deinit(alloc);
+    const assets: AssetSystem = undefined;
+    var cmd_buf = AssetSystem.CommandBuffer.init(&assets, alloc);
+    defer cmd_buf.deinit();
 
     try appendTestNode(&scene, alloc, testNode(0, 0, 0, 0));
     try scene.nodes_debug.append(alloc, test_node_debug);
     const scene_root = try scene.exposed.expose(alloc, 0);
 
-    try std.testing.expectError(error.CannotRemoveRoot, scene.removeTree(alloc, scene_root));
+    try std.testing.expectError(error.CannotRemoveRoot, scene.removeTree(alloc, &cmd_buf, scene_root));
 }
 
 test "template scene insertion builds nodes and resolves exposed groups" {

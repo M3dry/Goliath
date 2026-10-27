@@ -2,7 +2,6 @@ pub const base = @import("base");
 pub const zmesh = @import("zmesh");
 
 pub const Mesh = @import("Mesh.zig");
-pub const MeshHandler = @import("MeshHandler.zig");
 pub const MeshIO = @import("MeshIO.zig");
 pub const Visbuffer = @import("Visbuffer.zig");
 pub const Skeleton = @import("Skeleton.zig");
@@ -14,6 +13,7 @@ pub const MaterialHandler = @import("MaterialHandler.zig");
 pub const Culling = @import("Culling.zig");
 pub const AssetSystem = @import("AssetSystem.zig");
 pub const Scene = @import("Scene.zig");
+pub const TemplateScene = @import("TemplateScene.zig");
 
 test  {
     @import("std").testing.refAllDecls(@This());

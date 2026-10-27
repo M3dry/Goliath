@@ -145,7 +145,7 @@ pub const Node = struct {
         model: struct {
             gid: AssetSystem.Gid,
             /// user needs to ensure that the PoseId belongs to the correct PosePool (each runtime scene has a separate pool), and to the correct skeleton
-            pose_overwrite: ?PosePool.PoseId,
+            pose_overwrite: ?PosePool.PoseId = null,
         },
         // later also a scene gid
     };
@@ -236,8 +236,8 @@ fn acquireAll(self: *TemplateScene, cmd_buf: *AssetSystem.CommandBuffer, root: u
     while (try it.next(cmd_buf.alloc)) |node_ix| {
         switch (self.nodes.items[node_ix].payload) {
             .nothing => {},
-            .mesh => |m| try cmd_buf.request(m.gid),
-            .model => |gid| try cmd_buf.request(gid),
+            .mesh => |gid| try cmd_buf.request(gid),
+            .model => |m| try cmd_buf.request(m.gid),
         }
     }
 }

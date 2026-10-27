@@ -11,7 +11,7 @@ const Allocator = std.mem.Allocator;
 const GeometryRegistry = @This();
 
 geometries: std.MultiArrayList(struct {
-    tickets: [2]base.Transport.Ticket = .{ .none, .none },
+    ticket: base.Transport.GroupTicket = .none,
     buffer: base.Buffer = .empty,
 }) = .empty,
 free: std.ArrayList(u32) = .empty,
@@ -65,9 +65,8 @@ pub fn init() GeometryRegistry {
 
 pub fn deinit(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport }), alloc: Allocator) void {
     const slice = self.geometries.slice();
-    for (slice.items(.buffer), slice.items(.tickets)) |*buf, tickets| {
-        ctx.view.transport.unqueue(tickets[0], false);
-        ctx.view.transport.unqueue(tickets[1], false);
+    for (slice.items(.buffer), slice.items(.ticket)) |*buf, ticket| {
+        ctx.view.transport.unqueueGroup(ticket, false);
 
         buf.deinit(.from(ctx));
     }
@@ -105,21 +104,20 @@ pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_al
     errdefer loader.unload(io, cold);
 
     var free_fn = try loader.make_transport_unload(io, alloc, cold);
-    errdefer free_fn.deinit();
+    var free_fn_errdefer = true;
+    errdefer if (free_fn_errdefer) free_fn.deinit();
 
     var reader = std.Io.Reader.fixed(data);
     const header = try reader.takeStruct(GeometryHeaderBlob, .little);
     const geo_data = data[@sizeOf(GeometryHeaderBlob)..];
 
     const buffer: *base.Buffer = &slice.items(.buffer)[id];
-    const tickets: *[2]base.Transport.Ticket = &slice.items(.tickets)[id];
+    const ticket = &slice.items(.ticket)[id];
 
     buffer.* = try .init(.from(ctx), .graphics, "Geometry buffer", Mesh.gpu_geometry_header_size + geo_data.len, .{ .transfer_dst_bit = true, .storage_buffer_bit = true }, .gpu_only);
     errdefer buffer.deinitNow(.from(ctx));
 
-    const gpu_header = try alloc.create(struct { Mesh.GPUGeometry, Allocator });
-    errdefer alloc.destroy(gpu_header);
-    gpu_header.@"0" = .{
+    const gpu_header: Mesh.GPUGeometry = .{
         .indices_address = buffer.address + Mesh.gpu_geometry_header_size,
         .stride = header.stride,
         .position_offset = header.position_offset,
@@ -133,22 +131,14 @@ pub fn acquire(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_al
         .joints0_offset = header.joints0_offset,
         .weights0_offset = header.weights0_offset,
     };
-    gpu_header.@"1" = alloc;
 
-    const transport: *base.Transport = ctx.view.transport;
-    tickets[0] = try transport.uploadBuffer(false, std.mem.asBytes(&gpu_header.@"0")[0..Mesh.gpu_geometry_header_size], destroy_gpu_header, gpu_header, buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
-    errdefer transport.unqueue(tickets[0], true);
+    const transport: *base.Transport.Interface = ctx.view.transport;
+    var group = try transport.beginGroup();
+    errdefer group.cancel(true);
+    free_fn_errdefer = false;
 
-    tickets[1] = try transport.uploadBuffer(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, Mesh.gpu_geometry_header_size, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
-    errdefer transport.unqueue(tickets[1], false);
-}
-
-fn destroy_gpu_header(ctx: ?*anyopaque, ptr: *anyopaque) void {
-    const c: *struct { Mesh.GPUGeometry, Allocator } = @ptrCast(@alignCast(ctx.?));
-    std.debug.assert(@intFromPtr(ptr) == @intFromPtr(c));
-
-    const alloc = c.@"1";
-    alloc.destroy(c);
+    try group.uploadBufferStaged(false, std.mem.asBytes(&gpu_header)[0..Mesh.gpu_geometry_header_size], buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
+    ticket.* = try group.uploadBufferFinal(false, geo_data, free_fn.free_fn, free_fn.ctx, buffer.handle, Mesh.gpu_geometry_header_size, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, true);
 }
 
 pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue }), alloc: Allocator, id: u32) !void {
@@ -158,10 +148,9 @@ pub fn release(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{ .transport, .des
 
     var slice = self.geometries.slice();
 
-    const tickets = &slice.items(.tickets)[id];
-    ctx.view.transport.unqueue(tickets[0], true);
-    ctx.view.transport.unqueue(tickets[1], true);
-    tickets.* = .{ .none, .none };
+    const ticket = &slice.items(.ticket)[id];
+    ctx.view.transport.unqueueGroup(ticket.*, true);
+    ticket.* = .none;
 
     var buffer = &slice.items(.buffer)[id];
     buffer.deinit(.from(ctx));
@@ -208,9 +197,9 @@ pub fn ingest(io: std.Io, location: types.IngestLocation, geo: IngestGeometry) t
 
 pub inline fn isReady(self: *GeometryRegistry, ctx: base.Ctx.Query(&.{.transport}), id: u32) !bool {
     const slice = self.geometries.slice();
-    const tickets = slice.items(.tickets)[id];
+    const ticket = slice.items(.ticket)[id];
 
-    return try ctx.view.transport.isReady(tickets[0]) and try ctx.view.transport.isReady(tickets[1]);
+    return try ctx.view.transport.isGroupReady(ticket);
 }
 
 pub inline fn getAddress(self: *GeometryRegistry, id: u32) u64 {

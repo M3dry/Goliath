@@ -150,7 +150,7 @@ fn createDefaultImage(self: *TextureRegistry, ctx: base.Ctx.Query(&.{ .device, .
 
     // Startup, one-time: block until the pixel lands.
     while (!try ctx.view.transport.isReady(upload_tick)) {
-        try ctx.view.transport.drain(.from(ctx));
+        try ctx.view.transport.drain();
         std.Thread.yield() catch {};
     }
 

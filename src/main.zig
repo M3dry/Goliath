@@ -15,7 +15,7 @@ const Culling = runtime.Culling;
 
 fn waitForTick(ctx: base.Ctx.Query(&.{ .transport, .device, .graphics_queue }), tick: base.Transport.Ticket) !void {
     while (!try ctx.view.transport.isReady(tick)) {
-        try ctx.view.transport.drain(.from(ctx));
+        try ctx.view.transport.drain();
         std.Thread.yield() catch {};
     }
 }
@@ -320,6 +320,25 @@ pub fn main(init: std.process.Init) !void {
     const material_gid = asset_system.findEntry(.material_instance, "paladin_material") orelse return error.AssetEntryNotFound;
     const paladin_gid = asset_system.findEntry(.model, "paladin") orelse return error.AssetEntryNotFound;
 
+    var ts_nalloc = std.heap.ArenaAllocator.init(gpa);
+    defer ts_nalloc.deinit();
+    const ts_nalloc_alloc = ts_nalloc.allocator();
+
+    var ts = runtime.TemplateScene.init(gpa, ts_nalloc_alloc);
+    defer ts.deinit();
+
+    const n1 = try ts.addNode();
+    n1.setPayload(.{ .model = .{
+        .gid = paladin_gid,
+    } });
+    n1.setScale(.{ 0.05, 0.05, 0.05 });
+
+    const n2 = try ts.addNode();
+    n2.setPayload(.{ .model = .{
+        .gid = paladin_gid,
+    } });
+    n2.setTranslation(.{ 5, 5, 5 });
+
     var asset_cmd_buf = asset_system.newCommandBuffer(gpa);
     defer asset_cmd_buf.deinit();
     try asset_cmd_buf.request(material_gid);
@@ -327,7 +346,24 @@ pub fn main(init: std.process.Init) !void {
     try asset_cmd_buf.request(body_geo_gid);
     try asset_cmd_buf.request(helmet_geo_gid);
     try asset_cmd_buf.request(paladin_gid);
+
+    try n1.acquireAll(&asset_cmd_buf);
+
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
+
+    var n1_pb = try n1.prepareBuild(gpa, &asset_system);
+    defer n1_pb.deinit(gpa);
+
+    var n1_scene: runtime.Scene = .{};
+    defer n1_scene.deinit(gpa);
+
+    const n1_scene_root = try n1_scene.initRoot(gpa);
+    try n1_scene.addTemplateScene(n1_scene_root, &n1_pb, &asset_system, gpa, ts_nalloc_alloc);
+
+    var scene_gpu: runtime.Scene.GPUBuffers = .{};
+    defer scene_gpu.deinit(.from(&ctx));
+
+    try n1_scene.collectIntoGPUBuffers(.from(&ctx), &scene_gpu);
 
     const pbr_schema_id = asset_system.denseIndex(pbr_schema_gid);
 
@@ -358,14 +394,14 @@ pub fn main(init: std.process.Init) !void {
     // non-empty registry buffers; geometry patches may land a few ticks later,
     // lods with address 0 just don't draw until then
     while (asset_system.mesh_reg.upload_generation == 0 or asset_system.pending_patches.items.len != 0) {
-        try ctx.transport.drain(.from(&ctx));
+        try ctx.transport.interface().drain();
         try asset_system.tick(.from(&ctx));
         std.Thread.yield() catch {};
     }
 
     // // Let the sampled texture bindings land in the pool before the first frame.
     // while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
-    //     try ctx.transport.drain(.from(&ctx));
+    //     try ctx.transport.drain();
     //     try asset_system.texture_reg.tick(.from(&ctx));
     //     std.Thread.yield() catch {};
     // }
@@ -533,7 +569,7 @@ pub fn main(init: std.process.Init) !void {
             }
             zgui.end();
 
-            try ctx.transport.drain(.from(&ctx));
+            try ctx.transport.interface().drain();
             try asset_system.tick(.from(&ctx));
 
             const frame = ctx.frames[ctx.current_frame];

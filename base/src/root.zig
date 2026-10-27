@@ -43,7 +43,9 @@ pub const Ctx = struct {
     pub const depth_texture: vk.Format = .d32_sfloat;
 
     window: *zglfw.Window,
+    io: std.Io,
     graphics: GraphicsCtx,
+    graphics_submit_lock: *std.Io.Mutex,
     transport: Transport,
     frames: []Frame,
     swapchain: Swapchain,
@@ -79,10 +81,12 @@ pub const Ctx = struct {
         render_format: vk.Format,
     };
 
-    // TODO: investiage how to fix this, issue is that currently `Transport`'s mutexes can't change memory location
-    /// Ctx can't move in memory location
     pub fn init(ctx: *Ctx, alloc: Allocator, io: std.Io, name: [:0]const u8, window_opts: Opts) !void {
         ctx.current_frame = 0;
+        ctx.io = io;
+        ctx.graphics_submit_lock = try alloc.create(std.Io.Mutex);
+        ctx.graphics_submit_lock.* = .init;
+        errdefer alloc.destroy(ctx.graphics_submit_lock);
 
         try zglfw.init();
 
@@ -110,10 +114,15 @@ pub const Ctx = struct {
             .height = @intCast(height),
         };
 
-       ctx.graphics = try GraphicsCtx.init(alloc, ctx.window, window_opts.name);
+        ctx.graphics = try GraphicsCtx.init(alloc, ctx.window, window_opts.name);
 
-        try ctx.transport.init(.from(ctx), alloc, io);
-        errdefer ctx.transport.deinit(.from(ctx));
+        ctx.transport = try Transport.init(
+            alloc,
+            alloc, // TODO: give the user the option to choose the staging allocator
+            if (ctx.graphics.has_dedicated_transport) .dedicated else .non_dedicated,
+            ctx,
+        );
+        errdefer ctx.transport.deinit();
 
         ctx.frames = try alloc.alloc(Frame, frames_in_flight);
         errdefer alloc.free(ctx.frames);
@@ -165,7 +174,8 @@ pub const Ctx = struct {
     }
 
     pub fn deinit(self: *Ctx, alloc: Allocator) void {
-        self.transport.deinit(.from(self));
+        self.transport.deinit();
+        alloc.destroy(self.graphics_submit_lock);
 
         for (&self.descriptor_pools) |*pool| {
             pool.deinit(.from(self), alloc);
@@ -396,8 +406,8 @@ pub const Ctx = struct {
 
             // graphics queue is externally synchronized; worker-side ownership
             // handoffs submit through the same lock
-            self.transport.graphics_submit_lock.lockUncancelable(self.transport.io);
-            defer self.transport.graphics_submit_lock.unlock(self.transport.io);
+            self.graphics_submit_lock.lockUncancelable(self.io);
+            defer self.graphics_submit_lock.unlock(self.io);
 
             try self.graphics.dev.queueSubmit2(self.graphics.graphics_queue, (&vk.SubmitInfo2{
                 .wait_semaphore_info_count = 1,
@@ -570,7 +580,7 @@ pub const Swapchain = struct {
         view: vk.ImageView,
         semaphore: vk.Semaphore,
 
-        pub fn init(ctx: Ctx.Query(&.{ .device }), img: vk.Image, format: vk.Format) !SwapImage {
+        pub fn init(ctx: Ctx.Query(&.{.device}), img: vk.Image, format: vk.Format) !SwapImage {
             const view = try ctx.view.device.createImageView(&.{
                 .image = img,
                 .view_type = .@"2d",
@@ -595,7 +605,7 @@ pub const Swapchain = struct {
             };
         }
 
-        pub fn deinit(self: SwapImage, ctx: Ctx.Query(&.{ .device })) void {
+        pub fn deinit(self: SwapImage, ctx: Ctx.Query(&.{.device})) void {
             ctx.view.device.destroyImageView(self.view, null);
             ctx.view.device.destroySemaphore(self.semaphore, null);
         }

@@ -7,7 +7,7 @@ const DescriptorPool = @import("DescriptorPool.zig");
 const GraphicsPipeline = @import("GraphicsPipeline.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
 const Buffer = @import("Buffer.zig");
-const SmallBuffer = @import("util/small_buffer.zig").SmallBuffer;
+const SmallBuffer = @import("util.zig").SmallBuffer;
 const Ctx = @import("root.zig").Ctx;
 
 const RenderGraph = @This();

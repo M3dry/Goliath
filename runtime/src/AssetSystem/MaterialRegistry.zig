@@ -330,7 +330,7 @@ pub fn tick(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_alloc
     s.enter();
     defer s.exit();
 
-    const transport: *base.Transport = ctx.view.transport;
+    const transport: *base.Transport.Interface = ctx.view.transport;
 
     const slice = self.schemas.slice();
     for (slice.items(.stale), 0..) |*stale, schema_id| {
@@ -361,7 +361,7 @@ pub fn tick(self: *MaterialRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_alloc
         }
 
         errdefer ticket.* = .none;
-        ticket.* = try transport.uploadBuffer(false, blobs, null, null, staging_buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, first_use);
+        ticket.* = try transport.uploadBufferStaged(false, blobs, staging_buffer.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{ .memory_read_bit = true }, first_use);
         errdefer transport.unqueue(ticket.*, false);
 
         stale.* = false;

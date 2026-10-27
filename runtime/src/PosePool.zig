@@ -13,16 +13,13 @@ const cs = base.util.const_view;
 
 pub const Pose = struct {
     local: []TRS,
-    model: []zm.Mat,
-
     skeleton: u32,
 
-    pub fn resetPose(self: *Pose, as: *const AssetSystem) !void {
+    pub fn resetPose(self: *Pose, as: *const AssetSystem) void {
         const skeleton = as.skeleton_reg.getSkeleton(self.skeleton);
         std.debug.assert(skeleton.bind_local_transforms.len == self.local.len);
 
         @memcpy(self.local, skeleton.bind_local_transforms);
-        try Animation.buildModelPose(skeleton, self.local, self.model);
     }
 };
 
@@ -45,6 +42,7 @@ pub const SkeletonPool = struct {
     revisions: std.ArrayList(u64) = .empty,
 
     generations: std.ArrayList(u8) = .empty,
+    ref_counts: std.ArrayList(u32) = .empty,
     free_slots: std.ArrayList(u32) = .empty,
 
     pub const uninitialized: SkeletonPool = .{
@@ -63,6 +61,7 @@ pub const SkeletonPool = struct {
         self.revisions.deinit(alloc);
 
         self.generations.deinit(alloc);
+        self.ref_counts.deinit(alloc);
         self.free_slots.deinit(alloc);
     }
 
@@ -80,12 +79,14 @@ pub const SkeletonPool = struct {
             try self.model.ensureUnusedCapacity(alloc, self.joint_count);
             try self.revisions.ensureUnusedCapacity(alloc, 1);
             try self.generations.ensureUnusedCapacity(alloc, 1);
+            try self.ref_counts.ensureUnusedCapacity(alloc, 1);
 
             _ = self.local.addManyAsSliceAssumeCapacity(self.joint_count);
             _ = self.model.addManyAsSliceAssumeCapacity(self.joint_count);
 
             self.revisions.appendAssumeCapacity(0);
             self.generations.appendAssumeCapacity(0);
+            self.ref_counts.appendAssumeCapacity(0);
 
             return .{
                 .gen = 0,
@@ -94,13 +95,30 @@ pub const SkeletonPool = struct {
         }
     }
 
-    pub fn removePose(self: *SkeletonPool, alloc: Allocator, id: StableId) !void {
+    pub fn acquirePose(self: *SkeletonPool, id: StableId) !void {
         try self.checkId(id);
+
+        self.ref_counts.items[id.slot] += 1;
+    }
+
+    pub fn releasePose(self: *SkeletonPool, alloc: Allocator, id: StableId) !void {
+        try self.checkId(id);
+
+        self.ref_counts.items[id.slot] -|= 1;
+        if (self.ref_counts.items[id.slot] == 0) {
+            try self.removePose(alloc, id);
+        }
+    }
+
+    fn removePose(self: *SkeletonPool, alloc: Allocator, id: StableId) !void {
+        try self.checkId(id);
+        try self.free_slots.ensureUnusedCapacity(alloc, 1);
 
         self.revisions.items[id.slot] = 0;
         self.generations.items[id.slot] +%= 1;
+        self.ref_counts.items[id.slot] = 0;
 
-        try self.free_slots.append(alloc, id.slot);
+        self.free_slots.appendAssumeCapacity(id.slot);
     }
 
     fn checkId(self: *SkeletonPool, id: StableId) !void {
@@ -120,7 +138,6 @@ pub const SkeletonPool = struct {
 
         return .{
             .local = self.local.items[ix..][0..self.joint_count],
-            .model = self.model.items[ix..][0..self.joint_count],
             .skeleton = self.skeleton,
         };
     }
@@ -133,8 +150,13 @@ pub const SkeletonPool = struct {
         return self.getPose(id);
     }
 
-    pub fn finalizeEdit(self: *SkeletonPool, id: StableId) !void {
+    pub fn finalizeEdit(self: *SkeletonPool, as: *const AssetSystem, id: StableId) !void {
         _ = try self.checkId(id);
+
+        const skeleton = as.skeleton_reg.getSkeleton(self.skeleton);
+        std.debug.assert(skeleton.bind_local_transforms.len == self.local.len);
+
+        Animation.buildModelPose(skeleton, self.local, self.model.items[self.getIx(id)..][0..self.joint_count]) catch unreachable;
 
         self.revisions.items[id.slot] += 1;
     }
@@ -198,15 +220,36 @@ pub fn newPose(self: *PosePool, alloc: Allocator, skeleton: u32) !PoseId {
     };
 }
 
-pub fn removePose(self: *PosePool, alloc: Allocator, pose: PoseId) !void {
+pub fn acquirePose(self: *PosePool, pose: PoseId) !void {
     if (self.pools.items.len <= pose.skeleton) return;
 
     const pool = &self.pools.items[pose.skeleton];
-    pool.removePose(alloc, .{
+    try pool.acquirePose(.{
         .gen = pose.gen,
         .slot = pose.slot,
-    }) catch return;
+    });
 }
+
+pub fn releasePose(self: *PosePool, alloc: Allocator, pose: PoseId) !void {
+    if (self.pools.items.len <= pose.skeleton) return;
+
+    const pool = &self.pools.items[pose.skeleton];
+    try pool.releasePose(alloc, .{
+        .gen = pose.gen,
+        .slot = pose.slot,
+    });
+}
+
+
+// pub fn removePose(self: *PosePool, alloc: Allocator, pose: PoseId) !void {
+//     if (self.pools.items.len <= pose.skeleton) return;
+//
+//     const pool = &self.pools.items[pose.skeleton];
+//     pool.removePose(alloc, .{
+//         .gen = pose.gen,
+//         .slot = pose.slot,
+//     }) catch return;
+// }
 
 pub fn getConstPose(self: *PosePool, pose: PoseId) !ConstPose {
     if (self.pools.items.len <= pose.skeleton) return error.NoSkeletonPool;
@@ -219,13 +262,14 @@ pub fn getConstPose(self: *PosePool, pose: PoseId) !ConstPose {
 }
 
 pub const Finalizer = struct {
+    pool: *PosePool,
     pose: PoseId,
 
-    pub fn finalize(self: Finalizer, pool: *PosePool) void {
-        if (pool.pools.items.len <= self.pose.skeleton) return;
+    pub fn finalize(self: Finalizer, as: *const AssetSystem) void {
+        if (self.pool.pools.items.len <= self.pose.skeleton) return;
 
-        const skeleton_pool = &pool.pools.items[self.pose.skeleton];
-        skeleton_pool.finalizeEdit(.{
+        const skeleton_pool = &self.pool.pools.items[self.pose.skeleton];
+        skeleton_pool.finalizeEdit(as, .{
             .gen = self.pose.gen,
             .slot = self.pose.slot,
         }) catch {};
@@ -242,7 +286,7 @@ pub fn editPose(self: *PosePool, pose: PoseId) !struct{Finalizer, Pose} {
     });
 
     return .{
-        .{ .pose = pose },
+        .{ .pool = self, .pose = pose },
         p
     };
 }

@@ -22,7 +22,7 @@ const PatchKind = enum {
 current_meshes: base.Buffer = .empty,
 current_lods: base.Buffer = .empty,
 
-staging_tickets: [2]base.Transport.Ticket = .{ .none, .none },
+staging_ticket: base.Transport.GroupTicket = .none,
 staging_meshes: base.Buffer = .empty,
 staging_lods: base.Buffer = .empty,
 
@@ -35,6 +35,7 @@ lods: std.MultiArrayList(struct {
     entries: Mesh.GPULODEntry,
     patch_lookup: std.EnumArray(PatchKind, Gid),
 }) = .empty,
+free_lods: base.util.DisjointRanges = .{},
 
 free: std.ArrayList(u32) = .empty,
 
@@ -60,13 +61,13 @@ pub fn init() MeshRegistry {
 pub fn deinit(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .transport }), alloc: Allocator) void {
     self.meshes.deinit(alloc);
     self.lods.deinit(alloc);
+    self.free_lods.deinit(alloc);
     self.free.deinit(alloc);
 
     self.current_meshes.deinit(.from(ctx));
     self.current_lods.deinit(.from(ctx));
 
-    ctx.view.transport.unqueue(self.staging_tickets[0], false);
-    ctx.view.transport.unqueue(self.staging_tickets[1], false);
+    ctx.view.transport.unqueueGroup(self.staging_ticket, true);
 
     self.staging_meshes.deinit(.from(ctx));
     self.staging_lods.deinit(.from(ctx));
@@ -75,6 +76,7 @@ pub fn deinit(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .destroy_queue, .tran
 pub fn deinitNow(self: *MeshRegistry, ctx: base.Ctx.Query(&.{.vma_allocator}), alloc: Allocator) void {
     self.meshes.deinit(alloc);
     self.lods.deinit(alloc);
+    self.free_lods.deinit(alloc);
     self.free.deinit(alloc);
 
     self.current_meshes.deinitNow(.from(ctx));
@@ -108,7 +110,7 @@ pub fn acquire(self: *MeshRegistry, ctx: base.Ctx.Query(&.{.transport}), alloc: 
     const mblob = mblob_parsed.value;
 
     const lod_offset = try self.allocLodSlots(alloc, @intCast(mblob.lods.len));
-    errdefer self.freeLodSlots(lod_offset, @intCast(mblob.lods.len));
+    errdefer self.freeLodSlots(alloc, lod_offset, @intCast(mblob.lods.len)) catch unreachable;
 
     mesh_slice.items(.desc)[id] = Mesh.GPUMeshDesc{
         .lod_offset = lod_offset,
@@ -167,7 +169,7 @@ pub fn release(self: *MeshRegistry, alloc: Allocator, id: u32) !void {
     const slice = self.meshes.slice();
 
     const desc = &slice.items(.desc)[id];
-    self.freeLodSlots(desc.lod_offset, desc.lod_count);
+    try self.freeLodSlots(alloc, desc.lod_offset, desc.lod_count);
     desc.lod_count = 0;
     desc.lod_offset = 0;
 
@@ -244,10 +246,10 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
     s.enter();
     defer s.exit();
 
-    const transport: *base.Transport = ctx.view.transport;
+    const transport: *base.Transport.Interface = ctx.view.transport;
 
-    if (try transport.isReady(self.staging_tickets[0]) and try transport.isReady(self.staging_tickets[1])) {
-        self.staging_tickets = .{ .none, .none };
+    if (try transport.isGroupReady(self.staging_ticket)) {
+        self.staging_ticket = .none;
 
         std.mem.swap(base.Buffer, &self.staging_meshes, &self.current_meshes);
         std.mem.swap(base.Buffer, &self.staging_lods, &self.current_lods);
@@ -256,8 +258,7 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
     }
     if (!self.stale) return;
 
-    transport.unqueue(self.staging_tickets[0], false);
-    transport.unqueue(self.staging_tickets[1], false);
+    transport.unqueueGroup(self.staging_ticket, true);
 
     const descs = std.mem.sliceAsBytes(self.meshes.items(.desc));
     var meshes_first_use = false;
@@ -275,16 +276,15 @@ pub fn tick(self: *MeshRegistry, ctx: base.Ctx.Query(&.{ .device, .vma_allocator
         lods_first_use = true;
     }
 
-    errdefer self.staging_tickets = .{ .none, .none };
-    self.staging_tickets[0] = try transport.uploadBuffer(false, descs, null, null, self.staging_meshes.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{
+    var group = try transport.beginGroup();
+    errdefer group.cancel(true);
+
+    try group.uploadBufferStaged(false, descs, self.staging_meshes.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{
         .memory_read_bit = true,
     }, meshes_first_use);
-    errdefer transport.unqueue(self.staging_tickets[0], false);
-
-    self.staging_tickets[1] = try transport.uploadBuffer(false, lods, null, null, self.staging_lods.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{
+    self.staging_ticket = try group.uploadBufferStagedFinal(false, lods, self.staging_lods.handle, 0, .{ .compute_shader_bit = true, .vertex_shader_bit = true, .fragment_shader_bit = true }, .{
         .memory_read_bit = true,
     }, lods_first_use);
-    errdefer transport.unqueue(self.staging_tickets[1], false);
 
     self.stale = false;
 }
@@ -298,8 +298,9 @@ pub inline fn getLodAssets(self: *const MeshRegistry, lod: u32) std.EnumArray(Pa
     return self.lods.items(.patch_lookup)[lod];
 }
 
-// TODO: hole tracking + filling
 fn allocLodSlots(self: *MeshRegistry, alloc: Allocator, lod_count: u32) !u32 {
+    if (self.free_lods.takeFirstFit(lod_count)) |range| return range.start;
+
     const ret = self.lods.len;
 
     try self.lods.ensureUnusedCapacity(alloc, lod_count);
@@ -308,10 +309,18 @@ fn allocLodSlots(self: *MeshRegistry, alloc: Allocator, lod_count: u32) !u32 {
     return @intCast(ret);
 }
 
-fn freeLodSlots(self: *MeshRegistry, lod_offset: u32, lod_count: u32) void {
-    if (lod_offset + lod_count != self.lods.len) return;
+fn freeLodSlots(self: *MeshRegistry, alloc: Allocator, lod_offset: u32, lod_count: u32) !void {
+    if (lod_count == 0) return;
 
-    self.lods.shrinkRetainingCapacity(lod_offset);
+    const freed = base.util.Range{ .start = lod_offset, .end = lod_offset + lod_count };
+    try self.free_lods.add(alloc, freed);
+
+    // Reclaim trailing free slots while retaining their capacity for later appends.
+    if (self.free_lods.ranges.items.len != 0 and self.free_lods.ranges.items[self.free_lods.ranges.items.len - 1].end == @as(u32, @intCast(self.lods.len))) {
+        const trailing = self.free_lods.ranges.items[self.free_lods.ranges.items.len - 1];
+        self.lods.shrinkRetainingCapacity(trailing.start);
+        self.free_lods.removeAssumeCapacity(trailing);
+    }
 }
 
 test {
