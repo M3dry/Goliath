@@ -65,7 +65,13 @@ SamplerState get_sampler(uint gid) {
     return samplers[NonUniformResourceIndex(gid & 0x00FFFFFFu)];
 }
 
-float3x3 reconstruct_TBN(float3 N, Interpolated3 pos, Interpolated2 uv) {
+struct TangentFrame {
+    float3 tangent;
+    float3 bitangent;
+    float3 normal;
+};
+
+TangentFrame reconstruct_TBN(float3 N, Interpolated3 pos, Interpolated2 uv) {
     float3 dp1 = pos.ddx;
     float3 dp2 = pos.ddy;
     float2 duv1 = uv.ddx;
@@ -79,7 +85,11 @@ float3x3 reconstruct_TBN(float3 N, Interpolated3 pos, Interpolated2 uv) {
 
     float invmax = rsqrt(max(dot(T, T), dot(B, B)));
 
-    return float3x3(T * invmax, B * invmax, N);
+    TangentFrame frame;
+    frame.tangent = T * invmax;
+    frame.bitangent = B * invmax;
+    frame.normal = N;
+    return frame;
 }
 
 float DistributionGGX(float3 N, float3 H, float roughness) {
@@ -159,7 +169,18 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     Vertex v3 = load_vertex(rend.geometry, primitive_id * 3 + 2);
 
     InterpolatedVertex interp = interpolate_vertex(pc.screen, frag, rend.transform, shading_data.view_proj_matrix, v1, v2, v3);
-    float3 world_normal = normalize(interp.normal.value);
+    // The cofactor matrix is det(M) * inverse-transpose(M), so normalization
+    // gives the correctly transformed normal without relying on matrix inverse.
+    float3x3 model_linear = (float3x3)rend.transform;
+    float3 c0 = float3(model_linear[0][0], model_linear[1][0], model_linear[2][0]);
+    float3 c1 = float3(model_linear[0][1], model_linear[1][1], model_linear[2][1]);
+    float3 c2 = float3(model_linear[0][2], model_linear[1][2], model_linear[2][2]);
+    float3 object_normal = interp.normal.value;
+    float3 world_normal = normalize(
+        cross(c1, c2) * object_normal.x +
+        cross(c2, c0) * object_normal.y +
+        cross(c0, c1) * object_normal.z
+    );
 
     float3 world_pos = interp.pos.value;
 
@@ -177,8 +198,12 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     float occlusion = inst.occlusion_factor * get_texture(inst.occlusion_map).SampleGrad(get_sampler(inst.occlusion_map), uv0, uv0_ddx, uv0_ddy).r;
     float3 emissive = inst.emissive_factor * get_texture(inst.emissive_map).SampleGrad(get_sampler(inst.emissive_map), uv0, uv0_ddx, uv0_ddy).rgb;
 
-    float3x3 TBN_normal = reconstruct_TBN(world_normal, interp.pos, interp.texcoord0);
-    float3 normal = normalize(mul(TBN_normal, normal_map_value));
+    TangentFrame TBN_normal = reconstruct_TBN(world_normal, interp.pos, interp.texcoord0);
+    float3 normal = normalize(
+        TBN_normal.tangent * normal_map_value.x +
+        TBN_normal.bitangent * normal_map_value.y +
+        TBN_normal.normal * normal_map_value.z
+    );
 
     float3 view = normalize(shading_data.cam_pos - world_pos);
     float3 F0 = float3(0.04);
@@ -187,7 +212,7 @@ void compute(uint3 tid : SV_DispatchThreadID) {
     float3 Lo = float3(0.0);
     // for (uint i = 0; i < shading_data.light_count; i++) {
         // Light light = shading_data.lights.light[i];
-        Light light = Light(float3(5, 5, 5), float3(1000));
+        Light light = Light(float3(-2, 2, 2), float3(100));
 
         float3 L = normalize(light.position - world_pos);
         float3 H = normalize(view + L);

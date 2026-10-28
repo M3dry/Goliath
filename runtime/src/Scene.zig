@@ -2,6 +2,9 @@ const std = @import("std");
 const build_options = @import("build_options");
 
 const base = @import("base");
+const Culling = @import("Culling.zig");
+const StaticWorldInstance = Culling.StaticWorldInstance;
+const SkinnedWorldInstance = Culling.SkinnedWorldInstance;
 const Allocator = std.mem.Allocator;
 const Mat = base.zmath.Mat;
 const AssetSystem = @import("AssetSystem.zig");
@@ -223,17 +226,6 @@ const DrawableMeshes = struct {
         sparse: u32,
     };
 
-    pub const StaticDrawInstance = struct {
-        mesh_desc_ix: u32,
-        world_transform: [4][4]f32,
-    };
-
-    pub const SkinnedDrawInstance = struct {
-        mesh_desc_ix: u32,
-        joint_offset: u32,
-        world_transform: [4][4]f32,
-    };
-
     const Kind = enum { static, skinned };
     const SparseEntry = struct {
         dense: u32,
@@ -241,13 +233,13 @@ const DrawableMeshes = struct {
     };
 
     static_drawlist: std.MultiArrayList(struct {
-        draw: StaticDrawInstance,
+        draw: StaticWorldInstance,
         sparse_id: u32,
     }) = .empty,
     static_dirty: bool = false,
 
     skinned_drawlist: std.MultiArrayList(struct {
-        draw: SkinnedDrawInstance,
+        draw: SkinnedWorldInstance,
         sparse_id: u32,
     }) = .empty,
     skinned_dirty: bool = false,
@@ -389,18 +381,47 @@ pub const GPUBuffers = struct {
     staging_skinned_drawlist_ix: u32 = 0,
     staging_skinned_drawlist_ticket: base.Transport.GroupTicket = .none,
 
+    pub fn tick(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport })) !void {
+        if (try ctx.view.transport.isGroupReady(self.staging_joints_ticket)) {
+            self.staging_joints_ix = (self.staging_joints_ix + 1) % 2;
+            self.staging_joints_ticket = .none;
+        }
+
+        if (try ctx.view.transport.isGroupReady(self.staging_static_drawlist_ticket)) {
+            self.staging_static_drawlist_ix = (self.staging_static_drawlist_ix + 1) % 2;
+            self.staging_static_drawlist_ticket = .none;
+        }
+
+        if (try ctx.view.transport.isGroupReady(self.staging_skinned_drawlist_ticket)) {
+            self.staging_skinned_drawlist_ix = (self.staging_skinned_drawlist_ix + 1) % 2;
+            self.staging_skinned_drawlist_ticket = .none;
+        }
+    }
+
+    pub fn jointMatrices(self: *GPUBuffers) base.Buffer {
+        return self.joints[(self.staging_joints_ix + 1) % 2];
+    }
+
+    pub fn staticDrawlist(self: *GPUBuffers) base.Buffer {
+        return self.static_drawlist[(self.staging_static_drawlist_ix + 1) % 2];
+    }
+
+    pub fn skinnedDrawlist(self: *GPUBuffers) base.Buffer {
+        return self.skinned_drawlist[(self.staging_skinned_drawlist_ix + 1) % 2];
+    }
+
     pub fn updateJoints(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), joints: []Mat) !void {
         try GPUBuffers.genericUpdate(Mat, .from(ctx), .{
             .vertex_shader_bit = true,
         }, &self.joints, &self.staging_joints_ix, &self.staging_joints_ticket, joints, "joints");
     }
 
-    pub fn updateStaticDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []DrawableMeshes.StaticDrawInstance) !void {
-        try GPUBuffers.genericUpdate(DrawableMeshes.StaticDrawInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.static_drawlist, &self.staging_static_drawlist_ix, &self.staging_static_drawlist_ticket, drawlist, "static_drawlist");
+    pub fn updateStaticDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []StaticWorldInstance) !void {
+        try GPUBuffers.genericUpdate(StaticWorldInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.static_drawlist, &self.staging_static_drawlist_ix, &self.staging_static_drawlist_ticket, drawlist, "static_drawlist");
     }
 
-    pub fn updateSkinnedDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []DrawableMeshes.SkinnedDrawInstance) !void {
-        try GPUBuffers.genericUpdate(DrawableMeshes.SkinnedDrawInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.skinned_drawlist, &self.staging_skinned_drawlist_ix, &self.staging_skinned_drawlist_ticket, drawlist, "skinned_drawlist");
+    pub fn updateSkinnedDrawlist(self: *GPUBuffers, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), drawlist: []SkinnedWorldInstance) !void {
+        try GPUBuffers.genericUpdate(SkinnedWorldInstance, .from(ctx), .{ .compute_shader_bit = true }, &self.skinned_drawlist, &self.staging_skinned_drawlist_ix, &self.staging_skinned_drawlist_ticket, drawlist, "skinned_drawlist");
     }
 
     fn genericUpdate(comptime T: type, ctx: base.Ctx.Query(&.{ .transport, .destroy_queue, .device, .vma_allocator, .graphics_family, .transport_family }), pipeline_stages: base.vk.PipelineStageFlags2, buffers: *[2]base.Buffer, staging_ix: *u32, ticket: *base.Transport.GroupTicket, data: []T, comptime buf_name: [:0]const u8) !void {

@@ -12,7 +12,10 @@ pub const RenderableEntry = extern struct {
     material_instance: u32,
 };
 
-pub const world_instance_size = @sizeOf(u32) + 16 * @sizeOf(f32);
+pub const StaticWorldInstance = struct {
+    mesh_desc_ix: u32,
+    world_transform: [4][4]f32,
+};
 
 pub const CullPC = struct {
     vp: zm.Mat,
@@ -31,7 +34,11 @@ pub const CullPC = struct {
     pub const size = base.push_constant.size(CullPC, base.layout.scalar);
 };
 
-pub const skinned_world_instance_size = @sizeOf(u32) + @sizeOf(u32) + 16 * @sizeOf(f32);
+pub const SkinnedWorldInstance = struct {
+    mesh_desc_ix: u32,
+    joint_offset: u32,
+    world_transform: [4][4]f32,
+};
 
 pub const AnimatedCullPC = struct {
     vp: zm.Mat,

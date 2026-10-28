@@ -519,6 +519,10 @@ fn emitPassBarriers(
     while (bit.next()) |entry| {
         const idx = entry.key_ptr.*;
         const req = entry.value_ptr.*;
+        // Empty buffers may be included in pass declarations when the shader
+        // guards access to their device address. They have no Vulkan resource
+        // to synchronize, so leave them out of the barrier list.
+        if (buf_contracts[idx].buffer.handle == .null_handle) continue;
         const cur = &buffer_states[idx];
         if (!bufferUsageEqual(cur.*, req)) {
             try buf_bars.append(alloc, .{
@@ -781,6 +785,7 @@ fn emitFinalBarriers(
     }
 
     for (self.buffers.items, buffer_states) |contract, state| {
+        if (contract.buffer.handle == .null_handle) continue;
         if (!bufferUsageEqual(state, contract.end_usage)) {
             try buf_bars.append(alloc, .{
                 .src_stage_mask = state.stage,

@@ -31,7 +31,8 @@ fn slotName(slot: Slot, texture_index: u32, buf: *[64]u8) []const u8 {
             else => "sampled_white",
         };
     }
-    return std.fmt.bufPrint(buf, "sampled_gltf_texture_{d}", .{texture_index}) catch unreachable;
+    const color_space = slot == .albedo or slot == .emissive;
+    return std.fmt.bufPrint(buf, "sampled_gltf_texture_{d}_{s}", .{ texture_index, if (color_space) "srgb" else "linear" }) catch unreachable;
 }
 
 /// ingest an asset into the asset system and finalize it as a named entry;
@@ -139,6 +140,22 @@ pub fn main(init: std.process.Init) !void {
         const gltf_data = try zmesh.io.parseAndLoadFile("Paladin.glb");
         defer zmesh.io.freeData(gltf_data);
 
+        // Discover texture color-space use before ingestion. Base-color and
+        // emissive are color data; the remaining PBR maps are linear data.
+        var texture_uses = [_]struct { srgb: bool = false, linear: bool = false }{.{}} ** 3;
+        for (0..gltf_data.materials_count) |material_index| {
+            const material = try runtime.PbrShading.GltfPBRInstance.fromGltf(gltf_data, @intCast(material_index));
+            const color_slots = [_]u32{ material.albedo_map, material.emissive_map };
+            const linear_slots = [_]u32{ material.metallic_roughness_map, material.normal_map, material.occlusion_map };
+            for (color_slots) |texture_index| {
+                if (texture_index != runtime.PbrShading.no_texture) texture_uses[texture_index].srgb = true;
+            }
+            for (linear_slots) |texture_index| {
+                if (texture_index != runtime.PbrShading.no_texture) texture_uses[texture_index].linear = true;
+            }
+        }
+        const inst = try runtime.PbrShading.GltfPBRInstance.fromGltf(gltf_data, 0);
+
         // fallback 1x1 textures: white + flat normal
         const white = [4]u8{ 255, 255, 255, 255 };
         const flat_normal = [4]u8{ 128, 128, 255, 255 };
@@ -151,7 +168,7 @@ pub fn main(init: std.process.Init) !void {
         const flat_normal_gid = try ingestAndFinalize(&asset_system, .{
             .texture = .{
                 .default_image = .flat_normal,
-                .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_srgb, .width = 1, .height = 1, .blob = &flat_normal } },
+                .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_unorm, .width = 1, .height = 1, .blob = &flat_normal } },
             },
         }, "flat_normal");
 
@@ -162,30 +179,42 @@ pub fn main(init: std.process.Init) !void {
         }
         defer for (&gltf_textures) |*t| t.deinit(gpa);
 
-        var gltf_gids: [3]runtime.AssetSystem.Gid = undefined;
+        var gltf_srgb_gids: [3]?runtime.AssetSystem.Gid = .{ null, null, null };
+        var gltf_linear_gids: [3]?runtime.AssetSystem.Gid = .{ null, null, null };
         for (0..gltf_textures.len) |i| {
-            var name_buf: [64]u8 = undefined;
-            const name = try std.fmt.bufPrint(&name_buf, "gltf_texture_{d}", .{i});
-            gltf_gids[i] = try ingestAndFinalize(&asset_system, .{
-                .texture = .{
+            const uses = texture_uses[i];
+            if (uses.srgb or !uses.linear) {
+                var texture_name_buf: [64]u8 = undefined;
+                const texture_name = try std.fmt.bufPrint(&texture_name_buf, "gltf_texture_{d}_srgb", .{i});
+                gltf_srgb_gids[i] = try ingestAndFinalize(&asset_system, .{ .texture = .{
                     .default_image = .white,
-                    .data = .{ .decoded_blob = .{
-                        .format = .r8g8b8a8_srgb,
-                        .width = gltf_textures[i].width,
-                        .height = gltf_textures[i].height,
-                        .blob = gltf_textures[i].pixels,
-                    } },
-                },
-            }, name);
+                    .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_srgb, .width = gltf_textures[i].width, .height = gltf_textures[i].height, .blob = gltf_textures[i].pixels } },
+                } }, texture_name);
+            }
+            if (uses.linear) {
+                var texture_name_buf: [64]u8 = undefined;
+                const texture_name = try std.fmt.bufPrint(&texture_name_buf, "gltf_texture_{d}_linear", .{i});
+                gltf_linear_gids[i] = try ingestAndFinalize(&asset_system, .{ .texture = .{
+                    .default_image = .white,
+                    .data = .{ .decoded_blob = .{ .format = .r8g8b8a8_unorm, .width = gltf_textures[i].width, .height = gltf_textures[i].height, .blob = gltf_textures[i].pixels } },
+                } }, texture_name);
+            }
         }
 
         // one sampled texture per raw texture, carrying its gltf sampler
         _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = white_gid, .sampler = .{} } }, "sampled_white");
         _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = flat_normal_gid, .sampler = .{} } }, "sampled_flat_normal");
         for (0..gltf_textures.len) |i| {
-            var name_buf: [64]u8 = undefined;
-            const name = try std.fmt.bufPrint(&name_buf, "sampled_gltf_texture_{d}", .{i});
-            _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = gltf_gids[i], .sampler = gltf_textures[i].sampler } }, name);
+            if (gltf_srgb_gids[i]) |gid| {
+                var name_buf: [64]u8 = undefined;
+                const name = try std.fmt.bufPrint(&name_buf, "sampled_gltf_texture_{d}_srgb", .{i});
+                _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = gid, .sampler = gltf_textures[i].sampler } }, name);
+            }
+            if (gltf_linear_gids[i]) |gid| {
+                var name_buf: [64]u8 = undefined;
+                const name = try std.fmt.bufPrint(&name_buf, "sampled_gltf_texture_{d}_linear", .{i});
+                _ = try ingestAndFinalize(&asset_system, .{ .sampled_texture = .{ .texture = gid, .sampler = gltf_textures[i].sampler } }, name);
+            }
         }
 
         // geometry + mesh assets for the two rendered gltf primitives; meshes
@@ -216,7 +245,6 @@ pub fn main(init: std.process.Init) !void {
 
         // PBR material instance: gltf texture indices → texture pool indices, resolved
         // against the asset system's sampled textures.
-        const inst = try runtime.PbrShading.GltfPBRInstance.fromGltf(gltf_data, 0);
         var asset_inst: runtime.PbrShading.PBRInstance = undefined;
 
         // Map the material's 5 texture slots to sampled textures in the manifest.
@@ -291,11 +319,11 @@ pub fn main(init: std.process.Init) !void {
 
         _ = try ingestAndFinalize(&asset_system, .{ .model = .{ .meshes = &([2]runtime.AssetSystem.ModelRegistry.IngestModel.MeshData{ .{
             .gid = body_gid,
-            .transform = zm.scaling(0.05, 0.05, 0.05),
+            .transform = zm.identity(),
             .skin = 0,
         }, .{
             .gid = helmet_gid,
-            .transform = zm.mul(zm.translation(50, 0, 0), zm.scaling(0.05, 0.05, 0.05)),
+            .transform = zm.identity(),
             .skin = 0,
         } }), .skeleton = .{
             .gid = skeleton_gid,
@@ -310,14 +338,10 @@ pub fn main(init: std.process.Init) !void {
         var stringify: std.json.Stringify = .{ .writer = &manifest_writer.interface, .options = .{ .whitespace = .indent_2 } };
         try asset_system.save_manifest(&stringify);
         try manifest_writer.flush();
+        return;
     }
 
-    const body_mesh_gid = asset_system.findEntry(.mesh, "body_mesh") orelse return error.AssetEntryNotFound;
-    const helmet_mesh_gid = asset_system.findEntry(.mesh, "helmet_mesh") orelse return error.AssetEntryNotFound;
-    const body_geo_gid = asset_system.findEntry(.geometry, "body_geometry") orelse return error.AssetEntryNotFound;
-    const helmet_geo_gid = asset_system.findEntry(.geometry, "helmet_geometry") orelse return error.AssetEntryNotFound;
     const pbr_schema_gid = asset_system.findEntry(.material_schema, "pbr_schema") orelse return error.AssetEntryNotFound;
-    const material_gid = asset_system.findEntry(.material_instance, "paladin_material") orelse return error.AssetEntryNotFound;
     const paladin_gid = asset_system.findEntry(.model, "paladin") orelse return error.AssetEntryNotFound;
 
     var ts_nalloc = std.heap.ArenaAllocator.init(gpa);
@@ -331,24 +355,21 @@ pub fn main(init: std.process.Init) !void {
     n1.setPayload(.{ .model = .{
         .gid = paladin_gid,
     } });
-    n1.setScale(.{ 0.05, 0.05, 0.05 });
+    n1.setScale(.{ 0.005, 0.005, 0.005 });
+    n1.setRotation(zm.quatFromMat(zm.rotationX(std.math.pi / 2.0)));
 
     const n2 = try ts.addNode();
     n2.setPayload(.{ .model = .{
         .gid = paladin_gid,
     } });
-    n2.setTranslation(.{ 5, 5, 5 });
+    // n1.setScale(.{ 0.005, 0.005, 0.005 });
+    n2.setTranslation(.{ 100, 100, 100 });
+
+    n1.addChild(n2);
 
     var asset_cmd_buf = asset_system.newCommandBuffer(gpa);
     defer asset_cmd_buf.deinit();
-    try asset_cmd_buf.request(material_gid);
-    // geometry and instance deps on meshes are soft; request them explicitly
-    try asset_cmd_buf.request(body_geo_gid);
-    try asset_cmd_buf.request(helmet_geo_gid);
-    try asset_cmd_buf.request(paladin_gid);
-
     try n1.acquireAll(&asset_cmd_buf);
-
     try asset_system.submit(.from(&ctx), &asset_cmd_buf);
 
     var n1_pb = try n1.prepareBuild(gpa, &asset_system);
@@ -360,35 +381,14 @@ pub fn main(init: std.process.Init) !void {
     const n1_scene_root = try n1_scene.initRoot(gpa);
     try n1_scene.addTemplateScene(n1_scene_root, &n1_pb, &asset_system, gpa, ts_nalloc_alloc);
 
+    n1_scene.rebuildDirtyTransforms();
+
     var scene_gpu: runtime.Scene.GPUBuffers = .{};
     defer scene_gpu.deinit(.from(&ctx));
 
     try n1_scene.collectIntoGPUBuffers(.from(&ctx), &scene_gpu);
 
     const pbr_schema_id = asset_system.denseIndex(pbr_schema_gid);
-
-    const paladin_id = asset_system.denseIndex(paladin_gid);
-    const paladin_skeleton = asset_system.model_reg.getSkeleton(paladin_id) orelse return error.SkeletonNotFound;
-
-    const skeleton = asset_system.skeleton_reg.getSkeleton(paladin_skeleton.dense);
-    const anims = asset_system.skeleton_reg.getAnimations(paladin_skeleton.dense);
-
-    const paladin_local_pose = try gpa.alloc(base.util.TRS, skeleton.bind_local_transforms.len);
-    defer gpa.free(paladin_local_pose);
-    const paladin_model_pose = try gpa.alloc(zm.Mat, skeleton.bind_local_transforms.len);
-    defer gpa.free(paladin_model_pose);
-
-    std.debug.assert(paladin_skeleton.skins.len == 1);
-    const skin = paladin_skeleton.skins[0];
-
-    const paladin_matrices = asset_system.model_reg.getMeshTransforms(paladin_id);
-
-    var joint_matrices_bufs: [base.Ctx.frames_in_flight]base.Buffer = undefined;
-    for (&joint_matrices_bufs, 0..) |*buf, i| {
-        buf.* = try base.Buffer.init(.from(&ctx), .graphics, "Joint matrices buffer", skin.skeleton_node_indices.len * @sizeOf(zm.Mat), .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
-        _ = i;
-    }
-    defer for (&joint_matrices_bufs) |*buf| buf.deinit(.from(&ctx));
 
     // wait for the first mesh desc / lod upload so the render graph can bind
     // non-empty registry buffers; geometry patches may land a few ticks later,
@@ -398,13 +398,6 @@ pub fn main(init: std.process.Init) !void {
         try asset_system.tick(.from(&ctx));
         std.Thread.yield() catch {};
     }
-
-    // // Let the sampled texture bindings land in the pool before the first frame.
-    // while (asset_system.texture_reg.pending_sampled_textures.items.len != 0) {
-    //     try ctx.transport.drain();
-    //     try asset_system.texture_reg.tick(.from(&ctx));
-    //     std.Thread.yield() catch {};
-    // }
 
     // Give the graph a bindable id for the asset system's texture pool set, on every frame.
     var texture_pool_sets: [base.Ctx.frames_in_flight]u64 = undefined;
@@ -417,15 +410,6 @@ pub fn main(init: std.process.Init) !void {
 
     var pbr = try runtime.PbrShading.init(.from(&ctx), vis.set_layout, asset_system.texture_reg.texture_pool.set_layout);
     defer pbr.deinit(.from(&ctx));
-
-    var world_instances_buf = try base.Buffer.init(.from(&ctx), .graphics, "world_instances_buf", Culling.world_instance_size, .{ .storage_buffer_bit = true }, .cpu_to_gpu_dynamic);
-    defer world_instances_buf.deinit(.from(&ctx));
-    {
-        const mapped = world_instances_buf.mapped.?;
-        @as(*u32, @ptrCast(@alignCast(mapped))).* = 0;
-        @memcpy(mapped[4..][0..64], std.mem.asBytes(&paladin_matrices[0]));
-        world_instances_buf.flush(.from(&ctx), 0, Culling.world_instance_size);
-    }
 
     const max_instances = 64;
     var renderables_buf = try base.Buffer.init(.from(&ctx), .graphics, "renderables_buf", @sizeOf(u32) + max_instances * @sizeOf(Culling.RenderableEntry), .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
@@ -443,11 +427,6 @@ pub fn main(init: std.process.Init) !void {
     // Skinned draw cmds (indirect with extra fields), includes u32 count header
     var skinned_draw_cmds_buf = try base.Buffer.init(.from(&ctx), .graphics, "skinned_draw_cmds_buf", @sizeOf(u32) + max_instances * 32, .{ .storage_buffer_bit = true, .indirect_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
     defer skinned_draw_cmds_buf.deinit(.from(&ctx));
-
-    // Skinned world instances (mesh_ix + joint_offset + transform)
-    const skinned_instance_count: u32 = 4;
-    var skinned_world_instances_buf = try base.Buffer.init(.from(&ctx), .graphics, "skinned_world_instances_buf", skinned_instance_count * Culling.skinned_world_instance_size, .{ .storage_buffer_bit = true, .transfer_dst_bit = true }, .cpu_to_gpu_dynamic);
-    defer skinned_world_instances_buf.deinit(.from(&ctx));
 
     var culling = try Culling.init(.from(&ctx));
     defer culling.deinit(.from(&ctx));
@@ -571,23 +550,24 @@ pub fn main(init: std.process.Init) !void {
 
             try ctx.transport.interface().drain();
             try asset_system.tick(.from(&ctx));
+            try scene_gpu.tick(.from(&ctx));
 
             const frame = ctx.frames[ctx.current_frame];
             const rt = ctx.renderTarget();
             const dt = ctx.depthTarget();
 
-            const anim_time = if (anims[1].duration > 0)
-                @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration)
-            else
-                0;
-            {
-                const buf = &joint_matrices_bufs[ctx.current_frame];
-                const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
-                try anims[1].sample(skeleton, anim_time, paladin_local_pose);
-                try runtime.Animation.buildModelPose(skeleton, paladin_local_pose, paladin_model_pose);
-                try runtime.Animation.buildSkinPalette(skin, paladin_model_pose, mats);
-                if (!buf.coherent) buf.flush(.from(&ctx), 0, buf.size);
-            }
+            // const anim_time = if (anims[1].duration > 0)
+            //     @mod(@as(f32, @floatCast(base.zglfw.getTime())), anims[1].duration)
+            // else
+            //     0;
+            // {
+            //     const buf = &joint_matrices_bufs[ctx.current_frame];
+            //     const mats: []zm.Mat = @as([*]zm.Mat, @ptrCast(@alignCast(buf.mapped.?)))[0..skin.skeleton_node_indices.len];
+            //     try anims[1].sample(skeleton, anim_time, paladin_local_pose);
+            //     try runtime.Animation.buildModelPose(skeleton, paladin_local_pose, paladin_model_pose);
+            //     try runtime.Animation.buildSkinPalette(skin, paladin_model_pose, mats);
+            //     if (!buf.coherent) buf.flush(.from(&ctx), 0, buf.size);
+            // }
 
             var rg = base.RenderGraph.init(gpa);
             defer rg.deinit();
@@ -649,10 +629,11 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
+            const static_drawlist = scene_gpu.staticDrawlist();
             const world_instances_ref = try rg.addBuffer(.{
-                .buffer = world_instances_buf,
+                .buffer = static_drawlist,
                 .offset = 0,
-                .size = world_instances_buf.size,
+                .size = static_drawlist.size,
                 .start_usage = .{
                     .stage = .{ .compute_shader_bit = true },
                     .access = .{ .shader_storage_read_bit = true },
@@ -691,10 +672,11 @@ pub fn main(init: std.process.Init) !void {
                 },
             });
 
+            const skinned_drawlist = scene_gpu.skinnedDrawlist();
             const skinned_world_instances_ref = try rg.addBuffer(.{
-                .buffer = skinned_world_instances_buf,
+                .buffer = skinned_drawlist,
                 .offset = 0,
-                .size = skinned_world_instances_buf.size,
+                .size = skinned_drawlist.size,
                 .start_usage = .{
                     .stage = .{ .compute_shader_bit = true },
                     .access = .{ .shader_storage_read_bit = true },
@@ -761,6 +743,7 @@ pub fn main(init: std.process.Init) !void {
                 .start_usage = .{ .stage = .{ .all_commands_bit = true }, .access = .{ .memory_write_bit = true } },
                 .end_usage = .{ .stage = .{ .compute_shader_bit = true }, .access = .{ .shader_storage_read_bit = true } },
             });
+
             const instances_buf = asset_system.material_reg.getInstancesBuffer(pbr_schema_id);
             const instances_ref = try rg.addBuffer(.{
                 .buffer = instances_buf,
@@ -792,7 +775,7 @@ pub fn main(init: std.process.Init) !void {
                 .lod_entries_ref = lod_entries_ref,
                 .renderables_ref = renderables_ref,
                 .draw_cmds_ref = draw_cmds_ref,
-                .instance_count = 0,
+                .instance_count = @intCast(static_drawlist.size / @sizeOf(Culling.StaticWorldInstance)),
                 .max_draw_count = max_instances,
                 .screen_width = @floatFromInt(render_extent.width),
                 .screen_height = @floatFromInt(render_extent.height),
@@ -801,10 +784,11 @@ pub fn main(init: std.process.Init) !void {
                 .pc_buf = &cull_pc_buf,
             });
 
+            const joint_matrices = scene_gpu.jointMatrices();
             const joints_ref = try rg.addBuffer(.{
-                .buffer = joint_matrices_bufs[ctx.current_frame],
+                .buffer = joint_matrices,
                 .offset = 0,
-                .size = joint_matrices_bufs[ctx.current_frame].size,
+                .size = joint_matrices.size,
                 .start_usage = .{
                     .stage = .{ .compute_shader_bit = true, .vertex_shader_bit = true },
                     .access = .{ .shader_storage_read_bit = true },
@@ -816,44 +800,44 @@ pub fn main(init: std.process.Init) !void {
             });
 
             // Upload skinned world instances
-            {
-                const body_dense = asset_system.denseIndex(body_mesh_gid);
-                const helmet_dense = asset_system.denseIndex(helmet_mesh_gid);
-
-                const mapped = skinned_world_instances_buf.mapped.?;
-                const instances = std.mem.bytesAsSlice(u32, mapped[0 .. skinned_instance_count * Culling.skinned_world_instance_size]);
-                // mesh_desc_ix = mesh registry slot; both use joint_offset 0
-                instances[0] = helmet_dense;
-                instances[1] = 0; // joint_offset
-                // transform at offset 2 (two u32s skipped)
-                @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&paladin_matrices[0]));
-                const base_off = Culling.skinned_world_instance_size;
-                const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
-
-                inst2[0] = body_dense;
-                inst2[1] = 0; // joint_offset
-                @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&paladin_matrices[0]));
-                if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
-
-                const base_off2 = Culling.skinned_world_instance_size * 2;
-                const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
-
-                inst3[0] = helmet_dense;
-                inst3[1] = 0; // joint_offset
-                @memcpy(std.mem.sliceAsBytes(inst3[2..18]), std.mem.asBytes(&paladin_matrices[1]));
-                if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
-
-                const base_off3 = Culling.skinned_world_instance_size * 3;
-                const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
-
-                inst4[0] = body_dense;
-                inst4[1] = 0; // joint_offset
-                @memcpy(std.mem.sliceAsBytes(inst4[2..18]), std.mem.asBytes(&paladin_matrices[1]));
-                if (!skinned_world_instances_buf.coherent)
-                    skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
-            }
+            // {
+            //     const body_dense = asset_system.denseIndex(body_mesh_gid);
+            //     const helmet_dense = asset_system.denseIndex(helmet_mesh_gid);
+            //
+            //     const mapped = skinned_world_instances_buf.mapped.?;
+            //     const instances = std.mem.bytesAsSlice(u32, mapped[0 .. skinned_instance_count * Culling.skinned_world_instance_size]);
+            //     // mesh_desc_ix = mesh registry slot; both use joint_offset 0
+            //     instances[0] = helmet_dense;
+            //     instances[1] = 0; // joint_offset
+            //     // transform at offset 2 (two u32s skipped)
+            //     @memcpy(std.mem.sliceAsBytes(instances[2..18]), std.mem.asBytes(&paladin_matrices[0]));
+            //     const base_off = Culling.skinned_world_instance_size;
+            //     const inst2 = std.mem.bytesAsSlice(u32, mapped[base_off..][0..Culling.skinned_world_instance_size]);
+            //
+            //     inst2[0] = body_dense;
+            //     inst2[1] = 0; // joint_offset
+            //     @memcpy(std.mem.sliceAsBytes(inst2[2..18]), std.mem.asBytes(&paladin_matrices[0]));
+            //     if (!skinned_world_instances_buf.coherent)
+            //         skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
+            //
+            //     const base_off2 = Culling.skinned_world_instance_size * 2;
+            //     const inst3 = std.mem.bytesAsSlice(u32, mapped[base_off2..][0..Culling.skinned_world_instance_size]);
+            //
+            //     inst3[0] = helmet_dense;
+            //     inst3[1] = 0; // joint_offset
+            //     @memcpy(std.mem.sliceAsBytes(inst3[2..18]), std.mem.asBytes(&paladin_matrices[1]));
+            //     if (!skinned_world_instances_buf.coherent)
+            //         skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
+            //
+            //     const base_off3 = Culling.skinned_world_instance_size * 3;
+            //     const inst4 = std.mem.bytesAsSlice(u32, mapped[base_off3..][0..Culling.skinned_world_instance_size]);
+            //
+            //     inst4[0] = body_dense;
+            //     inst4[1] = 0; // joint_offset
+            //     @memcpy(std.mem.sliceAsBytes(inst4[2..18]), std.mem.asBytes(&paladin_matrices[1]));
+            //     if (!skinned_world_instances_buf.coherent)
+            //         skinned_world_instances_buf.flush(.from(&ctx), 0, skinned_world_instances_buf.size);
+            // }
 
             var anim_cull_pc_buf: [Culling.AnimatedCullPC.size]u8 = undefined;
             try culling.cullAnimated(&rg, .{
@@ -866,7 +850,7 @@ pub fn main(init: std.process.Init) !void {
                 .arena_ref = arena_ref,
                 .joints_ref = joints_ref,
                 .arena_capacity = arena_elements,
-                .instance_count = skinned_instance_count,
+                .instance_count = @intCast(skinned_drawlist.size / @sizeOf(Culling.SkinnedWorldInstance)),
                 .max_draw_count = max_instances,
                 .screen_width = @floatFromInt(render_extent.width),
                 .screen_height = @floatFromInt(render_extent.height),
